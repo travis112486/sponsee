@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { createTRPCRouter, publicProcedure, creatorScopedProcedure } from "../trpc.js";
 
 export const healthRouter = createTRPCRouter({
@@ -8,7 +7,7 @@ export const healthRouter = createTRPCRouter({
 });
 
 export const dashboardRouter = createTRPCRouter({
-  overview: creatorScopedProcedure.query(async ({ ctx }) => {
+  overview: creatorScopedProcedure.query(async () => {
     // M0 stub: return empty state
     return {
       kpis: {

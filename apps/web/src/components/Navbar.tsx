@@ -49,8 +49,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   useEffect(() => {
     if (open) {
-      setQuery("");
-      setTimeout(() => inputRef.current?.focus(), 30);
+      const t = setTimeout(() => inputRef.current?.focus(), 30);
+      return () => clearTimeout(t);
     }
   }, [open]);
 
@@ -328,7 +328,7 @@ export function Topbar() {
         </div>
       </div>
 
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <CommandPalette key={paletteOpen ? "open" : "closed"} open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </header>
   );
 }
