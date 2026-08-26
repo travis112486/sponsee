@@ -1,0 +1,29 @@
+<svg width="320" height="240" viewBox="0 0 320 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Empty state: open kraft-paper box with a paper plane flying out, warm neutrals -->
+  <!-- ground shadow -->
+  <ellipse cx="140" cy="196" rx="72" ry="8" fill="#EFEAE2"/>
+  <!-- back flap -->
+  <path d="M96 128L140 104L184 128L140 142L96 128Z" fill="#E8E3DB" stroke="#8A8178" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- box interior -->
+  <path d="M96 128L140 142L184 128L184 138L140 152L96 138L96 128Z" fill="#DDD5C7"/>
+  <!-- left flap open -->
+  <path d="M96 128L62 106L88 96L118 118L96 128Z" fill="#EDE7DC" stroke="#8A8178" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- right flap open -->
+  <path d="M184 128L218 106L192 96L162 118L184 128Z" fill="#EDE7DC" stroke="#8A8178" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- box body -->
+  <path d="M96 128L96 184L140 198L140 142L96 128Z" fill="#E8E3DB" stroke="#8A8178" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M184 128L184 184L140 198L140 142L184 128Z" fill="#DAD2C2" stroke="#8A8178" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- tape mark -->
+  <path d="M132 190L140 194L148 190" stroke="#8A8178" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- flight trail -->
+  <path d="M152 112C176 100 196 84 210 62" stroke="#B9B0A3" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="1 7"/>
+  <!-- paper plane -->
+  <g>
+    <path d="M206 62L252 30L224 70L206 62Z" fill="#0E7A5F"/>
+    <path d="M206 62L224 70L218 84L206 62Z" fill="#0B664F"/>
+    <path d="M206 62L252 30L218 84L206 62Z" stroke="#0E7A5F" stroke-width="1.5" stroke-linejoin="round" fill="none"/>
+  </g>
+  <!-- small sparkle accents -->
+  <path d="M236 96L236 104M232 100L240 100" stroke="#B9B0A3" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M80 60L80 66M77 63L83 63" stroke="#B9B0A3" stroke-width="1.5" stroke-linecap="round"/>
+</svg>

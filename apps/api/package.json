@@ -1,0 +1,43 @@
+{
+  "name": "@sponsee/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./routers": {
+      "import": "./dist/routers/index.js",
+      "types": "./dist/routers/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sponsee/db": "workspace:*",
+    "@sponsee/shared": "workspace:*",
+    "@trpc/server": "^11.0.0",
+    "better-auth": "^1.2.0",
+    "dotenv": "^16.4.0",
+    "hono": "^4.7.0",
+    "pg": "^8.14.0",
+    "superjson": "^2.2.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "~5.9.3"
+  }
+}
