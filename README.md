@@ -62,3 +62,4 @@ flyctl deploy --config apps/web/fly.toml
 - **API:** https://sponsee-api-staging.fly.dev
 
 > Note: Actual deploy requires `FLY_API_TOKEN` secret in GitHub and `fly apps create` for both services.
+# Sponsee
