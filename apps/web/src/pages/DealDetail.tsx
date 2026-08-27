@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import { trpc } from "@/trpc";
-import { stageLabels, platforms, deliverableStatuses } from "@sponsee/shared";
+import { stageLabels, platforms, deliverableStatuses, benchmarkDeliverableTypes } from "@sponsee/shared";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { BenchmarkBand } from "@/components/BenchmarkBand";
 import {
   ArrowLeft,
   Check,
@@ -453,7 +454,7 @@ export default function DealDetail() {
           {/* CPVH Helper */}
           <div className="rounded-xl border border-hairline bg-surface p-4">
             <h3 className="text-[13px] font-semibold text-ink">CPVH Pricing</h3>
-            <CPVHHelper />
+            <CPVHHelper dealValueCents={deal.valueCents} />
           </div>
 
           {/* Actions */}
@@ -496,14 +497,17 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function CPVHHelper() {
+function CPVHHelper({ dealValueCents }: { dealValueCents: number }) {
   const [ccv, setCcv] = useState(500);
   const [durationMin, setDurationMin] = useState(60);
-  const [multiplier, setMultiplier] = useState(1.0);
+  const [deliverableType, setDeliverableType] =
+    useState<(typeof benchmarkDeliverableTypes)[number]>("ad-read");
 
-  const cpvhLow = Math.round(ccv * durationMin * 0.006 * multiplier);
-  const cpvhMid = Math.round(ccv * durationMin * 0.0105 * multiplier);
-  const cpvhHigh = Math.round(ccv * durationMin * 0.02 * multiplier);
+  const { data: benchmark } = trpc.calculator.compute.useQuery({
+    ccv,
+    durationMinutes: durationMin,
+    deliverableType,
+  });
 
   return (
     <div className="mt-3 space-y-3">
@@ -526,24 +530,32 @@ function CPVHHelper() {
         />
       </div>
       <div>
-        <label className="text-[11px] font-medium text-ink-3">Multiplier</label>
+        <label className="text-[11px] font-medium text-ink-3">Deliverable type</label>
         <select
-          value={multiplier}
-          onChange={(e) => setMultiplier(Number(e.target.value))}
+          value={deliverableType}
+          onChange={(e) =>
+            setDeliverableType(e.target.value as (typeof benchmarkDeliverableTypes)[number])
+          }
           className="mt-0.5 w-full rounded border border-hairline px-2 py-1 text-[13px] text-ink outline-none focus:border-pine"
         >
-          <option value={1.0}>Ad read (1.0x)</option>
-          <option value={1.25}>Segment (1.25x)</option>
-          <option value={1.6}>VOD (1.6x)</option>
+          <option value="ad-read">Ad read (1.0x)</option>
+          <option value="segment">Segment (1.25x)</option>
+          <option value="vod">VOD (1.6x)</option>
         </select>
       </div>
-      <div className="rounded-lg bg-surface-subtle p-2">
-        <p className="text-[11px] text-ink-3">Suggested range</p>
-        <p className="mt-0.5 text-[13px] font-semibold text-ink">
-          ${cpvhLow} – ${cpvhHigh}
-        </p>
-        <p className="text-[12px] text-pine">Midpoint: ${cpvhMid}</p>
-      </div>
+
+      {benchmark && (
+        <>
+          <div className="rounded-lg bg-surface-subtle p-2">
+            <p className="text-[11px] text-ink-3">Suggested range</p>
+            <p className="mt-0.5 text-[13px] font-semibold text-ink">
+              ${benchmark.floor} – ${benchmark.agency}
+            </p>
+            <p className="text-[12px] text-pine">Midpoint: ${benchmark.mid}</p>
+          </div>
+          <BenchmarkBand benchmark={benchmark} dealValueCents={dealValueCents} />
+        </>
+      )}
     </div>
   );
 }

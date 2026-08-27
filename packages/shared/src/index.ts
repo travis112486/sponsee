@@ -1,5 +1,13 @@
-// Canonical shared enums and constants for Sponsee
-// These are the source of truth for both DB and API validation
+import { renderMergeTokens, validateMergeTokens, hasMergeTokens } from "./merge-tokens.js";
+
+export * from "./merge-tokens.js";
+export * from "./calculator.js";
+export * from "./benchmark.js";
+
+// Re-export for convenience
+export { renderMergeTokens, validateMergeTokens, hasMergeTokens };
+
+// ── Domain constants (shared across web + API) ───────────────────────────────
 
 export const platforms = ["twitch", "youtube", "kick", "tiktok"] as const;
 export type Platform = (typeof platforms)[number];
@@ -91,20 +99,6 @@ export const defaultChaseTemplates: Array<{
     body: `Hi {brand_contact},\n\nThis is a final notice regarding invoice {invoice} for {deal_title} ($\{amount}), which is now {days_late} days overdue.\n\nPlease remit payment within the next 48 hours to avoid further escalation.\n\nBest,\n{creator_name}`,
   },
 ];
-
-// CPVH benchmark bands (extracted from mockup reference)
-export const cpvhBands = {
-  low: 0.6,
-  midpoint: 1.05,
-  agencyHigh: 2.0,
-} as const;
-
-// Deliverable type multipliers from mockup Calculator
-export const deliverableMultipliers: Record<string, number> = {
-  "ad-read": 1.0,
-  segment: 1.25,
-  vod: 1.6,
-};
 
 // Activity entity kinds
 export const activityKinds = [

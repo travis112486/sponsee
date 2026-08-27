@@ -291,6 +291,32 @@ async function seed() {
 
   console.log("Created invoice chase state");
 
+  // Seed benchmark config v1
+  await db.insert(schema.benchmarkConfigs).values({
+    version: 1,
+    effectiveDate: new Date("2024-01-01"),
+    cpvhBands: {
+      floor: 0.6,
+      mid: 1.05,
+      agency: 2.0,
+    },
+    adjustments: {
+      deliverableMultipliers: {
+        "ad-read": 1.0,
+        segment: 1.25,
+        vod: 1.6,
+      },
+      platformMix: {
+        twitch: 1.0,
+        youtube: 1.0,
+        kick: 1.0,
+        tiktok: 1.0,
+      },
+    },
+  });
+
+  console.log("Seeded benchmark config v1");
+
   console.log("\nSeed complete!");
   process.exit(0);
 }

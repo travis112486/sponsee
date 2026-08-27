@@ -261,6 +261,26 @@ async function init() {
       source VARCHAR(128),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE benchmark_configs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      version INTEGER NOT NULL,
+      effective_date TIMESTAMPTZ NOT NULL,
+      cpvh_bands JSONB NOT NULL,
+      adjustments JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX benchmark_configs_effective_idx ON benchmark_configs(effective_date);
+
+    CREATE TABLE calculator_profiles (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+      inputs JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(creator_id)
+    );
   `);
 
   console.log("Schema initialized successfully!");
