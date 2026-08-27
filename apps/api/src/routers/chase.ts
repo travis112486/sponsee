@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
-import { eq, and, desc, sql, inArray } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import {
   chaseTemplates,
   invoiceChaseState,

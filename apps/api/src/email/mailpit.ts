@@ -54,6 +54,7 @@ export class MailpitProvider implements EmailProvider {
   }
 
   ingestWebhook(_payload: unknown): WebhookEvent | null {
+    void _payload;
     // Mailpit doesn't emit webhooks in the standard sense.
     // In tests we simulate webhook ingestion by calling provider methods directly.
     return null;

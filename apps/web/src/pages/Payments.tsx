@@ -12,6 +12,9 @@ import {
   Mail,
   Pause,
   Play,
+  AlertTriangle,
+  Send,
+  Edit3,
 } from "lucide-react";
 
 function formatCents(cents: number) {
@@ -40,14 +43,32 @@ const statusConfig: Record<
 export default function Payments() {
   const utils = trpc.useUtils();
   const { data: invoices, isLoading } = trpc.invoice.list.useQuery();
+  const { data: awaitingReview } = trpc.chase.awaitingReview.useQuery();
   const markPaid = trpc.invoice.markPaid.useMutation({
     onSuccess: () => {
       utils.invoice.list.invalidate();
       toast("Invoice marked as paid");
     },
   });
+  const approveChase = trpc.chase.approve.useMutation({
+    onSuccess: () => {
+      utils.chase.awaitingReview.invalidate();
+      utils.invoice.list.invalidate();
+      toast("Chase email sent");
+    },
+  });
+  const editAndSendChase = trpc.chase.editAndSend.useMutation({
+    onSuccess: () => {
+      utils.chase.awaitingReview.invalidate();
+      utils.invoice.list.invalidate();
+      toast("Chase email sent");
+    },
+  });
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [editSubject, setEditSubject] = useState("");
+  const [editBody, setEditBody] = useState("");
 
   if (isLoading) {
     return (
@@ -77,6 +98,105 @@ export default function Payments() {
           New invoice
         </button>
       </div>
+
+      {/* Awaiting review queue */}
+      {awaitingReview && awaitingReview.length > 0 && (
+        <div className="rounded-xl border border-amber/30 bg-amber-tint/30 p-4">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber" />
+            <h3 className="text-[13px] font-semibold text-amber">
+              Awaiting review — {awaitingReview.length} chase{awaitingReview.length === 1 ? "" : "s"}
+            </h3>
+          </div>
+          <div className="mt-2 space-y-2">
+            {awaitingReview.map(({ event, invoice }) => (
+              <div
+                key={event.id}
+                className="rounded-lg border border-hairline bg-surface p-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[12px] font-medium text-ink">
+                      {invoice.title || `Invoice #${invoice.number}`} — Step {event.step}
+                    </p>
+                    <p className="text-[11px] text-ink-3">
+                      To: {event.toEmail}
+                    </p>
+                    {editingEventId === event.id ? (
+                      <div className="mt-2 space-y-2">
+                        <input
+                          value={editSubject}
+                          onChange={(e) => setEditSubject(e.target.value)}
+                          className="h-8 w-full rounded border border-hairline px-2 text-[12px] text-ink outline-none focus:border-pine"
+                        />
+                        <textarea
+                          value={editBody}
+                          onChange={(e) => setEditBody(e.target.value)}
+                          rows={3}
+                          className="w-full rounded border border-hairline px-2 py-1 text-[12px] text-ink outline-none focus:border-pine"
+                        />
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() =>
+                              editAndSendChase.mutate({
+                                chaseEventId: event.id,
+                                subject: editSubject,
+                                body: editBody,
+                              })
+                            }
+                            disabled={editAndSendChase.isPending}
+                            className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white hover:bg-pine-hover disabled:opacity-50"
+                          >
+                            <Send className="h-3 w-3" />
+                            Send
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingEventId(null);
+                              setEditSubject("");
+                              setEditBody("");
+                            }}
+                            className="h-7 rounded-md border border-hairline px-2 text-[11px] text-ink-3 hover:bg-surface-subtle"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="mt-1 truncate text-[11px] text-ink-2">
+                        {event.subjectSnapshot}
+                      </p>
+                    )}
+                  </div>
+                  {editingEventId !== event.id && (
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <button
+                        onClick={() => {
+                          setEditingEventId(event.id);
+                          setEditSubject(event.subjectSnapshot || "");
+                          setEditBody(event.bodySnapshot || "");
+                        }}
+                        className="flex h-7 items-center gap-1 rounded-md border border-hairline px-2 text-[11px] text-ink-3 transition-colors hover:bg-surface-subtle"
+                      >
+                        <Edit3 className="h-3 w-3" />
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => approveChase.mutate({ chaseEventId: event.id })}
+                        disabled={approveChase.isPending}
+                        className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white transition-colors hover:bg-pine-hover disabled:opacity-50"
+                      >
+                        <CheckCircle2 className="h-3 w-3" />
+                        Approve
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3">

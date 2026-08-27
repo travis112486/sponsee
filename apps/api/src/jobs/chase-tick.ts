@@ -1,4 +1,4 @@
-import { eq, and, sql, isNull, gte, lte } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { db } from "@sponsee/db";
 import {
   invoices,
@@ -6,10 +6,6 @@ import {
   invoiceChaseState,
   chaseEvents,
   activityEvents,
-  contacts,
-  deals,
-  brands,
-  creators,
 } from "@sponsee/db/schema";
 import { renderMergeTokens } from "@sponsee/shared";
 import { createEmailProvider } from "../email/index.js";
@@ -26,7 +22,6 @@ const STEP_NAMES: Record<number, string> = {
  */
 export async function runChaseTick(): Promise<number> {
   const now = new Date();
-  const provider = createEmailProvider();
 
   // Find armed chase states whose next action time has passed (or never set)
   const dueStates = await db
