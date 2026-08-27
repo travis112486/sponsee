@@ -61,6 +61,16 @@ export const planTierEnum = pgEnum("plan_tier", ["starter", "creator", "pro"]);
 export const proofKindEnum = pgEnum("proof_kind", ["vod", "clip", "chat", "overlay", "link", "file"]);
 export const contractStatusEnum = pgEnum("contract_status", ["draft", "sent", "viewed", "signed"]);
 
+export const subscriptionStatusEnum = pgEnum("subscription_status", [
+  "active",
+  "past_due",
+  "canceled",
+  "unpaid",
+  "incomplete",
+  "incomplete_expired",
+  "trialing",
+]);
+
 // Creators (tenants)
 export const creators = pgTable(
   "creators",
@@ -77,6 +87,10 @@ export const creators = pgTable(
     paypalLink: text("paypal_link"),
     wiseText: text("wise_text"),
     bankText: text("bank_text"),
+    stripeCustomerId: text("stripe_customer_id"),
+    stripeSubscriptionId: text("stripe_subscription_id"),
+    subscriptionStatus: subscriptionStatusEnum("subscription_status"),
+    currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -350,6 +364,7 @@ export const chaseEvents = pgTable(
     openedAt: timestamp("opened_at", { withTimezone: true }),
     bouncedAt: timestamp("bounced_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("chase_events_invoice_idx").on(t.invoiceId), index("chase_events_status_idx").on(t.status)]
 );
@@ -494,3 +509,6 @@ export const waitlistSignups = pgTable(
     index("waitlist_signups_confirmed_idx").on(t.confirmed),
   ]
 );
+
+// Derived types
+export type SubscriptionStatus = typeof subscriptionStatusEnum.enumValues[number];

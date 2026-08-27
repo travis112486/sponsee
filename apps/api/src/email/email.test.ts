@@ -18,61 +18,51 @@ const samplePayload: SendEmailPayload = {
   },
 };
 
+// Mock nodemailer for MailpitProvider tests
+const mockSendMail = vi.fn();
+vi.mock("nodemailer", () => ({
+  default: {
+    createTransport: vi.fn(() => ({
+      sendMail: mockSendMail,
+    })),
+  },
+}));
+
 describe("MailpitProvider", () => {
-  const provider = new MailpitProvider("http://localhost:8025");
+  const provider = new MailpitProvider("localhost", 1025);
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    mockSendMail.mockReset();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("throws on API failure", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: false, text: () => Promise.resolve("bad") })));
-    await expect(provider.send(samplePayload)).rejects.toThrow("Mailpit API error");
+  it("throws on SMTP failure", async () => {
+    mockSendMail.mockRejectedValue(new Error("Connection refused"));
+    await expect(provider.send(samplePayload)).rejects.toThrow("Connection refused");
   });
 
-  it("posts JSON to /api/v1/send and returns message ID", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ ID: "abc123" }),
-        })
-      )
-    );
+  it("sends via nodemailer SMTP and returns messageId", async () => {
+    mockSendMail.mockResolvedValue({ messageId: "<msg-abc@mailpit>" });
     const result = await provider.send(samplePayload);
-    expect(result.providerMessageId).toBe("abc123");
+    expect(result.providerMessageId).toBe("<msg-abc@mailpit>");
 
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toBe("http://localhost:8025/api/v1/send");
-    expect(fetchCall[1]).toMatchObject({
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-    const body = JSON.parse(fetchCall[1]!.body as string);
-    expect(body.From).toBe(samplePayload.from);
-    expect(body.To).toEqual([samplePayload.to]);
-    expect(body.Subject).toBe(samplePayload.subject);
-    expect(body.Text).toBe(samplePayload.text);
-    expect(body.HTML).toBe(samplePayload.html);
-    expect(body.ReplyTo).toBe(samplePayload.replyTo);
+    expect(mockSendMail).toHaveBeenCalledTimes(1);
+    const call = mockSendMail.mock.calls[0][0];
+    expect(call.from).toBe(samplePayload.from);
+    expect(call.to).toBe(samplePayload.to);
+    expect(call.replyTo).toBe(samplePayload.replyTo);
+    expect(call.subject).toBe(samplePayload.subject);
+    expect(call.text).toBe(samplePayload.text);
+    expect(call.html).toBe(samplePayload.html);
   });
 
-  it("throws on API success but missing message ID", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({}),
-        })
-      )
-    );
-    await expect(provider.send(samplePayload)).rejects.toThrow("no message ID");
+  it("throws on missing messageId", async () => {
+    mockSendMail.mockResolvedValue({ messageId: undefined });
+    await expect(provider.send(samplePayload)).rejects.toThrow("no messageId returned");
   });
 
   it("ingestWebhook returns null", () => {
@@ -94,7 +84,7 @@ describe("MailpitProvider", () => {
       return;
     }
 
-    const realProvider = new MailpitProvider("http://localhost:8025");
+    const realProvider = new MailpitProvider("localhost", 1025);
     const result = await realProvider.send({
       to: "test-brand@example.com",
       from: "chase@sponsee.app",
@@ -202,27 +192,27 @@ describe("PostmarkProvider", () => {
 
     it("rejects when no secret is configured", () => {
       delete process.env.POSTMARK_WEBHOOK_SECRET;
-      const ok = provider.verifyWebhookSignature("body", { authorization: "Basic abc" });
+      const ok = provider.verifyWebhookSignature!("body", { authorization: "Basic abc" });
       expect(ok).toBe(false);
     });
 
     it("rejects missing authorization header", () => {
       process.env.POSTMARK_WEBHOOK_SECRET = "user:pass";
-      const ok = provider.verifyWebhookSignature("body", {});
+      const ok = provider.verifyWebhookSignature!("body", {});
       expect(ok).toBe(false);
     });
 
     it("accepts valid Basic auth", () => {
       process.env.POSTMARK_WEBHOOK_SECRET = "user:pass";
       const encoded = Buffer.from("user:pass", "utf-8").toString("base64");
-      const ok = provider.verifyWebhookSignature("body", { authorization: `Basic ${encoded}` });
+      const ok = provider.verifyWebhookSignature!("body", { authorization: `Basic ${encoded}` });
       expect(ok).toBe(true);
     });
 
     it("rejects invalid Basic auth", () => {
       process.env.POSTMARK_WEBHOOK_SECRET = "user:pass";
       const encoded = Buffer.from("wrong:creds", "utf-8").toString("base64");
-      const ok = provider.verifyWebhookSignature("body", { authorization: `Basic ${encoded}` });
+      const ok = provider.verifyWebhookSignature!("body", { authorization: `Basic ${encoded}` });
       expect(ok).toBe(false);
     });
   });
@@ -319,27 +309,27 @@ describe("ResendProvider", () => {
 
     it("rejects when no secret is configured", () => {
       delete process.env.RESEND_WEBHOOK_SECRET;
-      const ok = provider.verifyWebhookSignature("body", { "svix-id": "id", "svix-timestamp": String(Math.floor(Date.now() / 1000)), "svix-signature": "v1,sig" });
+      const ok = provider.verifyWebhookSignature!("body", { "svix-id": "id", "svix-timestamp": String(Math.floor(Date.now() / 1000)), "svix-signature": "v1,sig" });
       expect(ok).toBe(false);
     });
 
     it("rejects missing svix headers", () => {
       process.env.RESEND_WEBHOOK_SECRET = "secret";
-      const ok = provider.verifyWebhookSignature("body", {});
+      const ok = provider.verifyWebhookSignature!("body", {});
       expect(ok).toBe(false);
     });
 
     it("rejects stale timestamp (>5 min old)", () => {
       process.env.RESEND_WEBHOOK_SECRET = "secret";
       const oldTs = String(Math.floor(Date.now() / 1000) - 400);
-      const ok = provider.verifyWebhookSignature("body", { "svix-id": "id", "svix-timestamp": oldTs, "svix-signature": "v1,sig" });
+      const ok = provider.verifyWebhookSignature!("body", { "svix-id": "id", "svix-timestamp": oldTs, "svix-signature": "v1,sig" });
       expect(ok).toBe(false);
     });
 
     it("rejects future timestamp (>1 min ahead)", () => {
       process.env.RESEND_WEBHOOK_SECRET = "secret";
       const futureTs = String(Math.floor(Date.now() / 1000) + 400);
-      const ok = provider.verifyWebhookSignature("body", { "svix-id": "id", "svix-timestamp": futureTs, "svix-signature": "v1,sig" });
+      const ok = provider.verifyWebhookSignature!("body", { "svix-id": "id", "svix-timestamp": futureTs, "svix-signature": "v1,sig" });
       expect(ok).toBe(false);
     });
 
@@ -350,14 +340,14 @@ describe("ResendProvider", () => {
       const timestamp = String(Math.floor(Date.now() / 1000));
       const body = "{}";
       const expected = createHmac("sha256", secret).update(`${id}.${timestamp}.${body}`).digest("base64");
-      const ok = provider.verifyWebhookSignature(body, { "svix-id": id, "svix-timestamp": timestamp, "svix-signature": `v1,${expected}` });
+      const ok = provider.verifyWebhookSignature!(body, { "svix-id": id, "svix-timestamp": timestamp, "svix-signature": `v1,${expected}` });
       expect(ok).toBe(true);
     });
 
     it("rejects invalid svix signature", () => {
       process.env.RESEND_WEBHOOK_SECRET = "secret";
       const timestamp = String(Math.floor(Date.now() / 1000));
-      const ok = provider.verifyWebhookSignature("{}", { "svix-id": "id", "svix-timestamp": timestamp, "svix-signature": "v1,invalidsig" });
+      const ok = provider.verifyWebhookSignature!("{}", { "svix-id": "id", "svix-timestamp": timestamp, "svix-signature": "v1,invalidsig" });
       expect(ok).toBe(false);
     });
   });

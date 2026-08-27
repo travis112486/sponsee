@@ -7,6 +7,7 @@ import { invoiceRouter } from "./invoice.js";
 import { chaseRouter } from "./chase.js";
 import { calculatorRouter } from "./calculator.js";
 import { settingsRouter } from "./settings.js";
+import { billingRouter } from "../billing/router.js";
 
 export const appRouter = createTRPCRouter({
   health: healthRouter,
@@ -17,6 +18,7 @@ export const appRouter = createTRPCRouter({
   chase: chaseRouter,
   calculator: calculatorRouter,
   settings: settingsRouter,
+  billing: billingRouter,
 });
 
 export type AppRouter = typeof appRouter;

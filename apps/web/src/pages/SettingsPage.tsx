@@ -1,18 +1,20 @@
 import { useState } from "react";
-import { User, Radio, CreditCard, Mail } from "lucide-react";
+import { User, Radio, CreditCard, Mail, Receipt } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ProfilePanel from "@/components/settings/ProfilePanel";
 import PlatformsPanel from "@/components/settings/PlatformsPanel";
 import RailsPanel from "@/components/settings/RailsPanel";
 import ChaseTemplatesPanel from "@/components/settings/ChaseTemplatesPanel";
+import BillingPanel from "@/components/settings/BillingPanel";
 
-type TabKey = "profile" | "platforms" | "rails" | "chase";
+type TabKey = "profile" | "platforms" | "rails" | "chase" | "billing";
 
 const tabs: { key: TabKey; label: string; icon: typeof User }[] = [
   { key: "profile", label: "Profile", icon: User },
   { key: "platforms", label: "Platforms", icon: Radio },
   { key: "rails", label: "Payout rails", icon: CreditCard },
   { key: "chase", label: "Chase templates", icon: Mail },
+  { key: "billing", label: "Billing", icon: Receipt },
 ];
 
 export default function SettingsPage() {
@@ -48,6 +50,7 @@ export default function SettingsPage() {
         {activeTab === "platforms" && <PlatformsPanel />}
         {activeTab === "rails" && <RailsPanel />}
         {activeTab === "chase" && <ChaseTemplatesPanel />}
+        {activeTab === "billing" && <BillingPanel />}
       </div>
     </div>
   );

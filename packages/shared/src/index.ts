@@ -128,3 +128,9 @@ export const planDealSlots: Record<PlanTier, number> = {
   creator: 10,
   pro: 25,
 };
+
+export const planLabels: Record<PlanTier, string> = {
+  starter: "Starter",
+  creator: "Creator",
+  pro: "Pro",
+};

@@ -65,7 +65,21 @@ function mockContext(body: unknown, provider = "postmark", headers = new Headers
 describe("handleEmailWebhook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    createEmailProvider.mockReturnValue(makeDefaultProvider());
+    (createEmailProvider as any).mockReturnValue(makeDefaultProvider());
+  });
+
+  it("returns 401 when provider does not support webhook verification", async () => {
+    const { createEmailProvider } = await import("../email/index.js");
+    vi.mocked(createEmailProvider).mockReturnValue({
+      name: "mailpit",
+      ingestWebhook: vi.fn(),
+      // verifyWebhookSignature is intentionally absent
+    } as any);
+
+    const c = mockContext({ Type: "Delivery", MessageID: "msg-1" });
+    const result = await handleEmailWebhook(c);
+    expect(result.status).toBe(401);
+    expect(result.data).toMatchObject({ error: "Provider does not support webhook verification" });
   });
 
   it("returns 401 for invalid webhook signature", async () => {
@@ -80,6 +94,7 @@ describe("handleEmailWebhook", () => {
     const result = await handleEmailWebhook(c);
     expect(result.status).toBe(401);
   });
+
   it("returns 400 for empty payload", async () => {
     const c = mockContext("");
     const result = await handleEmailWebhook(c);

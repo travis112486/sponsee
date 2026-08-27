@@ -1,49 +1,45 @@
 import type { EmailProvider, SendEmailPayload, SentMessageInfo, WebhookEvent } from "./types.js";
+import nodemailer from "nodemailer";
 
 /**
  * Mailpit adapter — captures emails in local Mailpit instance for dev/CI.
- * Never sends real mail. Uses Mailpit's HTTP JSON API.
+ * Never sends real mail. Uses nodemailer over SMTP to Mailpit's relay port.
  *
  * In dev, Mailpit runs at SMTP 1025 / Web UI 8025.
- * API docs: https://mailpit.axllent.org/docs/usage/sending-messages/
+ * https://mailpit.axllent.org/docs/
  */
 export class MailpitProvider implements EmailProvider {
   readonly name = "mailpit";
-  private readonly baseUrl: string;
+  private readonly transporter: nodemailer.Transporter;
 
-  constructor(baseUrl = process.env.MAILPIT_URL || "http://localhost:8025") {
-    this.baseUrl = baseUrl.replace(/\/$/, "");
+  constructor(
+    host = process.env.MAILPIT_SMTP_HOST || "localhost",
+    port = parseInt(process.env.MAILPIT_SMTP_PORT || "1025", 10)
+  ) {
+    this.transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      tls: { rejectUnauthorized: false },
+    });
   }
 
   async send(payload: SendEmailPayload): Promise<SentMessageInfo> {
-    const body = {
-      From: payload.from,
-      To: [payload.to],
-      Subject: payload.subject,
-      Text: payload.text,
-      HTML: payload.html,
-      ReplyTo: payload.replyTo,
-    };
-
-    const res = await fetch(`${this.baseUrl}/api/v1/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+    const info = await this.transporter.sendMail({
+      from: payload.from,
+      to: payload.to,
+      replyTo: payload.replyTo,
+      subject: payload.subject,
+      text: payload.text,
+      html: payload.html,
     });
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "unknown");
-      throw new Error(`Mailpit API error ${res.status}: ${text}`);
+    const messageId = info.messageId;
+    if (!messageId) {
+      throw new Error("Mailpit SMTP send succeeded but no messageId returned");
     }
 
-    // Mailpit returns { ID: "..." } on success
-    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (typeof data.ID !== "string" || !data.ID) {
-      throw new Error("Mailpit API success but no message ID returned");
-    }
-    const providerMessageId = data.ID;
-
-    return { providerMessageId };
+    return { providerMessageId: messageId };
   }
 
   ingestWebhook(_payload: unknown): WebhookEvent | null {

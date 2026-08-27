@@ -1,4 +1,4 @@
-import { eq, and, or, sql, isNotNull } from "drizzle-orm";
+import { eq, and, or, sql, isNotNull, isNull } from "drizzle-orm";
 import { db } from "@sponsee/db";
 import {
   invoices,
@@ -9,6 +9,7 @@ import {
 } from "@sponsee/db/schema";
 import { renderMergeTokens } from "@sponsee/shared";
 import { createEmailProvider } from "../email/index.js";
+import { getBoss } from "./boss.js";
 
 const STEP_NAMES: Record<number, string> = {
   1: "Friendly reminder",
@@ -169,6 +170,54 @@ export async function runChaseTick(): Promise<number> {
     created++;
   }
 
+  // ── Rescue: approved events that were stranded before enqueue ──
+  const stranded = await db
+    .select()
+    .from(chaseEvents)
+    .where(
+      and(
+        eq(chaseEvents.status, "approved"),
+        isNull(chaseEvents.sentAt),
+        sql`${chaseEvents.updatedAt} < NOW() - INTERVAL '5 minutes'`
+      )
+    );
+
+  if (stranded.length > 0) {
+    const boss = await getBoss();
+    for (const event of stranded) {
+      const invoice = await db.query.invoices.findFirst({
+        where: (i, { eq }) => eq(i.id, event.invoiceId),
+      });
+      if (!invoice) continue;
+
+      const fromEmail = process.env.CHASE_FROM_EMAIL || "chase@sponsee.app";
+      const idempotencyKey =
+        event.idempotencyKey || `invoice:${event.invoiceId}:step:${event.step}`;
+
+      await boss.send(
+        "chase-send",
+        {
+          chaseEventId: event.id,
+          invoiceId: event.invoiceId,
+          step: event.step,
+          toEmail: event.toEmail || "",
+          fromEmail,
+          replyToEmail: fromEmail,
+          subject: event.subjectSnapshot || "",
+          body: event.bodySnapshot || "",
+          idempotencyKey,
+        },
+        {
+          singletonKey: idempotencyKey,
+          singletonSeconds: 3600,
+          retryLimit: 3,
+          retryDelay: 30,
+          retryBackoff: true,
+        }
+      );
+    }
+  }
+
   return created;
 }
 
@@ -190,7 +239,7 @@ export async function sendChaseEmail(args: {
   // Atomic claim: only one worker can move approved|failed -> sending
   const [claimed] = await db
     .update(chaseEvents)
-    .set({ status: "sending" })
+    .set({ status: "sending", updatedAt: new Date() })
     .where(
       and(
         eq(chaseEvents.id, args.chaseEventId),
@@ -237,6 +286,7 @@ export async function sendChaseEmail(args: {
         status: "sent",
         providerMessageId: info.providerMessageId,
         sentAt: new Date(),
+        updatedAt: new Date(),
       })
       .where(eq(chaseEvents.id, args.chaseEventId));
 
@@ -267,6 +317,7 @@ export async function sendChaseEmail(args: {
       .set({
         status: "failed",
         providerMessageId: null,
+        updatedAt: new Date(),
       })
       .where(eq(chaseEvents.id, args.chaseEventId));
 

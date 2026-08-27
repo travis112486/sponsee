@@ -43,6 +43,10 @@ CREATE TABLE creators (
   paypal_link TEXT,
   wise_text TEXT,
   bank_text TEXT,
+  stripe_customer_id TEXT,
+  stripe_subscription_id TEXT,
+  subscription_status VARCHAR(32),
+  current_period_end TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -238,7 +242,8 @@ CREATE TABLE chase_events (
   delivered_at TIMESTAMPTZ,
   opened_at TIMESTAMPTZ,
   bounced_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX chase_events_invoice_idx ON chase_events(invoice_id);

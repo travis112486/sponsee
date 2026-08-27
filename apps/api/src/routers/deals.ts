@@ -42,7 +42,7 @@ export const dealsRouter = createTRPCRouter({
         .from(schema.brands)
         .where(and(eq(schema.brands.id, deal.brandId), eq(schema.brands.creatorId, ctx.creatorId)));
 
-      const [contact] = deal.primaryContactId
+      const contactRows = deal.primaryContactId
         ? await db
             .select()
             .from(schema.contacts)
@@ -53,7 +53,9 @@ export const dealsRouter = createTRPCRouter({
                 eq(schema.brands.creatorId, ctx.creatorId)
               )
             )
-        : [null];
+        : [];
+
+      const contact = contactRows[0]?.contacts ?? null;
 
       const deliverables = await db
         .select()

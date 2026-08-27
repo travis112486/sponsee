@@ -6,6 +6,7 @@ import { createContext } from "./context.js";
 import { auth } from "./auth.js";
 import waitlistApp from "./routers/waitlist.js";
 import { handleEmailWebhook } from "./routers/webhooks.js";
+import { registerStripeWebhook } from "./billing/webhook.js";
 
 const app = new Hono();
 
@@ -55,6 +56,9 @@ app.use(
 
 // Provider webhooks (no auth — validated by provider signature in production)
 app.post("/api/webhooks/email/:provider", handleEmailWebhook);
+
+// Stripe webhooks (signature-verified inside handler)
+registerStripeWebhook(app);
 
 // Health check (raw)
 app.get("/health", (c) => c.json({ status: "ok", version: "0.1.0" }));

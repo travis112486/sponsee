@@ -291,7 +291,8 @@ async function init() {
       delivered_at TIMESTAMPTZ,
       opened_at TIMESTAMPTZ,
       bounced_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE INDEX chase_events_invoice_idx ON chase_events(invoice_id);

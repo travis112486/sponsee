@@ -26,16 +26,20 @@ export async function handleEmailWebhook(c: Context) {
 
   const provider = createEmailProvider(providerName);
 
-  // Verify webhook signature before any mutation
-  if (provider.verifyWebhookSignature) {
-    const headers: Record<string, string | undefined> = {};
-    c.req.raw.headers.forEach((value, key) => {
-      headers[key.toLowerCase()] = value;
-    });
-    const valid = provider.verifyWebhookSignature(rawBody, headers);
-    if (!valid) {
-      return c.json({ error: "Invalid signature" }, 401);
-    }
+  // Every provider that emits webhooks MUST implement signature verification.
+  // Reject requests from providers that do not support it (e.g. mailpit).
+  if (typeof provider.verifyWebhookSignature !== "function") {
+    return c.json({ error: "Provider does not support webhook verification" }, 401);
+  }
+
+  const headers: Record<string, string | undefined> = {};
+  c.req.raw.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
+
+  const valid = provider.verifyWebhookSignature(rawBody, headers);
+  if (!valid) {
+    return c.json({ error: "Invalid signature" }, 401);
   }
 
   const event = provider.ingestWebhook(payload);
@@ -61,19 +65,19 @@ export async function handleEmailWebhook(c: Context) {
     case "delivered":
       await db
         .update(chaseEvents)
-        .set({ status: "delivered", deliveredAt: now })
+        .set({ status: "delivered", deliveredAt: now, updatedAt: now })
         .where(eq(chaseEvents.id, chaseEvent.id));
       break;
     case "opened":
       await db
         .update(chaseEvents)
-        .set({ status: "opened", openedAt: now })
+        .set({ status: "opened", openedAt: now, updatedAt: now })
         .where(eq(chaseEvents.id, chaseEvent.id));
       break;
     case "bounced": {
       await db
         .update(chaseEvents)
-        .set({ status: "bounced", bouncedAt: now })
+        .set({ status: "bounced", bouncedAt: now, updatedAt: now })
         .where(eq(chaseEvents.id, chaseEvent.id));
 
       // Hard bounce → pause chase state (loud alert)
@@ -108,7 +112,7 @@ export async function handleEmailWebhook(c: Context) {
     case "failed": {
       await db
         .update(chaseEvents)
-        .set({ status: "failed" })
+        .set({ status: "failed", updatedAt: now })
         .where(eq(chaseEvents.id, chaseEvent.id));
 
       const invoice = await db.query.invoices.findFirst({

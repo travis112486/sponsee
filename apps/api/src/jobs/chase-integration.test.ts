@@ -46,6 +46,10 @@ CREATE TABLE creators (
   paypal_link TEXT,
   wise_text TEXT,
   bank_text TEXT,
+  stripe_customer_id TEXT,
+  stripe_subscription_id TEXT,
+  subscription_status VARCHAR(32),
+  current_period_end TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -241,7 +245,8 @@ CREATE TABLE chase_events (
   delivered_at TIMESTAMPTZ,
   opened_at TIMESTAMPTZ,
   bounced_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX chase_events_invoice_idx ON chase_events(invoice_id);
@@ -516,10 +521,15 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     const caller = chaseRouter.createCaller(mockCtx(creator.id));
     await caller.approve({ chaseEventId: event.id });
 
-    // Stub fetch so MailpitProvider doesn't try real network
+    // Use PostmarkProvider so fetch stub works
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.EMAIL_PROVIDER = "postmark";
+    process.env.POSTMARK_SERVER_TOKEN = "test-token";
+
+    // Stub fetch so PostmarkProvider doesn't hit real network
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ ID: "msg-sent-1" }) }))
+      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-sent-1" }) }))
     );
 
     // Simulate pg-boss worker calling sendChaseEmail
@@ -534,6 +544,10 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       body: event.bodySnapshot || "Please pay",
       idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
     });
+
+    // Restore env
+    if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
+    else delete process.env.EMAIL_PROVIDER;
 
     expect(result.providerMessageId).toBeDefined();
 
@@ -577,10 +591,15 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     const caller = chaseRouter.createCaller(mockCtx(creator.id));
     await caller.approve({ chaseEventId: event.id });
 
-    // Stub fetch to simulate Mailpit failure
+    // Use PostmarkProvider so fetch stub works
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.EMAIL_PROVIDER = "postmark";
+    process.env.POSTMARK_SERVER_TOKEN = "test-token";
+
+    // Stub fetch to simulate Postmark failure
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve({ ok: false, text: () => Promise.resolve("SMTP down") }))
+      vi.fn(() => Promise.resolve({ ok: false, status: 422, text: () => Promise.resolve("SMTP down") }))
     );
 
     // First send should fail and record failed status
@@ -607,7 +626,7 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     // Now make fetch succeed (simulating pg-boss retry)
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ ID: "retry-msg-123" }) }))
+      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "retry-msg-123" }) }))
     );
 
     const result = await sendChaseEmail({
@@ -621,6 +640,9 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       body: event.bodySnapshot || "Please pay",
       idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
     });
+
+    if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
+    else delete process.env.EMAIL_PROVIDER;
 
     expect(result.providerMessageId).toBe("retry-msg-123");
 
@@ -644,10 +666,15 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     const caller = chaseRouter.createCaller(mockCtx(creator.id));
     await caller.approve({ chaseEventId: event.id });
 
+    // Use PostmarkProvider so fetch stub works
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.EMAIL_PROVIDER = "postmark";
+    process.env.POSTMARK_SERVER_TOKEN = "test-token";
+
     // First send succeeds
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ ID: "msg-abc" }) }))
+      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-abc" }) }))
     );
 
     const result1 = await sendChaseEmail({
@@ -674,6 +701,9 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       body: event.bodySnapshot || "Please pay",
       idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
     });
+
+    if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
+    else delete process.env.EMAIL_PROVIDER;
 
     expect(result2.providerMessageId).toBe(result1.providerMessageId);
 
@@ -715,9 +745,14 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     const caller = chaseRouter.createCaller(mockCtx(creator.id));
     await caller.approve({ chaseEventId: event.id });
 
+    // Use PostmarkProvider so fetch stub works
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.EMAIL_PROVIDER = "postmark";
+    process.env.POSTMARK_SERVER_TOKEN = "test-token";
+
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ ID: "msg-tl" }) }))
+      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-tl" }) }))
     );
 
     await sendChaseEmail({
@@ -731,6 +766,9 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       body: event.bodySnapshot || "Please pay",
       idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
     });
+
+    if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
+    else delete process.env.EMAIL_PROVIDER;
 
     // Query timeline via router
     const timeline = await caller.events({ invoiceId: invoice.id });
@@ -812,6 +850,38 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       .where(eq(schema.chaseEvents.id, event.id));
     expect(final.subjectSnapshot).toBe("Winner");
     expect(final.bodySnapshot).toBe("Winner body");
+  });
+
+  it("runChaseTick rescues stranded approved events by enqueueing them", async () => {
+    const { invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    // Manually strand the event: set approved with an old updatedAt
+    await db
+      .update(schema.chaseEvents)
+      .set({
+        status: "approved",
+        updatedAt: new Date(Date.now() - 10 * 60 * 1000), // 10 minutes ago
+      })
+      .where(eq(schema.chaseEvents.id, event.id));
+
+    // runChaseTick should rescue the stranded event
+    const created = await runChaseTick();
+    // The rescue doesn't count toward created, so it should be 0
+    expect(created).toBe(0);
+
+    // A pg-boss job should have been enqueued for the stranded event
+    expect(mockBossSend).toHaveBeenCalledTimes(1);
+    const jobName = mockBossSend.mock.calls[0][0];
+    const jobArgs = mockBossSend.mock.calls[0][1];
+    expect(jobName).toBe("chase-send");
+    expect(jobArgs.chaseEventId).toBe(event.id);
+    expect(jobArgs.invoiceId).toBe(invoice.id);
   });
 
   it("real Mailpit acceptance: end-to-end invoice -> review -> approve -> message in inbox -> timeline", async () => {

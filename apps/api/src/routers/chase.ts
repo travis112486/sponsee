@@ -199,7 +199,7 @@ export const chaseRouter = createTRPCRouter({
       // Atomic claim: only one request can move from awaiting_review -> approved
       const [claimed] = await ctx.db
         .update(chaseEvents)
-        .set({ status: "approved" })
+        .set({ status: "approved", updatedAt: new Date() })
         .where(and(eq(chaseEvents.id, input.chaseEventId), eq(chaseEvents.status, "awaiting_review")))
         .returning();
 
@@ -235,7 +235,7 @@ export const chaseRouter = createTRPCRouter({
         // Revert status so the creator can retry approval; do not strand in approved
         await ctx.db
           .update(chaseEvents)
-          .set({ status: "awaiting_review" })
+          .set({ status: "awaiting_review", updatedAt: new Date() })
           .where(eq(chaseEvents.id, input.chaseEventId));
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -299,7 +299,7 @@ export const chaseRouter = createTRPCRouter({
       // losing concurrent request cannot overwrite subject/body after the winner claims.
       const [claimed] = await ctx.db
         .update(chaseEvents)
-        .set({ status: "approved", subjectSnapshot: input.subject, bodySnapshot: input.body })
+        .set({ status: "approved", subjectSnapshot: input.subject, bodySnapshot: input.body, updatedAt: new Date() })
         .where(and(eq(chaseEvents.id, input.chaseEventId), eq(chaseEvents.status, "awaiting_review")))
         .returning();
 
@@ -334,7 +334,7 @@ export const chaseRouter = createTRPCRouter({
         // Revert status so the creator can retry; snapshots are preserved
         await ctx.db
           .update(chaseEvents)
-          .set({ status: "awaiting_review" })
+          .set({ status: "awaiting_review", updatedAt: new Date() })
           .where(eq(chaseEvents.id, input.chaseEventId));
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",

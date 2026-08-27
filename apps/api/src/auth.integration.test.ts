@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 // Capture magic-link URLs sent during tests
 const sentEmails: Array<{ email: string; url: string }> = [];
 
+process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+
 // Mock nodemailer BEFORE auth.ts evaluates so sendMagicLink uses the mock.
 vi.mock("nodemailer", () => ({
   default: {
@@ -113,6 +115,10 @@ CREATE TABLE creators (
   paypal_link TEXT,
   wise_text TEXT,
   bank_text TEXT,
+  stripe_customer_id TEXT,
+  stripe_subscription_id TEXT,
+  subscription_status VARCHAR(32),
+  current_period_end TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

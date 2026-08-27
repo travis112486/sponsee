@@ -79,8 +79,18 @@ async function provisionWorkspace(userId: string, email: string, name: string) {
   );
 }
 
-// Explicit cast to avoid TS2742 declaration-emit issue with pnpm+zod internals
-export const auth = betterAuth({
+interface AuthInstance {
+  handler: (request: Request) => Promise<Response>;
+  api: {
+    getSession: (opts: { headers: Headers }) => Promise<{
+      user: { id: string; name?: string | null; email: string };
+      session: { id: string };
+    } | null>;
+  };
+}
+
+// Narrow interface avoids TS2742 declaration-emit issue with pnpm+zod internals
+export const auth: AuthInstance = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
     schema: {
