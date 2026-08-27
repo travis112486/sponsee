@@ -10,6 +10,12 @@ const isProd = process.env.NODE_ENV === "production";
 const baseURL = process.env.BETTER_AUTH_URL || "http://localhost:3001";
 const webURL = process.env.WEB_URL || "http://localhost:3000";
 
+// Trusted origins: the web app origin must be explicitly allowed by Better Auth.
+const trustedOrigins = [webURL];
+if (!isProd && webURL !== "http://localhost:3000") {
+  trustedOrigins.push("http://localhost:3000");
+}
+
 // Mailpit in dev/CI; configure real SMTP via env in staging/prod
 const smtpHost = process.env.SMTP_HOST || "localhost";
 const smtpPort = parseInt(process.env.SMTP_PORT || "1025", 10);
@@ -77,9 +83,16 @@ async function provisionWorkspace(userId: string, email: string, name: string) {
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
+    schema: {
+      user: schema.user,
+      session: schema.session,
+      account: schema.account,
+      verification: schema.verification,
+    },
   }),
   secret: process.env.BETTER_AUTH_SECRET!,
   baseURL,
+  trustedOrigins,
   emailAndPassword: {
     enabled: false, // magic link only in v1
   },
@@ -94,6 +107,7 @@ export const auth = betterAuth({
   advanced: {
     cookiePrefix: "sponsee",
     useSecureCookies: isProd,
+    disableOriginCheck: false, // enforce even in test mode; trustedOrigins drives allow-list
   },
   databaseHooks: {
     user: {

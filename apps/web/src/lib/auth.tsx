@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback, useEffect } from "react";
+/* eslint-disable react-refresh/only-export-components */
+import { createContext, useContext, useCallback } from "react";
 import { authClient } from "./auth-client";
 
 interface AuthUser {
@@ -25,27 +26,16 @@ const AuthContext = createContext<AuthContextValue>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: session, isPending } = (authClient as any).useSession();
 
-  useEffect(() => {
-    if (!isPending) {
-      if (session?.user) {
-        setUser({
-          id: session.user.id,
-          name: session.user.name || session.user.email,
-          email: session.user.email,
-          image: session.user.image ?? undefined,
-        });
-      } else {
-        setUser(null);
+  const user: AuthUser | null = session?.user
+    ? {
+        id: session.user.id,
+        name: session.user.name || session.user.email,
+        email: session.user.email,
+        image: session.user.image ?? undefined,
       }
-      setIsLoading(false);
-    }
-  }, [session, isPending]);
+    : null;
 
   const signIn = useCallback(() => {
     window.location.href = "/login";
@@ -53,7 +43,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     await authClient.signOut();
-    setUser(null);
     window.location.href = "/login";
   }, []);
 
@@ -61,7 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider
       value={{
         user,
-        isLoading: isLoading || isPending,
+        isLoading: isPending,
         isAuthenticated: !!user,
         signIn,
         signOut,

@@ -3,6 +3,10 @@ import type { EmailProvider, SendEmailPayload, SentMessageInfo, WebhookEvent } f
 /**
  * Postmark adapter — recommended provider for production.
  * https://postmarkapp.com/developer
+ *
+ * Webhook verification: Postmark supports HTTP Basic Auth on inbound webhooks.
+ * Set POSTMARK_WEBHOOK_SECRET to the expected `username:password` string.
+ * When no secret is configured, all webhook requests are rejected.
  */
 export class PostmarkProvider implements EmailProvider {
   readonly name = "postmark";
@@ -60,6 +64,38 @@ export class PostmarkProvider implements EmailProvider {
       SPFVerified?: boolean;
     };
     return { verified: Boolean(data.DKIMVerified && data.SPFVerified) };
+  }
+
+  verifyWebhookSignature(_body: string, headers: Record<string, string | undefined>): boolean {
+    const secret = process.env.POSTMARK_WEBHOOK_SECRET;
+    if (!secret) {
+      // No secret configured: reject all webhooks. Caller must configure Basic Auth.
+      return false;
+    }
+
+    const auth = headers["authorization"];
+    if (!auth) return false;
+
+    // Postmark webhooks support HTTP Basic Auth.
+    // Expected header: Authorization: Basic <base64(username:password)>
+    const prefix = "Basic ";
+    if (!auth.startsWith(prefix)) return false;
+
+    const encoded = auth.slice(prefix.length);
+    let decoded: string;
+    try {
+      decoded = Buffer.from(encoded, "base64").toString("utf-8");
+    } catch {
+      return false;
+    }
+
+    // Constant-time compare to avoid timing attacks
+    if (decoded.length !== secret.length) return false;
+    let result = 0;
+    for (let i = 0; i < decoded.length; i++) {
+      result |= decoded.charCodeAt(i) ^ secret.charCodeAt(i);
+    }
+    return result === 0;
   }
 
   ingestWebhook(payload: unknown): WebhookEvent | null {

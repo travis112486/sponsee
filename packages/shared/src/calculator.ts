@@ -23,10 +23,13 @@ export interface ComputeResult {
 /**
  * Pure function: compute CPVH-based suggested pricing.
  *
- * Formula extracted verbatim from the mockup Calculator (DealDetail CPVHHelper):
- *   price = round(ccv * durationMinutes * (bandRate / 100) * multiplier)
+ * All monetary values in this module are in **cents** to align with the deal
+ * model (valueCents) and invoice model (amountCents).
  *
- * Where bandRate comes from the benchmark config bands
+ * Formula:
+ *   price = round(ccv * durationMinutes * bandRate * multiplier)
+ *
+ * Where bandRate comes from the benchmark config bands (cents per viewer-minute)
  * and multiplier comes from the deliverable type.
  */
 export function compute(
@@ -56,13 +59,13 @@ export function compute(
   const effectiveMultiplier = multiplier * platformAdjustment;
 
   const floor = Math.round(
-    ccv * durationMinutes * (config.cpvhBands.floor / 100) * effectiveMultiplier
+    ccv * durationMinutes * config.cpvhBands.floor * effectiveMultiplier
   );
   const mid = Math.round(
-    ccv * durationMinutes * (config.cpvhBands.mid / 100) * effectiveMultiplier
+    ccv * durationMinutes * config.cpvhBands.mid * effectiveMultiplier
   );
   const agency = Math.round(
-    ccv * durationMinutes * (config.cpvhBands.agency / 100) * effectiveMultiplier
+    ccv * durationMinutes * config.cpvhBands.agency * effectiveMultiplier
   );
 
   return { floor, mid, agency };

@@ -65,10 +65,9 @@ describe("chase router tenant isolation", () => {
   const evtA = "de906d68-4380-419f-b3a3-ae6b91522956";
   const evtB = "b9d67243-7c14-49c6-ac78-0f2964922c0a";
   const creatorA = "695b31f4-ec47-451f-9828-07f1272128f9";
-  const creatorB = "348cd44c-18fa-4d97-ae28-e5779c40a7b5";
+  const _creatorB = "348cd44c-18fa-4d97-ae28-e5779c40a7b5";
 
   const invoiceA = { id: invA, creatorId: creatorA, status: "open" };
-  const invoiceB = { id: invB, creatorId: creatorB, status: "open" };
   const chaseStateA = {
     invoiceId: invA,
     mode: "armed",
@@ -80,16 +79,6 @@ describe("chase router tenant isolation", () => {
   const chaseEventA = {
     id: evtA,
     invoiceId: invA,
-    step: 1,
-    subjectSnapshot: "Pay up",
-    bodySnapshot: "Please pay",
-    toEmail: "brand@example.com",
-    status: "awaiting_review",
-    createdAt: now,
-  };
-  const chaseEventB = {
-    id: evtB,
-    invoiceId: invB,
     step: 1,
     subjectSnapshot: "Pay up",
     bodySnapshot: "Please pay",

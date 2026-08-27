@@ -23,10 +23,67 @@ async function init() {
     DROP TABLE IF EXISTS waitlist_emails CASCADE;
     DROP TABLE IF EXISTS calculator_profiles CASCADE;
     DROP TABLE IF EXISTS benchmark_configs CASCADE;
+    DROP TABLE IF EXISTS verification CASCADE;
+    DROP TABLE IF EXISTS session CASCADE;
+    DROP TABLE IF EXISTS account CASCADE;
+    DROP TABLE IF EXISTS "user" CASCADE;
   `);
 
   // Create enums as check constraints (PGlite compatible)
   await client.exec(`
+    CREATE TABLE "user" (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      email_verified BOOLEAN NOT NULL DEFAULT false,
+      image TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE session (
+      id TEXT PRIMARY KEY NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      token TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ip_address TEXT,
+      user_agent TEXT,
+      user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX session_user_idx ON session(user_id);
+
+    CREATE TABLE account (
+      id TEXT PRIMARY KEY NOT NULL,
+      issuer TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+      access_token TEXT,
+      refresh_token TEXT,
+      id_token TEXT,
+      access_token_expires_at TIMESTAMPTZ,
+      refresh_token_expires_at TIMESTAMPTZ,
+      scope TEXT,
+      password TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE UNIQUE INDEX account_issuer_account_id_idx ON account(issuer, account_id);
+
+    CREATE TABLE verification (
+      id TEXT PRIMARY KEY NOT NULL,
+      identifier TEXT NOT NULL,
+      value TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX verification_identifier_idx ON verification(identifier);
+
     CREATE TABLE creators (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       display_name VARCHAR(255) NOT NULL,

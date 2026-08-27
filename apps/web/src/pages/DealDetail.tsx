@@ -549,9 +549,9 @@ function CPVHHelper({ dealValueCents }: { dealValueCents: number }) {
           <div className="rounded-lg bg-surface-subtle p-2">
             <p className="text-[11px] text-ink-3">Suggested range</p>
             <p className="mt-0.5 text-[13px] font-semibold text-ink">
-              ${benchmark.floor} – ${benchmark.agency}
+              {formatCents(benchmark.floor)} – {formatCents(benchmark.agency)}
             </p>
-            <p className="text-[12px] text-pine">Midpoint: ${benchmark.mid}</p>
+            <p className="text-[12px] text-pine">Midpoint: {formatCents(benchmark.mid)}</p>
           </div>
           <BenchmarkBand benchmark={benchmark} dealValueCents={dealValueCents} />
         </>

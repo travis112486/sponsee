@@ -37,6 +37,13 @@ export interface EmailProvider {
   verifyDomain?(domain: string): Promise<{ verified: boolean; records?: Array<{ type: string; host: string; value: string }> }>;
 
   /**
+   * Verify a webhook payload signature before ingestion.
+   * Returns true only if the signature is cryptographically valid.
+   * When no secret is configured, returns false (never accept unsigned webhooks).
+   */
+  verifyWebhookSignature?(body: string, headers: Record<string, string | undefined>): boolean;
+
+  /**
    * Ingest a provider webhook payload and normalize to our internal event shape.
    * Returns null if the payload isn't relevant (e.g. unsupported event type).
    */

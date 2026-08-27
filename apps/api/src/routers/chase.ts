@@ -8,8 +8,10 @@ import {
   invoices,
   activityEvents,
 } from "@sponsee/db/schema";
-import { sendChaseEmail } from "../jobs/chase-tick.js";
+import { getBoss } from "../jobs/boss.js";
 import { TRPCError } from "@trpc/server";
+
+const CHASE_SEND_JOB = "chase-send";
 
 export const chaseRouter = createTRPCRouter({
   // ── Templates ──
@@ -38,6 +40,11 @@ export const chaseRouter = createTRPCRouter({
         .set({ ...data, updatedAt: new Date() })
         .where(and(eq(chaseTemplates.id, id), eq(chaseTemplates.creatorId, ctx.creatorId)))
         .returning();
+
+      if (!template) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
+      }
+
       return template;
     }),
 
@@ -169,9 +176,14 @@ export const chaseRouter = createTRPCRouter({
         .select()
         .from(chaseEvents)
         .innerJoin(invoices, eq(chaseEvents.invoiceId, invoices.id))
-        .where(eq(chaseEvents.id, input.chaseEventId));
+        .where(
+          and(
+            eq(chaseEvents.id, input.chaseEventId),
+            eq(invoices.creatorId, ctx.creatorId)
+          )
+        );
 
-      if (!event || event.invoices.creatorId !== ctx.creatorId) {
+      if (!event) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Chase event not found" });
       }
 
@@ -184,23 +196,55 @@ export const chaseRouter = createTRPCRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "No recipient email configured" });
       }
 
+      // Atomic claim: only one request can move from awaiting_review -> approved
+      const [claimed] = await ctx.db
+        .update(chaseEvents)
+        .set({ status: "approved" })
+        .where(and(eq(chaseEvents.id, input.chaseEventId), eq(chaseEvents.status, "awaiting_review")))
+        .returning();
+
+      if (!claimed) {
+        throw new TRPCError({ code: "CONFLICT", message: "Event already claimed or processed" });
+      }
+
       const fromEmail = process.env.CHASE_FROM_EMAIL || "chase@sponsee.app";
       const replyToEmail = ctx.session.user.email || fromEmail;
+      const idempotencyKey = chaseEvent.idempotencyKey || `invoice:${event.invoices.id}:step:${chaseEvent.step}`;
 
-      // Idempotent send
-      const info = await sendChaseEmail({
-        chaseEventId: chaseEvent.id,
-        invoiceId: event.invoices.id,
-        step: chaseEvent.step,
-        toEmail: chaseEvent.toEmail,
-        fromEmail,
-        replyToEmail,
-        subject: chaseEvent.subjectSnapshot || "",
-        body: chaseEvent.bodySnapshot || "",
-        idempotencyKey: chaseEvent.idempotencyKey || `invoice:${event.invoices.id}:step:${chaseEvent.step}`,
-      });
+      // Enqueue durable send job (singletonKey guarantees idempotency within the TTL)
+      const boss = await getBoss();
+      try {
+        await boss.send(CHASE_SEND_JOB, {
+          chaseEventId: chaseEvent.id,
+          invoiceId: event.invoices.id,
+          step: chaseEvent.step,
+          toEmail: chaseEvent.toEmail,
+          fromEmail,
+          replyToEmail,
+          subject: chaseEvent.subjectSnapshot || "",
+          body: chaseEvent.bodySnapshot || "",
+          idempotencyKey,
+        }, {
+          singletonKey: idempotencyKey,
+          singletonSeconds: 3600,
+          retryLimit: 3,
+          retryDelay: 30,
+          retryBackoff: true,
+        });
+      } catch (enqueueErr) {
+        // Revert status so the creator can retry approval; do not strand in approved
+        await ctx.db
+          .update(chaseEvents)
+          .set({ status: "awaiting_review" })
+          .where(eq(chaseEvents.id, input.chaseEventId));
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to queue chase email. Please retry.",
+          cause: enqueueErr,
+        });
+      }
 
-      // Write activity event
+      // Write activity event for approval
       await ctx.db.insert(activityEvents).values({
         creatorId: ctx.creatorId,
         actor: "creator",
@@ -209,13 +253,12 @@ export const chaseRouter = createTRPCRouter({
         kind: "chase_sent",
         payload: {
           step: chaseEvent.step,
-          status: "sent",
-          providerMessageId: info.providerMessageId,
+          status: "approved",
           action: "approve",
         },
       });
 
-      return { success: true, providerMessageId: info.providerMessageId };
+      return { success: true, queued: true };
     }),
 
   // ── Edit and send (new) ──
@@ -232,9 +275,14 @@ export const chaseRouter = createTRPCRouter({
         .select()
         .from(chaseEvents)
         .innerJoin(invoices, eq(chaseEvents.invoiceId, invoices.id))
-        .where(eq(chaseEvents.id, input.chaseEventId));
+        .where(
+          and(
+            eq(chaseEvents.id, input.chaseEventId),
+            eq(invoices.creatorId, ctx.creatorId)
+          )
+        );
 
-      if (!event || event.invoices.creatorId !== ctx.creatorId) {
+      if (!event) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Chase event not found" });
       }
 
@@ -247,26 +295,53 @@ export const chaseRouter = createTRPCRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "No recipient email configured" });
       }
 
-      // Update snapshot with user's edits
-      await ctx.db
+      // Atomic edit + claim: combine snapshot update with status transition so a
+      // losing concurrent request cannot overwrite subject/body after the winner claims.
+      const [claimed] = await ctx.db
         .update(chaseEvents)
-        .set({ subjectSnapshot: input.subject, bodySnapshot: input.body })
-        .where(eq(chaseEvents.id, input.chaseEventId));
+        .set({ status: "approved", subjectSnapshot: input.subject, bodySnapshot: input.body })
+        .where(and(eq(chaseEvents.id, input.chaseEventId), eq(chaseEvents.status, "awaiting_review")))
+        .returning();
+
+      if (!claimed) {
+        throw new TRPCError({ code: "CONFLICT", message: "Event already claimed or processed" });
+      }
 
       const fromEmail = process.env.CHASE_FROM_EMAIL || "chase@sponsee.app";
       const replyToEmail = ctx.session.user.email || fromEmail;
+      const idempotencyKey = chaseEvent.idempotencyKey || `invoice:${event.invoices.id}:step:${chaseEvent.step}`;
 
-      const info = await sendChaseEmail({
-        chaseEventId: chaseEvent.id,
-        invoiceId: event.invoices.id,
-        step: chaseEvent.step,
-        toEmail: chaseEvent.toEmail,
-        fromEmail,
-        replyToEmail,
-        subject: input.subject,
-        body: input.body,
-        idempotencyKey: chaseEvent.idempotencyKey || `invoice:${event.invoices.id}:step:${chaseEvent.step}`,
-      });
+      const boss = await getBoss();
+      try {
+        await boss.send(CHASE_SEND_JOB, {
+          chaseEventId: chaseEvent.id,
+          invoiceId: event.invoices.id,
+          step: chaseEvent.step,
+          toEmail: chaseEvent.toEmail,
+          fromEmail,
+          replyToEmail,
+          subject: input.subject,
+          body: input.body,
+          idempotencyKey,
+        }, {
+          singletonKey: idempotencyKey,
+          singletonSeconds: 3600,
+          retryLimit: 3,
+          retryDelay: 30,
+          retryBackoff: true,
+        });
+      } catch (enqueueErr) {
+        // Revert status so the creator can retry; snapshots are preserved
+        await ctx.db
+          .update(chaseEvents)
+          .set({ status: "awaiting_review" })
+          .where(eq(chaseEvents.id, input.chaseEventId));
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to queue chase email. Please retry.",
+          cause: enqueueErr,
+        });
+      }
 
       await ctx.db.insert(activityEvents).values({
         creatorId: ctx.creatorId,
@@ -276,13 +351,12 @@ export const chaseRouter = createTRPCRouter({
         kind: "chase_sent",
         payload: {
           step: chaseEvent.step,
-          status: "sent",
-          providerMessageId: info.providerMessageId,
+          status: "approved",
           action: "edit_and_send",
         },
       });
 
-      return { success: true, providerMessageId: info.providerMessageId };
+      return { success: true, queued: true };
     }),
 
   // ── Dead letter / failed events (new) ──

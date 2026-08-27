@@ -13,4 +13,8 @@ coverage
 *.tsbuildinfo
 .vercel
 **/.pglite-data/
-packages/db/drizzle/
+
+# SPO-20 cross-boundary build artifacts / generated files
+api/bundle.js
+screenshots/
+

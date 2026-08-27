@@ -1,4 +1,4 @@
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, or, sql, isNotNull } from "drizzle-orm";
 import { db } from "@sponsee/db";
 import {
   invoices,
@@ -23,7 +23,7 @@ const STEP_NAMES: Record<number, string> = {
 export async function runChaseTick(): Promise<number> {
   const now = new Date();
 
-  // Find armed chase states whose next action time has passed (or never set)
+  // Find armed chase states whose next action time has passed
   const dueStates = await db
     .select({
       state: invoiceChaseState,
@@ -36,8 +36,8 @@ export async function runChaseTick(): Promise<number> {
         eq(invoiceChaseState.mode, "armed"),
         eq(invoices.status, "open"),
         sql`${invoiceChaseState.nextStep} <= 3`,
-        // Either no nextActionAt set, or it's in the past
-        sql`(${invoiceChaseState.nextActionAt} IS NULL OR ${invoiceChaseState.nextActionAt} <= ${now})`
+        isNotNull(invoiceChaseState.nextActionAt),
+        sql`${invoiceChaseState.nextActionAt} <= ${now}`
       )
     );
 
@@ -59,7 +59,7 @@ export async function runChaseTick(): Promise<number> {
         .update(invoiceChaseState)
         .set({
           nextStep: step + 1,
-          nextActionAt: calculateNextActionAt(invoice, step + 1),
+          nextActionAt: await calculateNextActionAt(invoice, step + 1),
           updatedAt: now,
         })
         .where(eq(invoiceChaseState.invoiceId, invoice.id));
@@ -78,7 +78,7 @@ export async function runChaseTick(): Promise<number> {
         .update(invoiceChaseState)
         .set({
           nextStep: step + 1,
-          nextActionAt: calculateNextActionAt(invoice, step + 1),
+          nextActionAt: await calculateNextActionAt(invoice, step + 1),
           updatedAt: now,
         })
         .where(eq(invoiceChaseState.invoiceId, invoice.id));
@@ -145,7 +145,7 @@ export async function runChaseTick(): Promise<number> {
       .update(invoiceChaseState)
       .set({
         nextStep: step + 1,
-        nextActionAt: calculateNextActionAt(invoice, step + 1),
+        nextActionAt: await calculateNextActionAt(invoice, step + 1),
         updatedAt: now,
       })
       .where(eq(invoiceChaseState.invoiceId, invoice.id));
@@ -173,7 +173,8 @@ export async function runChaseTick(): Promise<number> {
 }
 
 /**
- * Idempotent send: called when creator approves a chase event.
+ * Idempotent send: called by the chase-send pg-boss job.
+ * On provider failure, updates the event to failed and re-throws so pg-boss retries.
  */
 export async function sendChaseEmail(args: {
   chaseEventId: string;
@@ -186,42 +187,106 @@ export async function sendChaseEmail(args: {
   body: string;
   idempotencyKey: string;
 }): Promise<{ providerMessageId: string }> {
+  // Atomic claim: only one worker can move approved|failed -> sending
+  const [claimed] = await db
+    .update(chaseEvents)
+    .set({ status: "sending" })
+    .where(
+      and(
+        eq(chaseEvents.id, args.chaseEventId),
+        or(eq(chaseEvents.status, "approved"), eq(chaseEvents.status, "failed"))
+      )
+    )
+    .returning();
+
+  if (!claimed) {
+    // Another worker got it; return existing result if already sent
+    const [existing] = await db
+      .select({ status: chaseEvents.status, providerMessageId: chaseEvents.providerMessageId })
+      .from(chaseEvents)
+      .where(eq(chaseEvents.id, args.chaseEventId))
+      .limit(1);
+
+    if (existing?.status === "sent" && existing.providerMessageId) {
+      return { providerMessageId: existing.providerMessageId };
+    }
+    throw new Error(
+      `Chase event ${args.chaseEventId} is not in approved state or already being processed`
+    );
+  }
+
   const provider = createEmailProvider();
 
-  const info = await provider.send({
-    to: args.toEmail,
-    from: args.fromEmail,
-    replyTo: args.replyToEmail,
-    subject: args.subject,
-    text: args.body,
-    metadata: {
-      idempotencyKey: args.idempotencyKey,
-      tags: ["chase", `step-${args.step}`],
-    },
-  });
+  try {
+    const info = await provider.send({
+      to: args.toEmail,
+      from: args.fromEmail,
+      replyTo: args.replyToEmail,
+      subject: args.subject,
+      text: args.body,
+      metadata: {
+        idempotencyKey: args.idempotencyKey,
+        tags: ["chase", `step-${args.step}`],
+      },
+    });
 
-  // Update chase event
-  await db
-    .update(chaseEvents)
-    .set({
-      status: "sent",
-      providerMessageId: info.providerMessageId,
-      sentAt: new Date(),
-    })
-    .where(eq(chaseEvents.id, args.chaseEventId));
+    // Update chase event to sent
+    await db
+      .update(chaseEvents)
+      .set({
+        status: "sent",
+        providerMessageId: info.providerMessageId,
+        sentAt: new Date(),
+      })
+      .where(eq(chaseEvents.id, args.chaseEventId));
 
-  return info;
+    // Write activity event
+    const invoice = await db.query.invoices.findFirst({
+      where: (i, { eq }) => eq(i.id, args.invoiceId),
+    });
+    if (invoice) {
+      await db.insert(activityEvents).values({
+        creatorId: invoice.creatorId,
+        actor: "system",
+        entityType: "invoice",
+        entityId: invoice.id,
+        kind: "chase_sent",
+        payload: {
+          step: args.step,
+          status: "sent",
+          providerMessageId: info.providerMessageId,
+        },
+      });
+    }
+
+    return info;
+  } catch (err) {
+    // Record failure so it surfaces in the timeline / dead-letter view
+    await db
+      .update(chaseEvents)
+      .set({
+        status: "failed",
+        providerMessageId: null,
+      })
+      .where(eq(chaseEvents.id, args.chaseEventId));
+
+    throw err;
+  }
 }
 
-function calculateNextActionAt(invoice: typeof invoices.$inferSelect, nextStep: number): Date | null {
+async function calculateNextActionAt(invoice: typeof invoices.$inferSelect, nextStep: number): Promise<Date | null> {
   if (nextStep > 3) return null;
-  // We don't know the next template's offset here without a DB round-trip.
-  // The cron job recalculates every 15 minutes, so we set a conservative
-  // check time: due date + 1 day (minimum offset for step 1 is 3 days,
-  // but the cron will re-evaluate with the actual template offset).
-  const due = invoice.dueAt ? new Date(invoice.dueAt) : new Date();
-  const next = new Date(due);
-  next.setDate(next.getDate() + 1);
+
+  // Look up the template offset for this step
+  const [template] = await db
+    .select()
+    .from(chaseTemplates)
+    .where(and(eq(chaseTemplates.creatorId, invoice.creatorId), eq(chaseTemplates.step, nextStep)));
+
+  if (!template || !template.enabled) return null;
+
+  const baseDate = invoice.dueAt ? new Date(invoice.dueAt) : new Date(invoice.issuedAt);
+  const next = new Date(baseDate.getTime() + template.offsetDays * 24 * 60 * 60 * 1000);
   return next;
 }
 

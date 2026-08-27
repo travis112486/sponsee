@@ -4,11 +4,28 @@ import { sendChaseEmail } from "./chase-tick.js";
 // Mock @sponsee/db
 vi.mock("@sponsee/db", () => ({
   db: {
-    update: vi.fn(() => ({
-      set: vi.fn(() => ({
-        where: vi.fn(() => Promise.resolve([])),
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn(() => Promise.resolve([{ status: "approved", providerMessageId: null }])),
+        })),
       })),
     })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(() => ({
+          returning: vi.fn(() => Promise.resolve([{ status: "sending" }])),
+        })),
+      })),
+    })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => Promise.resolve()),
+    })),
+    query: {
+      invoices: {
+        findFirst: vi.fn(() => Promise.resolve({ id: "inv-1", creatorId: "cr-1" })),
+      },
+    },
   },
 }));
 

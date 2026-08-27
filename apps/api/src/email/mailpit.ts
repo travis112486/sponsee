@@ -2,11 +2,10 @@ import type { EmailProvider, SendEmailPayload, SentMessageInfo, WebhookEvent } f
 
 /**
  * Mailpit adapter — captures emails in local Mailpit instance for dev/CI.
- * Never sends real mail. Uses Mailpit's SMTP relay or HTTP API if available.
+ * Never sends real mail. Uses Mailpit's HTTP JSON API.
  *
  * In dev, Mailpit runs at SMTP 1025 / Web UI 8025.
- * We use the SMTP port via nodemailer-style submission, but to keep deps
- * light we POST to Mailpit's message API when available, else log.
+ * API docs: https://mailpit.axllent.org/docs/usage/sending-messages/
  */
 export class MailpitProvider implements EmailProvider {
   readonly name = "mailpit";
@@ -17,40 +16,34 @@ export class MailpitProvider implements EmailProvider {
   }
 
   async send(payload: SendEmailPayload): Promise<SentMessageInfo> {
-    // Try Mailpit's API first (accepts raw MIME or JSON). Fall back to console.
-    try {
-      const form = new URLSearchParams();
-      form.append("from", payload.from);
-      form.append("to", payload.to);
-      form.append("subject", payload.subject);
-      form.append("text", payload.text);
-      if (payload.html) form.append("html", payload.html);
-      if (payload.replyTo) form.append("reply_to", payload.replyTo);
+    const body = {
+      From: payload.from,
+      To: [payload.to],
+      Subject: payload.subject,
+      Text: payload.text,
+      HTML: payload.html,
+      ReplyTo: payload.replyTo,
+    };
 
-      const res = await fetch(`${this.baseUrl}/api/v1/message`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: form.toString(),
-      });
+    const res = await fetch(`${this.baseUrl}/api/v1/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
 
-      if (!res.ok) {
-        const body = await res.text().catch(() => "unknown");
-        throw new Error(`Mailpit API error ${res.status}: ${body}`);
-      }
-
-      // Mailpit returns the stored message ID in the Location header or JSON
-      const data = await res.json().catch(() => ({} as Record<string, unknown>));
-      const providerMessageId =
-        (typeof data.ID === "string" ? data.ID : undefined) ||
-        `mailpit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-      return { providerMessageId };
-    } catch (err) {
-      // Fallback: log and return synthetic ID so tests don't fail on missing Mailpit
-      console.warn("[Mailpit] send failed, logging fallback:", (err as Error).message);
-      console.log("[Mailpit] captured email:\n", JSON.stringify(payload, null, 2));
-      return { providerMessageId: `mailpit-fallback-${Date.now()}` };
+    if (!res.ok) {
+      const text = await res.text().catch(() => "unknown");
+      throw new Error(`Mailpit API error ${res.status}: ${text}`);
     }
+
+    // Mailpit returns { ID: "..." } on success
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (typeof data.ID !== "string" || !data.ID) {
+      throw new Error("Mailpit API success but no message ID returned");
+    }
+    const providerMessageId = data.ID;
+
+    return { providerMessageId };
   }
 
   ingestWebhook(_payload: unknown): WebhookEvent | null {

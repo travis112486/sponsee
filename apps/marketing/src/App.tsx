@@ -95,6 +95,14 @@ function AccordionItem({
   onClick: () => void;
 }) {
   const contentRef = useRef<HTMLDivElement>(null);
+  const [contentHeight, setContentHeight] = useState(0);
+
+  useEffect(() => {
+    if (contentRef.current) {
+      setContentHeight(contentRef.current.scrollHeight);
+    }
+  }, [answer]);
+
   return (
     <div className="border-b border-hairline">
       <button
@@ -109,7 +117,7 @@ function AccordionItem({
       <div
         ref={contentRef}
         className="overflow-hidden transition-all"
-        style={{ maxHeight: open ? (contentRef.current?.scrollHeight ?? 200) : 0 }}
+        style={{ maxHeight: open ? (contentHeight || 200) : 0 }}
       >
         <p className="pb-5 text-ink-2 leading-relaxed">{answer}</p>
       </div>
@@ -219,7 +227,7 @@ export default function App() {
                 <div key={stage} className="rounded-lg border border-hairline bg-surface-subtle p-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-medium text-ink">{stage}</span>
-                    <span className="text-xs font-mono text-ink-3">{Math.floor(Math.random() * 4)}</span>
+                    <span className="text-xs font-mono text-ink-3">{2}</span>
                   </div>
                   <div className="space-y-2">
                     {[1, 2].map((i) => (
@@ -280,7 +288,7 @@ export default function App() {
                 {["Inbound", "Negotiating", "Contract Sent", "Live", "Delivered", "Paid"].map((stage) => (
                   <div key={stage} className="rounded-lg border border-hairline bg-surface-subtle p-2">
                     <div className="text-[10px] font-medium text-ink mb-1 truncate">{stage}</div>
-                    <div className="text-[10px] font-mono text-ink-3">{Math.floor(Math.random() * 3)} deals</div>
+                    <div className="text-[10px] font-mono text-ink-3">2 deals</div>
                     <div className="mt-1 space-y-1">
                       {[1].map((i) => (
                         <div key={i} className="h-6 rounded bg-hairline/50" />
@@ -350,7 +358,7 @@ export default function App() {
                   {["Current", "1–30 days", "31–60 days", "60+ days"].map((bucket) => (
                     <div key={bucket} className="flex-1 rounded-lg border border-hairline bg-surface-subtle p-3 text-center">
                       <div className="text-[10px] text-ink-3 mb-1">{bucket}</div>
-                      <div className="font-mono text-sm text-ink">${Math.floor(Math.random() * 5000)}</div>
+                      <div className="font-mono text-sm text-ink">$2,400</div>
                     </div>
                   ))}
                 </div>

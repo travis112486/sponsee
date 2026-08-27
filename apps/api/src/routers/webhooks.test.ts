@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { handleEmailWebhook } from "./webhooks.js";
+import { createEmailProvider } from "../email/index.js";
 
 const mocks = vi.hoisted(() => ({
   update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(() => Promise.resolve()) })) })),
@@ -21,9 +22,10 @@ vi.mock("@sponsee/db", () => ({
   },
 }));
 
-vi.mock("../email/index.js", () => ({
-  createEmailProvider: vi.fn(() => ({
+function makeDefaultProvider() {
+  return {
     name: "postmark",
+    verifyWebhookSignature: vi.fn(() => true),
     ingestWebhook: vi.fn((p: any) => {
       if (p.Type === "Delivery") {
         return {
@@ -41,15 +43,20 @@ vi.mock("../email/index.js", () => ({
       }
       return null;
     }),
-  })),
+  };
+}
+
+vi.mock("../email/index.js", () => ({
+  createEmailProvider: vi.fn(() => makeDefaultProvider()),
 }));
 
-function mockContext(body: unknown, provider = "postmark") {
+function mockContext(body: unknown, provider = "postmark", headers = new Headers()) {
   return {
     req: {
       param: () => provider,
+      text: () => Promise.resolve(JSON.stringify(body)),
       json: () => Promise.resolve(body),
-      raw: new Request("http://localhost"),
+      raw: { headers },
     },
     json: (data: unknown, status = 200) => ({ data, status }),
   } as any;
@@ -58,13 +65,23 @@ function mockContext(body: unknown, provider = "postmark") {
 describe("handleEmailWebhook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    createEmailProvider.mockReturnValue(makeDefaultProvider());
   });
 
+  it("returns 401 for invalid webhook signature", async () => {
+    const { createEmailProvider } = await import("../email/index.js");
+    vi.mocked(createEmailProvider).mockReturnValue({
+      name: "postmark",
+      verifyWebhookSignature: vi.fn(() => false),
+      ingestWebhook: vi.fn(),
+    } as any);
+
+    const c = mockContext({ Type: "Delivery", MessageID: "msg-1" });
+    const result = await handleEmailWebhook(c);
+    expect(result.status).toBe(401);
+  });
   it("returns 400 for empty payload", async () => {
-    const c = {
-      req: { param: () => "postmark", json: () => Promise.resolve(null) },
-      json: (data: unknown, status = 200) => ({ data, status }),
-    } as any;
+    const c = mockContext("");
     const result = await handleEmailWebhook(c);
     expect(result.status).toBe(400);
   });

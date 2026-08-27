@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { eq, and, isNull, desc } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
+import { TRPCError } from "@trpc/server";
 import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { dealStages, dealTypes, platforms, paymentTerms } from "@sponsee/shared";
@@ -39,10 +40,19 @@ export const dealsRouter = createTRPCRouter({
       const [brand] = await db
         .select()
         .from(schema.brands)
-        .where(eq(schema.brands.id, deal.brandId));
+        .where(and(eq(schema.brands.id, deal.brandId), eq(schema.brands.creatorId, ctx.creatorId)));
 
       const [contact] = deal.primaryContactId
-        ? await db.select().from(schema.contacts).where(eq(schema.contacts.id, deal.primaryContactId))
+        ? await db
+            .select()
+            .from(schema.contacts)
+            .innerJoin(schema.brands, eq(schema.contacts.brandId, schema.brands.id))
+            .where(
+              and(
+                eq(schema.contacts.id, deal.primaryContactId),
+                eq(schema.brands.creatorId, ctx.creatorId)
+              )
+            )
         : [null];
 
       const deliverables = await db
@@ -75,6 +85,32 @@ export const dealsRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Verify brand ownership
+      const [brand] = await db
+        .select()
+        .from(schema.brands)
+        .where(and(eq(schema.brands.id, input.brandId), eq(schema.brands.creatorId, ctx.creatorId)));
+      if (!brand) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Brand not found" });
+      }
+
+      // Verify contact ownership if provided
+      if (input.primaryContactId) {
+        const [contact] = await db
+          .select()
+          .from(schema.contacts)
+          .innerJoin(schema.brands, eq(schema.contacts.brandId, schema.brands.id))
+          .where(
+            and(
+              eq(schema.contacts.id, input.primaryContactId),
+              eq(schema.brands.creatorId, ctx.creatorId)
+            )
+          );
+        if (!contact) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+        }
+      }
+
       const [deal] = await db
         .insert(schema.deals)
         .values({
@@ -107,6 +143,24 @@ export const dealsRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+
+      // Verify contact ownership if provided
+      if (data.primaryContactId) {
+        const [contact] = await db
+          .select()
+          .from(schema.contacts)
+          .innerJoin(schema.brands, eq(schema.contacts.brandId, schema.brands.id))
+          .where(
+            and(
+              eq(schema.contacts.id, data.primaryContactId),
+              eq(schema.brands.creatorId, ctx.creatorId)
+            )
+          );
+        if (!contact) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+        }
+      }
+
       const [deal] = await db
         .update(schema.deals)
         .set({
@@ -116,6 +170,11 @@ export const dealsRouter = createTRPCRouter({
         })
         .where(and(eq(schema.deals.id, id), eq(schema.deals.creatorId, ctx.creatorId)))
         .returning();
+
+      if (!deal) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
+      }
+
       return deal;
     }),
 
@@ -127,6 +186,11 @@ export const dealsRouter = createTRPCRouter({
         .set({ stage: input.stage, stageEnteredAt: new Date(), updatedAt: new Date() })
         .where(and(eq(schema.deals.id, input.id), eq(schema.deals.creatorId, ctx.creatorId)))
         .returning();
+
+      if (!deal) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
+      }
+
       return deal;
     }),
 
@@ -138,6 +202,11 @@ export const dealsRouter = createTRPCRouter({
         .set({ deletedAt: new Date(), updatedAt: new Date() })
         .where(and(eq(schema.deals.id, input.id), eq(schema.deals.creatorId, ctx.creatorId)))
         .returning();
+
+      if (!deal) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
+      }
+
       return deal;
     }),
 });

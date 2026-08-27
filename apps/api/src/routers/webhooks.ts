@@ -10,19 +10,32 @@ import type { Context } from "hono";
  */
 export async function handleEmailWebhook(c: Context) {
   const providerName = c.req.param("provider");
-  const payload = await c.req.json().catch(() => null);
+
+  // Read raw body for signature verification
+  const rawBody = await c.req.text();
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
 
   if (!payload) {
     return c.json({ error: "Empty payload" }, 400);
   }
 
-  const provider = createEmailProvider();
-  if (provider.name !== providerName) {
-    // If the configured provider doesn't match the webhook path, still try to
-    // ingest with the path's provider type for safety. In practice we create
-    // the provider that matches the env; for multi-provider setups this would
-    // need a registry.
-    console.warn(`[webhook] Provider mismatch: path=${providerName}, config=${provider.name}`);
+  const provider = createEmailProvider(providerName);
+
+  // Verify webhook signature before any mutation
+  if (provider.verifyWebhookSignature) {
+    const headers: Record<string, string | undefined> = {};
+    c.req.raw.headers.forEach((value, key) => {
+      headers[key.toLowerCase()] = value;
+    });
+    const valid = provider.verifyWebhookSignature(rawBody, headers);
+    if (!valid) {
+      return c.json({ error: "Invalid signature" }, 401);
+    }
   }
 
   const event = provider.ingestWebhook(payload);

@@ -1,6 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { initTRPC, TRPCError } from "@trpc/server";
-import superjson from "superjson";
+import { describe, it, expect } from "vitest";
+import { TRPCError } from "@trpc/server";
 import {
   authedProcedure,
   creatorScopedProcedure,

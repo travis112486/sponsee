@@ -5,35 +5,40 @@ import { defaultBenchmarkConfig } from "./benchmark.js";
 describe("calculator.compute", () => {
   const config = defaultBenchmarkConfig;
 
-  // These are the exact inputs/outputs from the mockup CPVHHelper
-  it("matches mockup numbers for ad-read (500 CCV, 60 min, 1.0x)", () => {
+  // All monetary values in the calculator are in **cents**.
+  // For 500 CCV × 60 min, ad-read (1.0×):
+  //   floor = round(500 * 60 * 0.6  * 1.0) = 18000 cents = $180
+  //   mid   = round(500 * 60 * 1.05 * 1.0) = 31500 cents = $315
+  //   agency= round(500 * 60 * 2.0  * 1.0) = 60000 cents = $600
+
+  it("returns correct cents for ad-read (500 CCV, 60 min, 1.0x)", () => {
     const result = compute(
       { ccv: 500, durationMinutes: 60, deliverableType: "ad-read" },
       config
     );
-    expect(result.floor).toBe(180); // 500 * 60 * 0.006 * 1.0 = 180
-    expect(result.mid).toBe(315); // 500 * 60 * 0.0105 * 1.0 = 315
-    expect(result.agency).toBe(600); // 500 * 60 * 0.02 * 1.0 = 600
+    expect(result.floor).toBe(18000); // $180
+    expect(result.mid).toBe(31500); // $315
+    expect(result.agency).toBe(60000); // $600
   });
 
-  it("matches mockup numbers for segment (500 CCV, 60 min, 1.25x)", () => {
+  it("returns correct cents for segment (500 CCV, 60 min, 1.25x)", () => {
     const result = compute(
       { ccv: 500, durationMinutes: 60, deliverableType: "segment" },
       config
     );
-    expect(result.floor).toBe(225); // 500 * 60 * 0.006 * 1.25 = 225
-    expect(result.mid).toBe(394); // 500 * 60 * 0.0105 * 1.25 = 393.75 → 394
-    expect(result.agency).toBe(750); // 500 * 60 * 0.02 * 1.25 = 750
+    expect(result.floor).toBe(22500); // $225
+    expect(result.mid).toBe(39375); // $393.75 → 39375 cents
+    expect(result.agency).toBe(75000); // $750
   });
 
-  it("matches mockup numbers for vod (500 CCV, 60 min, 1.6x)", () => {
+  it("returns correct cents for vod (500 CCV, 60 min, 1.6x)", () => {
     const result = compute(
       { ccv: 500, durationMinutes: 60, deliverableType: "vod" },
       config
     );
-    expect(result.floor).toBe(288); // 500 * 60 * 0.006 * 1.6 = 288
-    expect(result.mid).toBe(504); // 500 * 60 * 0.0105 * 1.6 = 504
-    expect(result.agency).toBe(960); // 500 * 60 * 0.02 * 1.6 = 960
+    expect(result.floor).toBe(28800); // $288
+    expect(result.mid).toBe(50400); // $504
+    expect(result.agency).toBe(96000); // $960
   });
 
   it("returns zero for non-positive inputs", () => {
@@ -106,9 +111,9 @@ describe("calculator.compute", () => {
       { ccv: 500, durationMinutes: 60, deliverableType: "unknown" },
       config
     );
-    expect(result.floor).toBe(180);
-    expect(result.mid).toBe(315);
-    expect(result.agency).toBe(600);
+    expect(result.floor).toBe(18000);
+    expect(result.mid).toBe(31500);
+    expect(result.agency).toBe(60000);
   });
 });
 

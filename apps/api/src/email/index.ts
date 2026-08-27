@@ -10,8 +10,8 @@ export { MailpitProvider, PostmarkProvider, ResendProvider };
  * Factory: returns the configured EmailProvider based on environment.
  * Defaults to Mailpit in dev/test so real emails are never sent accidentally.
  */
-export function createEmailProvider(): EmailProvider {
-  const env = process.env.EMAIL_PROVIDER || "mailpit";
+export function createEmailProvider(name?: string): EmailProvider {
+  const env = name || process.env.EMAIL_PROVIDER || "mailpit";
 
   switch (env) {
     case "postmark":

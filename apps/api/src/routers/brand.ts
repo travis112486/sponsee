@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { brands, contacts } from "@sponsee/db/schema";
 
 export const brandRouter = createTRPCRouter({
@@ -27,6 +28,15 @@ export const brandRouter = createTRPCRouter({
   contacts: creatorScopedProcedure
     .input(z.object({ brandId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
+      const [brand] = await ctx.db
+        .select()
+        .from(brands)
+        .where(and(eq(brands.id, input.brandId), eq(brands.creatorId, ctx.creatorId)));
+
+      if (!brand) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Brand not found" });
+      }
+
       return ctx.db.select().from(contacts).where(eq(contacts.brandId, input.brandId));
     }),
 
@@ -40,6 +50,15 @@ export const brandRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const [brand] = await ctx.db
+        .select()
+        .from(brands)
+        .where(and(eq(brands.id, input.brandId), eq(brands.creatorId, ctx.creatorId)));
+
+      if (!brand) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Brand not found" });
+      }
+
       const [contact] = await ctx.db.insert(contacts).values(input).returning();
       return contact;
     }),

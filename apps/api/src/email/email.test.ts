@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHmac } from "crypto";
 import { MailpitProvider } from "./mailpit.js";
 import { PostmarkProvider } from "./postmark.js";
 import { ResendProvider } from "./resend.js";
@@ -24,13 +25,16 @@ describe("MailpitProvider", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns a synthetic id on API failure (fallback)", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: false, text: () => Promise.resolve("bad") })));
-    const result = await provider.send(samplePayload);
-    expect(result.providerMessageId).toMatch(/^mailpit-fallback-/);
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("returns Mailpit message ID on success", async () => {
+  it("throws on API failure", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: false, text: () => Promise.resolve("bad") })));
+    await expect(provider.send(samplePayload)).rejects.toThrow("Mailpit API error");
+  });
+
+  it("posts JSON to /api/v1/send and returns message ID", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() =>
@@ -42,10 +46,70 @@ describe("MailpitProvider", () => {
     );
     const result = await provider.send(samplePayload);
     expect(result.providerMessageId).toBe("abc123");
+
+    const fetchCall = vi.mocked(fetch).mock.calls[0];
+    expect(fetchCall[0]).toBe("http://localhost:8025/api/v1/send");
+    expect(fetchCall[1]).toMatchObject({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const body = JSON.parse(fetchCall[1]!.body as string);
+    expect(body.From).toBe(samplePayload.from);
+    expect(body.To).toEqual([samplePayload.to]);
+    expect(body.Subject).toBe(samplePayload.subject);
+    expect(body.Text).toBe(samplePayload.text);
+    expect(body.HTML).toBe(samplePayload.html);
+    expect(body.ReplyTo).toBe(samplePayload.replyTo);
+  });
+
+  it("throws on API success but missing message ID", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({}),
+        })
+      )
+    );
+    await expect(provider.send(samplePayload)).rejects.toThrow("no message ID");
   });
 
   it("ingestWebhook returns null", () => {
     expect(provider.ingestWebhook({})).toBeNull();
+  });
+
+  it("sends real message to Mailpit when available", async () => {
+    // Probe whether Mailpit is running locally
+    let mailpitAvailable = false;
+    try {
+      const probe = await fetch("http://localhost:8025/api/v1/messages", { method: "GET" });
+      mailpitAvailable = probe.ok;
+    } catch {
+      mailpitAvailable = false;
+    }
+
+    if (!mailpitAvailable) {
+      console.log("Skipping real Mailpit test: no Mailpit instance at localhost:8025");
+      return;
+    }
+
+    const realProvider = new MailpitProvider("http://localhost:8025");
+    const result = await realProvider.send({
+      to: "test-brand@example.com",
+      from: "chase@sponsee.app",
+      replyTo: "creator@example.com",
+      subject: "SPO-30 real Mailpit acceptance",
+      text: "This is a real Mailpit acceptance test.",
+    });
+
+    expect(result.providerMessageId).toBeTruthy();
+
+    // Verify the message landed in the Mailpit inbox
+    const inbox = await fetch("http://localhost:8025/api/v1/messages?limit=10");
+    const data = (await inbox.json()) as { messages?: Array<{ Subject: string; ID: string }> };
+    const match = data.messages?.find((m) => m.Subject === "SPO-30 real Mailpit acceptance");
+    expect(match).toBeDefined();
   });
 });
 
@@ -123,6 +187,44 @@ describe("PostmarkProvider", () => {
 
   it("returns null for non-object payload", () => {
     expect(provider.ingestWebhook("string")).toBeNull();
+  });
+
+  describe("webhook verification", () => {
+    const originalSecret = process.env.POSTMARK_WEBHOOK_SECRET;
+
+    afterEach(() => {
+      if (originalSecret === undefined) {
+        delete process.env.POSTMARK_WEBHOOK_SECRET;
+      } else {
+        process.env.POSTMARK_WEBHOOK_SECRET = originalSecret;
+      }
+    });
+
+    it("rejects when no secret is configured", () => {
+      delete process.env.POSTMARK_WEBHOOK_SECRET;
+      const ok = provider.verifyWebhookSignature("body", { authorization: "Basic abc" });
+      expect(ok).toBe(false);
+    });
+
+    it("rejects missing authorization header", () => {
+      process.env.POSTMARK_WEBHOOK_SECRET = "user:pass";
+      const ok = provider.verifyWebhookSignature("body", {});
+      expect(ok).toBe(false);
+    });
+
+    it("accepts valid Basic auth", () => {
+      process.env.POSTMARK_WEBHOOK_SECRET = "user:pass";
+      const encoded = Buffer.from("user:pass", "utf-8").toString("base64");
+      const ok = provider.verifyWebhookSignature("body", { authorization: `Basic ${encoded}` });
+      expect(ok).toBe(true);
+    });
+
+    it("rejects invalid Basic auth", () => {
+      process.env.POSTMARK_WEBHOOK_SECRET = "user:pass";
+      const encoded = Buffer.from("wrong:creds", "utf-8").toString("base64");
+      const ok = provider.verifyWebhookSignature("body", { authorization: `Basic ${encoded}` });
+      expect(ok).toBe(false);
+    });
   });
 });
 
@@ -202,5 +304,61 @@ describe("ResendProvider", () => {
 
   it("returns null for unsupported webhook type", () => {
     expect(provider.ingestWebhook({ type: "email.sent", email_id: "res-123" })).toBeNull();
+  });
+
+  describe("webhook verification", () => {
+    const originalSecret = process.env.RESEND_WEBHOOK_SECRET;
+
+    afterEach(() => {
+      if (originalSecret === undefined) {
+        delete process.env.RESEND_WEBHOOK_SECRET;
+      } else {
+        process.env.RESEND_WEBHOOK_SECRET = originalSecret;
+      }
+    });
+
+    it("rejects when no secret is configured", () => {
+      delete process.env.RESEND_WEBHOOK_SECRET;
+      const ok = provider.verifyWebhookSignature("body", { "svix-id": "id", "svix-timestamp": String(Math.floor(Date.now() / 1000)), "svix-signature": "v1,sig" });
+      expect(ok).toBe(false);
+    });
+
+    it("rejects missing svix headers", () => {
+      process.env.RESEND_WEBHOOK_SECRET = "secret";
+      const ok = provider.verifyWebhookSignature("body", {});
+      expect(ok).toBe(false);
+    });
+
+    it("rejects stale timestamp (>5 min old)", () => {
+      process.env.RESEND_WEBHOOK_SECRET = "secret";
+      const oldTs = String(Math.floor(Date.now() / 1000) - 400);
+      const ok = provider.verifyWebhookSignature("body", { "svix-id": "id", "svix-timestamp": oldTs, "svix-signature": "v1,sig" });
+      expect(ok).toBe(false);
+    });
+
+    it("rejects future timestamp (>1 min ahead)", () => {
+      process.env.RESEND_WEBHOOK_SECRET = "secret";
+      const futureTs = String(Math.floor(Date.now() / 1000) + 400);
+      const ok = provider.verifyWebhookSignature("body", { "svix-id": "id", "svix-timestamp": futureTs, "svix-signature": "v1,sig" });
+      expect(ok).toBe(false);
+    });
+
+    it("accepts valid svix signature", () => {
+      const secret = "whsec_test_secret";
+      process.env.RESEND_WEBHOOK_SECRET = secret;
+      const id = "msg_123";
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const body = "{}";
+      const expected = createHmac("sha256", secret).update(`${id}.${timestamp}.${body}`).digest("base64");
+      const ok = provider.verifyWebhookSignature(body, { "svix-id": id, "svix-timestamp": timestamp, "svix-signature": `v1,${expected}` });
+      expect(ok).toBe(true);
+    });
+
+    it("rejects invalid svix signature", () => {
+      process.env.RESEND_WEBHOOK_SECRET = "secret";
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const ok = provider.verifyWebhookSignature("{}", { "svix-id": "id", "svix-timestamp": timestamp, "svix-signature": "v1,invalidsig" });
+      expect(ok).toBe(false);
+    });
   });
 });

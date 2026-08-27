@@ -1,14 +1,14 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
+import { eq, and } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
-import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { platforms } from "@sponsee/shared";
 
 export const settingsRouter = createTRPCRouter({
   // ── Profile ──
   getProfile: creatorScopedProcedure.query(async ({ ctx }) => {
-    const [creator] = await db
+    const [creator] = await ctx.db
       .select()
       .from(schema.creators)
       .where(eq(schema.creators.id, ctx.creatorId));
@@ -27,7 +27,7 @@ export const settingsRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const [creator] = await db
+      const [creator] = await ctx.db
         .update(schema.creators)
         .set({
           ...input,
@@ -40,7 +40,7 @@ export const settingsRouter = createTRPCRouter({
 
   // ── Platforms ──
   getPlatforms: creatorScopedProcedure.query(async ({ ctx }) => {
-    return db
+    return ctx.db
       .select()
       .from(schema.creatorPlatforms)
       .where(eq(schema.creatorPlatforms.creatorId, ctx.creatorId));
@@ -59,14 +59,22 @@ export const settingsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
       if (id) {
-        const [platform] = await db
+        const [platform] = await ctx.db
           .update(schema.creatorPlatforms)
           .set({ ...data, updatedAt: new Date() })
-          .where(eq(schema.creatorPlatforms.id, id))
+          .where(
+            and(
+              eq(schema.creatorPlatforms.id, id),
+              eq(schema.creatorPlatforms.creatorId, ctx.creatorId)
+            )
+          )
           .returning();
+        if (!platform) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Platform not found" });
+        }
         return platform;
       }
-      const [platform] = await db
+      const [platform] = await ctx.db
         .insert(schema.creatorPlatforms)
         .values({
           creatorId: ctx.creatorId,
@@ -88,15 +96,24 @@ export const settingsRouter = createTRPCRouter({
   deletePlatform: creatorScopedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      await db
+      const result = await ctx.db
         .delete(schema.creatorPlatforms)
-        .where(eq(schema.creatorPlatforms.id, input.id));
+        .where(
+          and(
+            eq(schema.creatorPlatforms.id, input.id),
+            eq(schema.creatorPlatforms.creatorId, ctx.creatorId)
+          )
+        )
+        .returning();
+      if (!result.length) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Platform not found" });
+      }
       return { success: true };
     }),
 
   // ── Payout rails ──
   getRails: creatorScopedProcedure.query(async ({ ctx }) => {
-    const [creator] = await db
+    const [creator] = await ctx.db
       .select({
         paypalLink: schema.creators.paypalLink,
         wiseText: schema.creators.wiseText,
@@ -116,7 +133,7 @@ export const settingsRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const [creator] = await db
+      const [creator] = await ctx.db
         .update(schema.creators)
         .set({
           ...input,

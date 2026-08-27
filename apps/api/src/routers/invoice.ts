@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
+import { TRPCError } from "@trpc/server";
 import { eq, and, desc, sql } from "drizzle-orm";
-import { invoices, invoiceChaseState } from "@sponsee/db/schema";
+import { invoices, invoiceChaseState, chaseTemplates, deals, contacts, brands } from "@sponsee/db/schema";
 
 export const invoiceRouter = createTRPCRouter({
   list: creatorScopedProcedure.query(async ({ ctx }) => {
@@ -35,6 +36,29 @@ export const invoiceRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Verify deal ownership
+      const [deal] = await ctx.db
+        .select()
+        .from(deals)
+        .where(and(eq(deals.id, input.dealId), eq(deals.creatorId, ctx.creatorId)));
+      if (!deal) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
+      }
+
+      // Verify contact ownership if provided
+      if (input.contactId) {
+        const [contact] = await ctx.db
+          .select()
+          .from(contacts)
+          .innerJoin(brands, eq(contacts.brandId, brands.id))
+          .where(
+            and(eq(contacts.id, input.contactId), eq(brands.creatorId, ctx.creatorId))
+          );
+        if (!contact) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+        }
+      }
+
       // Get next invoice number for creator
       const [{ max }] = await ctx.db
         .select({ max: sql<number>`COALESCE(MAX(${invoices.number}), 0)` })
@@ -51,11 +75,22 @@ export const invoiceRouter = createTRPCRouter({
         })
         .returning();
 
-      // Initialize chase state
+      // Initialize chase state with nextActionAt derived from step-1 template offset
+      const [template] = await ctx.db
+        .select()
+        .from(chaseTemplates)
+        .where(and(eq(chaseTemplates.creatorId, ctx.creatorId), eq(chaseTemplates.step, 1)));
+
+      const baseDate = invoice.dueAt ? new Date(invoice.dueAt) : new Date(invoice.issuedAt);
+      const nextActionAt = template && template.enabled
+        ? new Date(baseDate.getTime() + template.offsetDays * 24 * 60 * 60 * 1000)
+        : null;
+
       await ctx.db.insert(invoiceChaseState).values({
         invoiceId: invoice.id,
         mode: "armed",
         nextStep: 1,
+        nextActionAt,
       });
 
       return invoice;
@@ -79,6 +114,11 @@ export const invoiceRouter = createTRPCRouter({
         .set({ ...data, updatedAt: new Date() })
         .where(and(eq(invoices.id, id), eq(invoices.creatorId, ctx.creatorId)))
         .returning();
+
+      if (!invoice) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      }
+
       return invoice;
     }),
 
@@ -90,6 +130,10 @@ export const invoiceRouter = createTRPCRouter({
         .set({ status: "paid", paidAt: new Date(), paidNote: input.paidNote, updatedAt: new Date() })
         .where(and(eq(invoices.id, input.id), eq(invoices.creatorId, ctx.creatorId)))
         .returning();
+
+      if (!invoice) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      }
 
       // Complete chase state
       await ctx.db
