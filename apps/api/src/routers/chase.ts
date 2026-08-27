@@ -45,6 +45,15 @@ export const chaseRouter = createTRPCRouter({
   state: creatorScopedProcedure
     .input(z.object({ invoiceId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
+      const [invoice] = await ctx.db
+        .select({ id: invoices.id })
+        .from(invoices)
+        .where(and(eq(invoices.id, input.invoiceId), eq(invoices.creatorId, ctx.creatorId)));
+
+      if (!invoice) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      }
+
       const [state] = await ctx.db
         .select()
         .from(invoiceChaseState)
@@ -55,6 +64,15 @@ export const chaseRouter = createTRPCRouter({
   pause: creatorScopedProcedure
     .input(z.object({ invoiceId: z.string().uuid(), reason: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
+      const [invoice] = await ctx.db
+        .select({ id: invoices.id })
+        .from(invoices)
+        .where(and(eq(invoices.id, input.invoiceId), eq(invoices.creatorId, ctx.creatorId)));
+
+      if (!invoice) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      }
+
       await ctx.db
         .update(invoiceChaseState)
         .set({ mode: "paused", pausedReason: input.reason || "manual", updatedAt: new Date() })
@@ -75,6 +93,15 @@ export const chaseRouter = createTRPCRouter({
   resume: creatorScopedProcedure
     .input(z.object({ invoiceId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      const [invoice] = await ctx.db
+        .select({ id: invoices.id })
+        .from(invoices)
+        .where(and(eq(invoices.id, input.invoiceId), eq(invoices.creatorId, ctx.creatorId)));
+
+      if (!invoice) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      }
+
       await ctx.db
         .update(invoiceChaseState)
         .set({ mode: "armed", pausedReason: null, updatedAt: new Date() })
@@ -96,6 +123,15 @@ export const chaseRouter = createTRPCRouter({
   events: creatorScopedProcedure
     .input(z.object({ invoiceId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
+      const [invoice] = await ctx.db
+        .select({ id: invoices.id })
+        .from(invoices)
+        .where(and(eq(invoices.id, input.invoiceId), eq(invoices.creatorId, ctx.creatorId)));
+
+      if (!invoice) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      }
+
       return ctx.db
         .select()
         .from(chaseEvents)
@@ -135,14 +171,8 @@ export const chaseRouter = createTRPCRouter({
         .innerJoin(invoices, eq(chaseEvents.invoiceId, invoices.id))
         .where(eq(chaseEvents.id, input.chaseEventId));
 
-      if (!event) {
+      if (!event || event.invoices.creatorId !== ctx.creatorId) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Chase event not found" });
-      }
-
-      // Security: ensure the invoice belongs to this creator
-      const invoice = event.invoices;
-      if (invoice.creatorId !== ctx.creatorId) {
-        throw new TRPCError({ code: "FORBIDDEN" });
       }
 
       const chaseEvent = event.chase_events;
@@ -160,14 +190,14 @@ export const chaseRouter = createTRPCRouter({
       // Idempotent send
       const info = await sendChaseEmail({
         chaseEventId: chaseEvent.id,
-        invoiceId: invoice.id,
+        invoiceId: event.invoices.id,
         step: chaseEvent.step,
         toEmail: chaseEvent.toEmail,
         fromEmail,
         replyToEmail,
         subject: chaseEvent.subjectSnapshot || "",
         body: chaseEvent.bodySnapshot || "",
-        idempotencyKey: chaseEvent.idempotencyKey || `invoice:${invoice.id}:step:${chaseEvent.step}`,
+        idempotencyKey: chaseEvent.idempotencyKey || `invoice:${event.invoices.id}:step:${chaseEvent.step}`,
       });
 
       // Write activity event
@@ -175,7 +205,7 @@ export const chaseRouter = createTRPCRouter({
         creatorId: ctx.creatorId,
         actor: "creator",
         entityType: "invoice",
-        entityId: invoice.id,
+        entityId: event.invoices.id,
         kind: "chase_sent",
         payload: {
           step: chaseEvent.step,
@@ -204,13 +234,8 @@ export const chaseRouter = createTRPCRouter({
         .innerJoin(invoices, eq(chaseEvents.invoiceId, invoices.id))
         .where(eq(chaseEvents.id, input.chaseEventId));
 
-      if (!event) {
+      if (!event || event.invoices.creatorId !== ctx.creatorId) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Chase event not found" });
-      }
-
-      const invoice = event.invoices;
-      if (invoice.creatorId !== ctx.creatorId) {
-        throw new TRPCError({ code: "FORBIDDEN" });
       }
 
       const chaseEvent = event.chase_events;
@@ -233,21 +258,21 @@ export const chaseRouter = createTRPCRouter({
 
       const info = await sendChaseEmail({
         chaseEventId: chaseEvent.id,
-        invoiceId: invoice.id,
+        invoiceId: event.invoices.id,
         step: chaseEvent.step,
         toEmail: chaseEvent.toEmail,
         fromEmail,
         replyToEmail,
         subject: input.subject,
         body: input.body,
-        idempotencyKey: chaseEvent.idempotencyKey || `invoice:${invoice.id}:step:${chaseEvent.step}`,
+        idempotencyKey: chaseEvent.idempotencyKey || `invoice:${event.invoices.id}:step:${chaseEvent.step}`,
       });
 
       await ctx.db.insert(activityEvents).values({
         creatorId: ctx.creatorId,
         actor: "creator",
         entityType: "invoice",
-        entityId: invoice.id,
+        entityId: event.invoices.id,
         kind: "chase_sent",
         payload: {
           step: chaseEvent.step,
