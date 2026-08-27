@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /waitlist-confirmed.html
+
+Sitemap: https://sponsee.app/sitemap.xml

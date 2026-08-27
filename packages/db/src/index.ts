@@ -13,7 +13,19 @@ function createDb() {
     });
     return drizzle(pool, { schema });
   }
-  // PGlite fallback for local development without Postgres
+
+  // PGlite fallback for local development and staging without Postgres.
+  // On Vercel (and other read-only filesystems), the data dir path is
+  // unusable — fall back to in-memory mode. Data will not persist across
+  // cold starts; this is acceptable for staging smoke tests.
+  const isReadOnlyFs =
+    process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+
+  if (isReadOnlyFs) {
+    pgliteClient = new PGlite();
+    return pgliteDrizzle(pgliteClient, { schema });
+  }
+
   // Use absolute path so it works regardless of cwd
   const dataDir = new URL("../.pglite-data", import.meta.url).pathname;
   pgliteClient = new PGlite(dataDir);

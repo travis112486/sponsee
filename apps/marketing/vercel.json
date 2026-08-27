@@ -1,0 +1,8 @@
+{
+  "buildCommand": "pnpm build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "rewrites": [
+    { "source": "/waitlist/confirmed", "destination": "/waitlist-confirmed.html" }
+  ]
+}

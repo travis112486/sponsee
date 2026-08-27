@@ -1,0 +1,5 @@
+{
+  "buildCommand": null,
+  "installCommand": "pnpm install --frozen-lockfile",
+  "outputDirectory": "public"
+}

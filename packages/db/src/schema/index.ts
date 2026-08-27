@@ -404,13 +404,24 @@ export const calculatorProfiles = pgTable(
   (t) => [uniqueIndex("calculator_profiles_creator_idx").on(t.creatorId)]
 );
 
-// Waitlist emails
-export const waitlistEmails = pgTable(
-  "waitlist_emails",
+// Waitlist signups (marketing site + calculator)
+export const waitlistSignups = pgTable(
+  "waitlist_signups",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     email: varchar("email", { length: 255 }).notNull().unique(),
-    source: varchar("source", { length: 128 }),
+    platforms: varchar("platforms", { length: 64 }).array(),
+    ccvBand: varchar("ccv_band", { length: 32 }),
+    source: varchar("source", { length: 128 }).notNull().default("landing"),
+    confirmed: boolean("confirmed").notNull().default(false),
+    confirmToken: varchar("confirm_token", { length: 255 }).unique(),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  }
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("waitlist_signups_email_idx").on(t.email),
+    index("waitlist_signups_source_idx").on(t.source),
+    index("waitlist_signups_confirmed_idx").on(t.confirmed),
+  ]
 );

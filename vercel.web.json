@@ -1,0 +1,9 @@
+{
+  "buildCommand": "pnpm install --frozen-lockfile && pnpm build --filter='@sponsee/web...'",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "outputDirectory": "apps/web/dist",
+  "framework": null,
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
