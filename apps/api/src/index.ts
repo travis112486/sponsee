@@ -5,6 +5,7 @@ import { appRouter } from "./routers/index.js";
 import { createContext } from "./context.js";
 import { auth } from "./auth.js";
 import dotenv from "dotenv";
+import { serve } from "@hono/node-server";
 
 dotenv.config();
 
@@ -46,7 +47,8 @@ app.get("/health", (c) => c.json({ status: "ok", version: "0.1.0" }));
 
 const port = parseInt(process.env.PORT || "3001");
 
-export default {
-  port,
-  fetch: app.fetch,
-};
+serve({ fetch: app.fetch, port }, (info) => {
+  console.log(`API server running on http://localhost:${info.port}`);
+});
+
+export default app;

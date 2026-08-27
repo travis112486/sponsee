@@ -21,15 +21,19 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:init": "tsx src/init.ts",
+    "db:seed": "tsx src/seed.ts"
   },
   "dependencies": {
-    "drizzle-orm": "^0.41.0",
+    "@electric-sql/pglite": "^0.5.8",
+    "drizzle-orm": "^0.45.2",
     "pg": "^8.14.0"
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",
     "drizzle-kit": "^0.30.0",
+    "tsx": "^4.19.0",
     "typescript": "~5.9.3"
   }
 }
