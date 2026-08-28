@@ -9,7 +9,7 @@ dotenv.config();
 const port = parseInt(process.env.PORT || "3001");
 
 // Start pg-boss background jobs
-const jobsPromise = registerJobs().catch((err) => {
+registerJobs().catch((err) => {
   console.error("[jobs] Failed to register:", err);
 });
 

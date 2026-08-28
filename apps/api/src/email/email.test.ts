@@ -84,6 +84,18 @@ describe("MailpitProvider", () => {
       return;
     }
 
+    // Temporarily delegate the mock to real nodemailer so we exercise the full provider stack
+    const realNodemailer = await vi.importActual<typeof import("nodemailer")>("nodemailer");
+    mockSendMail.mockImplementation(async (...args) => {
+      const transporter = (realNodemailer as any).default.createTransport({
+        host: "localhost",
+        port: 1025,
+        secure: false,
+        tls: { rejectUnauthorized: false },
+      });
+      return transporter.sendMail(...args);
+    });
+
     const realProvider = new MailpitProvider("localhost", 1025);
     const result = await realProvider.send({
       to: "test-brand@example.com",
@@ -292,6 +304,35 @@ describe("ResendProvider", () => {
     expect(event!.type).toBe("failed");
   });
 
+  it("ingests email.delivered webhook from nested data field", () => {
+    const event = provider.ingestWebhook({
+      type: "email.delivered",
+      data: { email_id: "res-123", to: "brand@example.com", created_at: "2024-01-01T00:00:00Z" },
+    });
+    expect(event).not.toBeNull();
+    expect(event!.type).toBe("delivered");
+    expect(event!.providerMessageId).toBe("res-123");
+    expect(event!.to).toBe("brand@example.com");
+  });
+
+  it("ingests email.bounced webhook (hard) from nested data field", () => {
+    const event = provider.ingestWebhook({
+      type: "email.bounced",
+      data: { email_id: "res-123", type: "hard" },
+    });
+    expect(event).not.toBeNull();
+    expect(event!.type).toBe("bounced");
+  });
+
+  it("ingests email.bounced webhook (soft) from nested data field as failed", () => {
+    const event = provider.ingestWebhook({
+      type: "email.bounced",
+      data: { email_id: "res-123", type: "soft" },
+    });
+    expect(event).not.toBeNull();
+    expect(event!.type).toBe("failed");
+  });
+
   it("returns null for unsupported webhook type", () => {
     expect(provider.ingestWebhook({ type: "email.sent", email_id: "res-123" })).toBeNull();
   });
@@ -333,10 +374,23 @@ describe("ResendProvider", () => {
       expect(ok).toBe(false);
     });
 
-    it("accepts valid svix signature", () => {
-      const secret = "whsec_test_secret";
+    it("accepts valid svix signature with whsec_ prefix (base64-decoded key)", () => {
+      // Svix secrets are "whsec_<base64-encoded-key>"
+      const rawKey = "my-svix-signing-key";
+      const secret = `whsec_${Buffer.from(rawKey, "utf-8").toString("base64")}`;
       process.env.RESEND_WEBHOOK_SECRET = secret;
       const id = "msg_123";
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const body = "{}";
+      const expected = createHmac("sha256", rawKey).update(`${id}.${timestamp}.${body}`).digest("base64");
+      const ok = provider.verifyWebhookSignature!(body, { "svix-id": id, "svix-timestamp": timestamp, "svix-signature": `v1,${expected}` });
+      expect(ok).toBe(true);
+    });
+
+    it("accepts valid svix signature without whsec_ prefix", () => {
+      const secret = "plain-secret-key";
+      process.env.RESEND_WEBHOOK_SECRET = secret;
+      const id = "msg_456";
       const timestamp = String(Math.floor(Date.now() / 1000));
       const body = "{}";
       const expected = createHmac("sha256", secret).update(`${id}.${timestamp}.${body}`).digest("base64");
@@ -348,6 +402,13 @@ describe("ResendProvider", () => {
       process.env.RESEND_WEBHOOK_SECRET = "secret";
       const timestamp = String(Math.floor(Date.now() / 1000));
       const ok = provider.verifyWebhookSignature!("{}", { "svix-id": "id", "svix-timestamp": timestamp, "svix-signature": "v1,invalidsig" });
+      expect(ok).toBe(false);
+    });
+
+    it("rejects malformed whsec_ secret (invalid base64)", () => {
+      process.env.RESEND_WEBHOOK_SECRET = "whsec_!!!not-valid-base64!!!";
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const ok = provider.verifyWebhookSignature!("body", { "svix-id": "id", "svix-timestamp": timestamp, "svix-signature": "v1,sig" });
       expect(ok).toBe(false);
     });
   });

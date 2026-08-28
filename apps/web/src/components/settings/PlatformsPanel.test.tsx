@@ -13,7 +13,7 @@ let mockQueryReturn: {
   refetch: typeof mockRefetch;
 } = { data: undefined, isLoading: false, isError: false, refetch: mockRefetch };
 
-let mockUpsertReturn = { mutate: vi.fn(), isPending: false };
+const mockUpsertReturn = { mutate: vi.fn(), isPending: false };
 let mockDeleteReturn = { mutate: vi.fn(), isPending: false };
 
 vi.mock("@/trpc", () => ({

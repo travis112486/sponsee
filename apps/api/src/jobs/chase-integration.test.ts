@@ -884,6 +884,86 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(jobArgs.invoiceId).toBe(invoice.id);
   });
 
+  it("sendChaseEmail delivery truth: retry promotes sending+providerMessageId to sent without resending", async () => {
+    const { creator, invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    // Approve
+    const caller = chaseRouter.createCaller(mockCtx(creator.id));
+    await caller.approve({ chaseEventId: event.id });
+
+    // Use PostmarkProvider so fetch stub works
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.EMAIL_PROVIDER = "postmark";
+    process.env.POSTMARK_SERVER_TOKEN = "test-token";
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-dt-1" }) }))
+    );
+
+    // First send succeeds
+    const result1 = await sendChaseEmail({
+      chaseEventId: event.id,
+      invoiceId: invoice.id,
+      step: 1,
+      toEmail: "brand@example.com",
+      fromEmail: "chase@sponsee.app",
+      replyToEmail: "creator@example.com",
+      subject: event.subjectSnapshot || "Reminder",
+      body: event.bodySnapshot || "Please pay",
+      idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
+    });
+    expect(result1.providerMessageId).toBe("msg-dt-1");
+
+    // Simulate a failed status update: the providerMessageId is recorded but status is still "sending"
+    await db
+      .update(schema.chaseEvents)
+      .set({ status: "sending", sentAt: null })
+      .where(eq(schema.chaseEvents.id, event.id));
+
+    // Reset fetch mock to verify no second network call
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-dt-2" }) }))
+    );
+
+    // Retry should promote to sent without calling provider.send() again
+    const result2 = await sendChaseEmail({
+      chaseEventId: event.id,
+      invoiceId: invoice.id,
+      step: 1,
+      toEmail: "brand@example.com",
+      fromEmail: "chase@sponsee.app",
+      replyToEmail: "creator@example.com",
+      subject: event.subjectSnapshot || "Reminder",
+      body: event.bodySnapshot || "Please pay",
+      idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
+    });
+
+    if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
+    else delete process.env.EMAIL_PROVIDER;
+
+    // Must return the original providerMessageId
+    expect(result2.providerMessageId).toBe("msg-dt-1");
+
+    // No second fetch call (no double-send)
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(0);
+
+    // Status is now sent
+    const [final] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(final.status).toBe("sent");
+    expect(final.providerMessageId).toBe("msg-dt-1");
+  });
+
   it("real Mailpit acceptance: end-to-end invoice -> review -> approve -> message in inbox -> timeline", async () => {
     // Probe whether Mailpit is running locally
     let mailpitAvailable = false;

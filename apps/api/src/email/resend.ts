@@ -57,6 +57,19 @@ export class ResendProvider implements EmailProvider {
       return false;
     }
 
+    // Svix secrets are prefixed with "whsec_" and the remainder is base64-encoded.
+    // Strip the prefix and decode to get the raw signing key.
+    let key: Buffer;
+    if (secret.startsWith("whsec_")) {
+      try {
+        key = Buffer.from(secret.slice(6), "base64");
+      } catch {
+        return false;
+      }
+    } else {
+      key = Buffer.from(secret, "utf-8");
+    }
+
     const msgId = headers["svix-id"];
     const msgTimestamp = headers["svix-timestamp"];
     const msgSignature = headers["svix-signature"];
@@ -68,7 +81,7 @@ export class ResendProvider implements EmailProvider {
     if (Number.isNaN(timestamp) || Math.abs(now - timestamp) > 300) return false;
 
     const toSign = `${msgId}.${msgTimestamp}.${body}`;
-    const expected = createHmac("sha256", secret).update(toSign).digest("base64");
+    const expected = createHmac("sha256", key).update(toSign).digest("base64");
 
     // Svix sends multiple v1 signatures space-separated
     const signatures = msgSignature.split(" ").map((s) => s.trim());
@@ -89,15 +102,36 @@ export class ResendProvider implements EmailProvider {
     if (!payload || typeof payload !== "object") return null;
     const p = payload as Record<string, unknown>;
 
-    const type = p.type as string | undefined;
-    const emailId = p.email_id as string | undefined;
+    // Resend/Svix webhooks nest the event data under a `data` field.
+    // Read from both top-level and `data` for resilience.
+    const data = p.data as Record<string, unknown> | undefined;
+
+    const type = (p.type as string | undefined) ?? (data?.type as string | undefined);
+    const emailId = (p.email_id as string | undefined) ?? (data?.email_id as string | undefined);
     if (!type || !emailId) return null;
+
+    const to =
+      typeof p.to === "string"
+        ? p.to
+        : typeof data?.to === "string"
+          ? data.to
+          : undefined;
+
+    const error =
+      typeof p.error === "string"
+        ? p.error
+        : typeof data?.error === "string"
+          ? data.error
+          : undefined;
+
+    const createdAt =
+      p.created_at ?? data?.created_at;
 
     const base: Omit<WebhookEvent, "type"> = {
       providerMessageId: String(emailId),
-      to: typeof p.to === "string" ? p.to : undefined,
-      detail: typeof p.error === "string" ? p.error : undefined,
-      timestamp: p.created_at ? new Date(String(p.created_at)) : new Date(),
+      to,
+      detail: error,
+      timestamp: createdAt ? new Date(String(createdAt)) : new Date(),
     };
 
     switch (type) {
@@ -106,7 +140,8 @@ export class ResendProvider implements EmailProvider {
       case "email.opened":
         return { ...base, type: "opened" };
       case "email.bounced": {
-        const bounceType = (p.data as Record<string, unknown> | undefined)?.type as string | undefined;
+        const bouncePayload = (p.data as Record<string, unknown> | undefined) ?? data;
+        const bounceType = bouncePayload?.type as string | undefined;
         const isHard = bounceType === "hard";
         return { ...base, type: isHard ? "bounced" : "failed", detail: bounceType };
       }
