@@ -5,6 +5,7 @@ import { z } from "zod";
 import { trpc } from "@/trpc";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
+import QueryError from "@/components/QueryError";
 
 const profileSchema = z.object({
   displayName: z.string().min(1, "Display name is required").max(255),
@@ -19,7 +20,7 @@ type ProfileForm = z.infer<typeof profileSchema>;
 
 export default function ProfilePanel() {
   const utils = trpc.useUtils();
-  const { data: profile, isLoading } = trpc.settings.getProfile.useQuery();
+  const { data: profile, isLoading, isError, refetch } = trpc.settings.getProfile.useQuery();
   const update = trpc.settings.updateProfile.useMutation({
     onSuccess: () => {
       toast.success("Profile saved");
@@ -74,6 +75,15 @@ export default function ProfilePanel() {
       <div className="flex h-40 items-center justify-center">
         <Loader2 className="h-5 w-5 animate-spin text-ink-3" />
       </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <QueryError
+        message="Couldn't load your profile."
+        onRetry={() => refetch()}
+      />
     );
   }
 

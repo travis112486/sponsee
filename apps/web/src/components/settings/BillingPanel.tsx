@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Loader2, ArrowUpRight, CheckCircle2, AlertCircle } from "lucide-react";
 import { planPricesCents, planDealSlots, planLabels } from "@sponsee/shared";
 import type { PlanTier } from "@sponsee/shared";
+import QueryError from "@/components/QueryError";
 
 const tiers: PlanTier[] = ["starter", "creator", "pro"];
 
@@ -48,7 +49,7 @@ function statusBadge(status: string | null) {
 }
 
 export default function BillingPanel() {
-  const { data: subscription, isLoading } = trpc.billing.getSubscription.useQuery();
+  const { data: subscription, isLoading, isError, refetch } = trpc.billing.getSubscription.useQuery();
   const [upgradingTo, setUpgradingTo] = useState<PlanTier | null>(null);
 
   const checkout = trpc.billing.createCheckoutSession.useMutation({
@@ -80,6 +81,15 @@ export default function BillingPanel() {
       <div className="flex h-40 items-center justify-center">
         <Loader2 className="h-5 w-5 animate-spin text-ink-3" />
       </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <QueryError
+        message="Couldn't load your subscription."
+        onRetry={() => refetch()}
+      />
     );
   }
 
