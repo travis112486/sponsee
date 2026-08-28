@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { toast } from "sonner";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [sent, setSent] = useState(false);
+  useDocumentTitle("Sign in");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

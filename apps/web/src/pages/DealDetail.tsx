@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router";
 import { trpc } from "@/trpc";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { stageLabels, platforms, deliverableStatuses, benchmarkDeliverableTypes } from "@sponsee/shared";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -54,6 +55,7 @@ export default function DealDetail() {
     isError,
     refetch,
   } = trpc.deals.getById.useQuery({ id: id! }, { enabled: !!id });
+  useDocumentTitle(deal?.title ? deal.title : "Deal details");
 
   const updateDeal = trpc.deals.update.useMutation({
     onSuccess: () => {
@@ -98,6 +100,29 @@ export default function DealDetail() {
   const [deliverablePlatform, setDeliverablePlatform] = useState<string>("");
   const [deliverableDueAt, setDeliverableDueAt] = useState("");
   const [openStatusId, setOpenStatusId] = useState<string | null>(null);
+  const statusDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close deliverable status dropdown on Escape or click outside
+  useEffect(() => {
+    if (!openStatusId) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpenStatusId(null);
+    }
+    function onClick(e: MouseEvent) {
+      if (
+        statusDropdownRef.current &&
+        !statusDropdownRef.current.contains(e.target as Node)
+      ) {
+        setOpenStatusId(null);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    document.addEventListener("mousedown", onClick);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("mousedown", onClick);
+    };
+  }, [openStatusId]);
 
   if (isLoading) {
     return (
@@ -376,22 +401,28 @@ export default function DealDetail() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className="relative">
+                      <div className="relative" ref={statusDropdownRef}>
                         <button
                           onClick={() => setOpenStatusId(openStatusId === d.id ? null : d.id)}
                           className={cn(
                             "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors",
                             statusBadge[d.status]
                           )}
+                          aria-expanded={openStatusId === d.id}
+                          aria-haspopup="menu"
                         >
                           {statusLabel[d.status]}
-                          <ChevronDown className="h-3 w-3" />
+                          <ChevronDown className="h-3 w-3" aria-hidden="true" />
                         </button>
                         {openStatusId === d.id && (
-                          <div className="absolute right-0 z-10 mt-1 w-36 rounded-lg border border-hairline bg-surface shadow-lg">
+                          <div
+                            className="absolute right-0 z-10 mt-1 w-36 rounded-lg border border-hairline bg-surface shadow-lg"
+                            role="menu"
+                          >
                             {deliverableStatuses.map((s) => (
                               <button
                                 key={s}
+                                role="menuitem"
                                 onClick={() => {
                                   updateDeliverable.mutate({ id: d.id, status: s });
                                   setOpenStatusId(null);

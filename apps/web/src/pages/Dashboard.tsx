@@ -1,4 +1,5 @@
 import { trpc } from "@/trpc";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { stageLabels, dealStages } from "@sponsee/shared";
 import { cn } from "@/lib/utils";
 import {
@@ -54,6 +55,7 @@ function describeActivity(actor: string, payload: unknown): string {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  useDocumentTitle("Dashboard");
   const {
     data: deals,
     isLoading: dealsLoading,

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { trpc } from "@/trpc";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { stageLabels, dealStages, type DealStage, platforms } from "@sponsee/shared";
 import { cn } from "@/lib/utils";
 import {
@@ -60,6 +61,7 @@ function useHorizontalScrollEdges<T extends HTMLElement>() {
 
 export default function Pipeline() {
   const navigate = useNavigate();
+  useDocumentTitle("Pipeline");
   const [searchParams, setSearchParams] = useSearchParams();
   const utils = trpc.useUtils();
   const { data: deals, isLoading, isError, refetch } = trpc.deals.list.useQuery();
@@ -331,6 +333,9 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
     },
   });
 
+  const modalRef = useRef<HTMLDivElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
   const [brandMode, setBrandMode] = useState<"select" | "create">("select");
   const [selectedBrandId, setSelectedBrandId] = useState("");
   const [newBrandName, setNewBrandName] = useState("");
@@ -343,6 +348,44 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
   const [paymentTerm, setPaymentTerm] = useState<"net_15" | "net_30" | "net_45">("net_30");
   const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
+
+  // Focus first input on open and trap focus
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (brandMode === "create") {
+        modalRef.current?.querySelector<HTMLInputElement>("input[placeholder='Brand name']")?.focus();
+      } else {
+        titleInputRef.current?.focus();
+      }
+    }, 30);
+    return () => clearTimeout(timer);
+  }, [brandMode]);
+
+  // Escape closes modal
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+      if (e.key === "Tab" && modalRef.current) {
+        const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+          "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
+        );
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
 
   function togglePlatform(p: string) {
     setSelectedPlatforms((prev) =>
@@ -391,12 +434,20 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-xl border border-hairline bg-surface shadow-lg">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="new-deal-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div ref={modalRef} className="w-full max-w-lg rounded-xl border border-hairline bg-surface shadow-lg">
         <div className="flex items-center justify-between border-b border-hairline px-4 py-3">
-          <h3 className="text-[15px] font-semibold text-ink">New deal</h3>
-          <button onClick={onClose} className="text-ink-3 hover:text-ink">
-            <X className="h-4 w-4" />
+          <h3 id="new-deal-title" className="text-[15px] font-semibold text-ink">New deal</h3>
+          <button onClick={onClose} className="text-ink-3 hover:text-ink" aria-label="Close dialog">
+            <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
 
@@ -462,6 +513,7 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
           <div>
             <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3">Deal title</label>
             <input
+              ref={titleInputRef}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Q4 Stream Fuel Campaign"

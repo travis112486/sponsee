@@ -47,7 +47,7 @@ export default {
         ink: {
           DEFAULT: "#1B1815",
           2: "#57504A",
-          3: "#8A8178",
+          3: "#757069",
         },
         hairline: "#E8E3DB",
         pine: {
@@ -85,21 +85,7 @@ export default {
         "warm-md": "0 4px 16px rgba(27,24,21,.08), 0 1px 3px rgba(27,24,21,.06)",
         "warm-lg": "0 12px 40px rgba(27,24,21,.14)",
       },
-      keyframes: {
-        "accordion-down": {
-          from: { height: "0" },
-          to: { height: "var(--radix-accordion-content-height)" },
-        },
-        "accordion-up": {
-          from: { height: "var(--radix-accordion-content-height)" },
-          to: { height: "0" },
-        },
-      },
-      animation: {
-        "accordion-down": "accordion-down 0.2s ease-out",
-        "accordion-up": "accordion-up 0.2s ease-out",
-      },
     },
   },
-  plugins: [import("tailwindcss-animate")],
+  plugins: [],
 };

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { User, Radio, CreditCard, Mail, Receipt } from "lucide-react";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { cn } from "@/lib/utils";
 import ProfilePanel from "@/components/settings/ProfilePanel";
 import PlatformsPanel from "@/components/settings/PlatformsPanel";
@@ -19,6 +20,7 @@ const tabs: { key: TabKey; label: string; icon: typeof User }[] = [
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<TabKey>("profile");
+  useDocumentTitle("Settings");
 
   return (
     <div className="mx-auto max-w-[720px]">

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { trpc } from "@/trpc";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -42,6 +43,7 @@ const statusConfig: Record<
 };
 
 export default function Payments() {
+  useDocumentTitle("Payments");
   const utils = trpc.useUtils();
   const { data: invoices, isLoading, isError, refetch } = trpc.invoice.list.useQuery();
   const { data: awaitingReview } = trpc.chase.awaitingReview.useQuery();
