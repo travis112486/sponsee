@@ -80,7 +80,7 @@ Add these to the Render Web Service:
 | Variable | Value | Source |
 |----------|-------|--------|
 | `DATABASE_URL` | `postgresql://...` | Neon dashboard |
-| `BETTER_AUTH_SECRET` | `<reuse existing>` | Vercel env (already set) |
+| `BETTER_AUTH_SECRET` | generate fresh (`openssl rand -base64 32` or Render **Generate**) | new secret, staging-only |
 | `BETTER_AUTH_URL` | `https://<render-service>.onrender.com` | Render service URL |
 | `WEB_URL` | `https://sponsee.vercel.app` | Known |
 | `PORT` | `8080` | Dockerfile default |
@@ -133,7 +133,7 @@ Reply on this issue with the following (they will be added to Vercel/Render secu
 
 ```
 DATABASE_URL=postgresql://...
-BETTER_AUTH_SECRET=<reuse from Vercel or generate new 32-char random>
+BETTER_AUTH_SECRET=<generate: openssl rand -base64 32>
 POSTMARK_SERVER_TOKEN=...   # or RESEND_API_KEY=...
 GOOGLE_CLIENT_ID=...        # optional
 GOOGLE_CLIENT_SECRET=...    # optional
@@ -160,7 +160,7 @@ Once the above is done, the agent will:
 - [x] Seed script exists (`packages/db/src/seed.ts`)
 - [x] Dockerfile exists (`apps/api/Dockerfile`)
 - [x] Vercel project exists (`sponsee` → `sponsee.vercel.app`)
-- [x] `BETTER_AUTH_SECRET` already set in Vercel Production env
+- [ ] `BETTER_AUTH_SECRET` generated fresh for Render (never set in Vercel)
 
 **Remaining work (agent-owned, post-secrets):**
 - Run migrations against hosted DB

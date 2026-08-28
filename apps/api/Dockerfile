@@ -9,7 +9,7 @@ COPY . /app
 WORKDIR /app
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 RUN pnpm run -r build
-RUN pnpm deploy --filter=@sponsee/api --prod /prod/api
+RUN pnpm deploy --legacy --filter=@sponsee/api --prod /prod/api
 
 FROM base AS api
 COPY --from=build /prod/api /prod/api
