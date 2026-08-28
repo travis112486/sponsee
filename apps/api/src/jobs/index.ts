@@ -12,6 +12,10 @@ const CHASE_SEND_JOB = "chase-send";
 export async function registerJobs(): Promise<void> {
   const boss = await getBoss();
 
+  // pg-boss v10+ requires queues to exist before work()/send(); createQueue is idempotent
+  await boss.createQueue(CHASE_TICK_JOB);
+  await boss.createQueue(CHASE_SEND_JOB);
+
   // Register handler
   boss.work(CHASE_TICK_JOB, async () => {
     const created = await runChaseTick();
