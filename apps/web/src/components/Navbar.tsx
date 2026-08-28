@@ -18,6 +18,8 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { trpc } from "@/trpc";
+import { planLabels, planPricesCents } from "@sponsee/shared";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -126,6 +128,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
 export function Sidebar() {
   const { user } = useAuth();
+  const { data: subscription } = trpc.billing.getSubscription.useQuery();
+
+  const plan = subscription?.plan ?? "starter";
+  const dealSlotLimit = subscription?.dealSlotLimit ?? 5;
+  const activeDealCount = subscription?.activeDealCount ?? 0;
+  const usagePct = dealSlotLimit > 0 ? Math.min(100, (activeDealCount / dealSlotLimit) * 100) : 0;
 
   return (
     <aside className="fixed inset-y-0 left-0 z-40 flex w-[232px] flex-col border-r border-hairline bg-surface">
@@ -176,11 +184,15 @@ export function Sidebar() {
       {/* Sidebar footer */}
       <div className="space-y-2.5 px-3 pb-4 pt-2">
         <div className="rounded-lg border border-hairline bg-surface-subtle p-3">
-          <p className="text-[12px] font-semibold text-ink">Starter plan · $19/mo</p>
+          <p className="text-[12px] font-semibold text-ink">
+            {planLabels[plan]} plan · ${(planPricesCents[plan] / 100).toFixed(0)}/mo
+          </p>
           <div className="mt-2 h-1 overflow-hidden rounded-full bg-hairline">
-            <div className="h-full w-[20%] rounded-full bg-pine" />
+            <div className="h-full rounded-full bg-pine" style={{ width: `${usagePct}%` }} />
           </div>
-          <p className="mt-1.5 text-[10.5px] text-ink-3">1 of 5 active deal slots used</p>
+          <p className="mt-1.5 text-[10.5px] text-ink-3">
+            {activeDealCount} of {dealSlotLimit} active deal slots used
+          </p>
           <button
             onClick={() => toast("Plan management (mock)")}
             className="mt-1.5 text-[11px] font-medium text-pine hover:text-pine-hover"

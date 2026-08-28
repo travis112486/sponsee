@@ -1,15 +1,18 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { eq, and, isNull, ne, count } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import * as schema from "@sponsee/db/schema";
 import { stripe } from "./stripe.js";
 import { getPriceId } from "./plans.js";
+import { getDealSlotLimit } from "./entitlements.js";
 import type { PlanTier } from "@sponsee/shared";
 
 const webURL = process.env.WEB_URL || "http://localhost:3000";
 
 export const billingRouter = createTRPCRouter({
+  // Single canonical source for plan + deal-slot usage — the sidebar and the
+  // billing settings panel both read this so they can never disagree (SPO-42 D-004).
   getSubscription: creatorScopedProcedure.query(async ({ ctx }) => {
     const [creator] = await ctx.db
       .select({
@@ -22,12 +25,28 @@ export const billingRouter = createTRPCRouter({
       .from(schema.creators)
       .where(eq(schema.creators.id, ctx.creatorId));
 
+    const plan = creator?.plan ?? "starter";
+    const status = creator?.subscriptionStatus ?? null;
+
+    const [{ activeDealCount }] = await ctx.db
+      .select({ activeDealCount: count() })
+      .from(schema.deals)
+      .where(
+        and(
+          eq(schema.deals.creatorId, ctx.creatorId),
+          isNull(schema.deals.deletedAt),
+          ne(schema.deals.stage, "paid")
+        )
+      );
+
     return {
-      plan: creator?.plan ?? "starter",
-      status: creator?.subscriptionStatus ?? null,
+      plan,
+      status,
       currentPeriodEnd: creator?.currentPeriodEnd ?? null,
       stripeCustomerId: creator?.stripeCustomerId ?? null,
       stripeSubscriptionId: creator?.stripeSubscriptionId ?? null,
+      dealSlotLimit: getDealSlotLimit(plan as PlanTier, status),
+      activeDealCount,
     };
   }),
 

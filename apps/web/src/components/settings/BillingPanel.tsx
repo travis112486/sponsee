@@ -86,6 +86,9 @@ export default function BillingPanel() {
   const currentPlan = subscription?.plan ?? "starter";
   const currentStatus = subscription?.status ?? null;
   const isPaid = currentStatus === "active" || currentStatus === "trialing";
+  const dealSlotLimit = subscription?.dealSlotLimit ?? planDealSlots[currentPlan];
+  const activeDealCount = subscription?.activeDealCount ?? 0;
+  const usagePct = dealSlotLimit > 0 ? Math.min(100, (activeDealCount / dealSlotLimit) * 100) : 0;
 
   return (
     <div className="space-y-8">
@@ -215,14 +218,13 @@ export default function BillingPanel() {
           <div className="flex items-center justify-between text-[12.5px]">
             <span className="text-ink-2">Active deals</span>
             <span className="font-medium text-ink">
-              {/* TODO: wire real deal count from deals router */}
-              — / {planDealSlots[currentPlan]}
+              {activeDealCount} / {dealSlotLimit}
             </span>
           </div>
           <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-hairline">
             <div
               className="h-full rounded-full bg-pine transition-all"
-              style={{ width: "0%" }}
+              style={{ width: `${usagePct}%` }}
             />
           </div>
         </div>

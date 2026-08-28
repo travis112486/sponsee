@@ -321,6 +321,61 @@ describe("billing.getSubscription", () => {
     expect(body.result?.data?.json?.plan).toBe("creator");
     expect(body.result?.data?.json?.status).toBe("active");
   });
+
+  it("computes active deal count and slot limit from canonical deal data (SPO-42 D-004)", async () => {
+    const { creator, cookie } = await createUserAndCreator("test@example.com", "creator");
+    await db
+      .update(schema.creators)
+      .set({ subscriptionStatus: "active" })
+      .where(eq(schema.creators.id, creator.id));
+
+    // 2 active deals (inbound, live), 1 paid (terminal, excluded), 1 soft-deleted (excluded)
+    await db.insert(schema.deals).values([
+      { creatorId: creator.id, brandId: crypto.randomUUID(), title: "Deal A", stage: "inbound" },
+      { creatorId: creator.id, brandId: crypto.randomUUID(), title: "Deal B", stage: "live" },
+      { creatorId: creator.id, brandId: crypto.randomUUID(), title: "Deal C", stage: "paid" },
+      {
+        creatorId: creator.id,
+        brandId: crypto.randomUUID(),
+        title: "Deal D",
+        stage: "negotiating",
+        deletedAt: new Date(),
+      },
+    ]);
+
+    const res = await app.request("/api/trpc/billing.getSubscription", {
+      method: "GET",
+      headers: { cookie, Origin: "http://localhost:3000" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      result?: { data?: { json?: { dealSlotLimit: number; activeDealCount: number } } };
+    };
+    expect(body.result?.data?.json?.activeDealCount).toBe(2);
+    expect(body.result?.data?.json?.dealSlotLimit).toBe(planDealSlots.creator);
+  });
+
+  it("does not count another creator's deals toward the caller's usage", async () => {
+    const { creator: creatorA, cookie: cookieA } = await createUserAndCreator("a@example.com");
+    const { creator: creatorB } = await createUserAndCreator("b@example.com");
+
+    await db.insert(schema.deals).values([
+      { creatorId: creatorA.id, brandId: crypto.randomUUID(), title: "A deal", stage: "inbound" },
+      { creatorId: creatorB.id, brandId: crypto.randomUUID(), title: "B deal 1", stage: "inbound" },
+      { creatorId: creatorB.id, brandId: crypto.randomUUID(), title: "B deal 2", stage: "live" },
+    ]);
+
+    const res = await app.request("/api/trpc/billing.getSubscription", {
+      method: "GET",
+      headers: { cookie: cookieA, Origin: "http://localhost:3000" },
+    });
+
+    const body = (await res.json()) as {
+      result?: { data?: { json?: { activeDealCount: number } } };
+    };
+    expect(body.result?.data?.json?.activeDealCount).toBe(1);
+  });
 });
 
 describe("billing.createCheckoutSession", () => {
