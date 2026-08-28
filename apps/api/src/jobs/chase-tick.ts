@@ -218,6 +218,27 @@ export async function runChaseTick(): Promise<number> {
     }
   }
 
+  // ── Rescue: sending events that never recorded a providerMessageId ──
+  // After 30 minutes we assume the worker died; mark failed so retries or
+  // manual review can proceed.  Normal sends complete in seconds.
+  const strandedSending = await db
+    .select()
+    .from(chaseEvents)
+    .where(
+      and(
+        eq(chaseEvents.status, "sending"),
+        isNull(chaseEvents.providerMessageId),
+        sql`${chaseEvents.updatedAt} < NOW() - INTERVAL '30 minutes'`
+      )
+    );
+
+  for (const event of strandedSending) {
+    await db
+      .update(chaseEvents)
+      .set({ status: "failed", updatedAt: new Date() })
+      .where(eq(chaseEvents.id, event.id));
+  }
+
   return created;
 }
 
@@ -236,19 +257,16 @@ export async function sendChaseEmail(args: {
   body: string;
   idempotencyKey: string;
 }): Promise<{ providerMessageId: string }> {
-  // Atomic claim: only one worker can move approved|failed -> sending,
-  // or reclaim a stranded sending event that never recorded a providerMessageId.
+  // Atomic claim: only `approved` or `failed` may transition to `sending`.
+  // A `sending` event is NEVER reclaimed here; stranded sends are rescued
+  // periodically by runChaseTick after a staleness threshold.
   const [claimed] = await db
     .update(chaseEvents)
     .set({ status: "sending", updatedAt: new Date() })
     .where(
       and(
         eq(chaseEvents.id, args.chaseEventId),
-        or(
-          eq(chaseEvents.status, "approved"),
-          eq(chaseEvents.status, "failed"),
-          and(eq(chaseEvents.status, "sending"), isNull(chaseEvents.providerMessageId))
-        )
+        or(eq(chaseEvents.status, "approved"), eq(chaseEvents.status, "failed"))
       )
     )
     .returning();
@@ -276,7 +294,7 @@ export async function sendChaseEmail(args: {
     }
 
     throw new Error(
-      `Chase event ${args.chaseEventId} is not in approved state or already being processed`
+      `Chase event ${args.chaseEventId} is not in approved/failed state or is already being processed`
     );
   }
 
@@ -295,21 +313,14 @@ export async function sendChaseEmail(args: {
       },
     });
 
-    // Delivery truth: record providerMessageId BEFORE updating status.
-    // If the status update fails, the retry path will see providerMessageId
-    // and promote the event to sent without double-sending.
+    // Single atomic write: providerMessageId + sent status together.
+    // If this UPDATE fails, the retry will see a `sending` event with no
+    // providerMessageId and will be blocked until the stranded-send rescue
+    // marks it failed (or the provider's idempotency key makes the retry safe).
     await db
       .update(chaseEvents)
       .set({
         providerMessageId: info.providerMessageId,
-        updatedAt: new Date(),
-      })
-      .where(eq(chaseEvents.id, args.chaseEventId));
-
-    // Update chase event to sent
-    await db
-      .update(chaseEvents)
-      .set({
         status: "sent",
         sentAt: new Date(),
         updatedAt: new Date(),

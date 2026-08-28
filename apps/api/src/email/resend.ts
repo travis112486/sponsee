@@ -32,12 +32,17 @@ export class ResendProvider implements EmailProvider {
       tags: payload.metadata?.tags?.map((name) => ({ name })),
     };
 
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.apiKey}`,
+      "Content-Type": "application/json",
+    };
+    if (payload.metadata?.idempotencyKey) {
+      headers["Idempotency-Key"] = payload.metadata.idempotencyKey;
+    }
+
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(body),
     });
 

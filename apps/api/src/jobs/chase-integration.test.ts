@@ -653,7 +653,7 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(afterRetry.status).toBe("sent");
   });
 
-  it("sendChaseEmail is idempotent: second call on already-sent returns existing message id", async () => {
+  it("sendChaseEmail exclusive claim prevents concurrent workers from double-sending", async () => {
     const { creator, invoice } = await seedFullFlow();
     await runChaseTick();
 
@@ -662,22 +662,32 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       .from(schema.chaseEvents)
       .where(eq(schema.chaseEvents.invoiceId, invoice.id));
 
-    // Approve
     const caller = chaseRouter.createCaller(mockCtx(creator.id));
     await caller.approve({ chaseEventId: event.id });
 
-    // Use PostmarkProvider so fetch stub works
     const prevProvider = process.env.EMAIL_PROVIDER;
     process.env.EMAIL_PROVIDER = "postmark";
     process.env.POSTMARK_SERVER_TOKEN = "test-token";
 
-    // First send succeeds
+    let fetchCallCount = 0;
+    let releaseFirstFetch: (() => void) | null = null;
+
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-abc" }) }))
+      vi.fn(() => {
+        fetchCallCount++;
+        return new Promise((resolve) => {
+          if (fetchCallCount === 1) {
+            releaseFirstFetch = () =>
+              resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-exclusive-1" }) });
+          } else {
+            resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-exclusive-2" }) });
+          }
+        });
+      })
     );
 
-    const result1 = await sendChaseEmail({
+    const args = {
       chaseEventId: event.id,
       invoiceId: invoice.id,
       step: 1,
@@ -687,28 +697,118 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       subject: event.subjectSnapshot || "Reminder",
       body: event.bodySnapshot || "Please pay",
       idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
-    });
+    };
 
-    // Second concurrent send should return the existing message id (atomic claim skips)
-    const result2 = await sendChaseEmail({
-      chaseEventId: event.id,
-      invoiceId: invoice.id,
-      step: 1,
-      toEmail: "brand@example.com",
-      fromEmail: "chase@sponsee.app",
-      replyToEmail: "creator@example.com",
-      subject: event.subjectSnapshot || "Reminder",
-      body: event.bodySnapshot || "Please pay",
-      idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
-    });
+    // Start worker A and let it claim the event before worker B starts.
+    const workerA = sendChaseEmail(args);
+    await new Promise((r) => setTimeout(r, 20)); // PGlite claim is near-instant
+
+    // Worker B races while worker A is still inside provider.send()
+    const workerB = sendChaseEmail(args);
+    workerB.catch(() => {}); // swallow early rejection so Vitest doesn't flag it as unhandled
+
+    // Give worker B time to hit the exclusive claim and fail
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Now release worker A
+    if (releaseFirstFetch) releaseFirstFetch();
+
+    const [resultA, resultB] = await Promise.allSettled([workerA, workerB]);
 
     if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
     else delete process.env.EMAIL_PROVIDER;
 
-    expect(result2.providerMessageId).toBe(result1.providerMessageId);
+    // Exactly one provider call — the second worker lost the race at the DB claim
+    expect(fetchCallCount).toBe(1);
 
-    // Only one fetch call should have been made (the second was skipped by atomic claim)
-    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+    const successes = (resultA.status === "fulfilled" ? [resultA] : []).concat(
+      resultB.status === "fulfilled" ? [resultB] : []
+    ) as PromiseFulfilledResult<{ providerMessageId: string }>[];
+    const failures = (resultA.status === "rejected" ? [resultA] : []).concat(
+      resultB.status === "rejected" ? [resultB] : []
+    );
+
+    expect(successes).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(successes[0].value.providerMessageId).toBe("msg-exclusive-1");
+  });
+
+  it("sendChaseEmail provider idempotency prevents duplicate on retry after DB-commit failure", async () => {
+    const { creator, invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    const caller = chaseRouter.createCaller(mockCtx(creator.id));
+    await caller.approve({ chaseEventId: event.id });
+
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.EMAIL_PROVIDER = "postmark";
+    process.env.POSTMARK_SERVER_TOKEN = "test-token";
+
+    // Mock provider that enforces idempotency: same idempotencyKey -> same MessageID
+    const sentMessages = new Map<string, string>();
+    let fetchCallCount = 0;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        fetchCallCount++;
+        const idempotencyKey = event.idempotencyKey || `invoice:${invoice.id}:step:1`;
+        if (!sentMessages.has(idempotencyKey)) {
+          sentMessages.set(idempotencyKey, `msg-idem-${fetchCallCount}`);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ MessageID: sentMessages.get(idempotencyKey) }),
+        });
+      })
+    );
+
+    const args = {
+      chaseEventId: event.id,
+      invoiceId: invoice.id,
+      step: 1,
+      toEmail: "brand@example.com",
+      fromEmail: "chase@sponsee.app",
+      replyToEmail: "creator@example.com",
+      subject: event.subjectSnapshot || "Reminder",
+      body: event.bodySnapshot || "Please pay",
+      idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
+    };
+
+    // First send succeeds
+    const result1 = await sendChaseEmail(args);
+
+    // Simulate provider-accepted-before-ID-commit failure:
+    // provider.send() returned an ID but the combined DB write never persisted it.
+    // The catch block would have left the event in `sending`; our rescue would
+    // eventually mark it `failed`.  We simulate that state here.
+    await db
+      .update(schema.chaseEvents)
+      .set({ status: "failed", providerMessageId: null, sentAt: null })
+      .where(eq(schema.chaseEvents.id, event.id));
+
+    // Retry: provider.send() is invoked again, but idempotency returns the same ID
+    const result2 = await sendChaseEmail(args);
+
+    if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
+    else delete process.env.EMAIL_PROVIDER;
+
+    // Provider was called twice (once per attempt) but returned the same ID
+    expect(fetchCallCount).toBe(2);
+    expect(result1.providerMessageId).toBe(result2.providerMessageId);
+
+    // Event is now sent
+    const [final] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(final.status).toBe("sent");
+    expect(final.providerMessageId).toBe(result1.providerMessageId);
   });
 
   it("runChaseTick schedules next action from template offsetDays, not hard-coded +1 day", async () => {
