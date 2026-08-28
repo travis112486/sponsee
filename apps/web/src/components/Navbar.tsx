@@ -4,8 +4,6 @@ import {
   LayoutDashboard,
   KanbanSquare,
   Wallet,
-  CalendarDays,
-  Calculator,
   Settings,
   Search,
   Bell,
@@ -14,6 +12,7 @@ import {
   FileText,
   Plus,
   Radio,
+  Menu,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -21,12 +20,12 @@ import { useAuth } from "@/lib/auth";
 import { trpc } from "@/trpc";
 import { planLabels, planPricesCents } from "@sponsee/shared";
 
+// Calendar and the full Rate Calculator screen are approved post-beta scope
+// (SPO-5 mvp-tech-spec §10) — kept out of primary nav until built (D-005).
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { to: "/payments", label: "Payments", icon: Wallet },
-  { to: "/calendar", label: "Calendar", icon: CalendarDays },
-  { to: "/calculator", label: "Rate Calculator", icon: Calculator },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -34,20 +33,38 @@ const pageTitles: Record<string, { title: string; crumb?: string }> = {
   "/": { title: "Dashboard" },
   "/pipeline": { title: "Pipeline" },
   "/payments": { title: "Payments" },
-  "/calendar": { title: "Calendar" },
-  "/calculator": { title: "Rate Calculator" },
   "/settings": { title: "Settings" },
 };
 
-const paletteResults = [
-  { group: "Deals", items: ["Voltaic Energy — Q4 Stream Fuel", "Hexkey — Pro Deck Keyboard Launch"] },
-  { group: "Invoices", items: ["INV-2047 · $1,800 · 47d overdue", "INV-2052 · $950 · due in 18d"] },
-  { group: "Actions", items: ["Create invoice", "New deal"] },
-];
+function formatPaletteCents(cents: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(cents / 100);
+}
+
+type PaletteResult = {
+  id: string;
+  label: string;
+  icon: typeof KanbanSquare;
+  onSelect: () => void;
+};
+
+type PaletteGroup = {
+  group: string;
+  items: PaletteResult[];
+};
 
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
+  const navigate = useNavigate();
+
+  // Live data — same canonical source as Pipeline/Payments, so results never
+  // disagree with what those screens show (D-004/D-006).
+  const { data: deals } = trpc.deals.list.useQuery(undefined, { enabled: open });
+  const { data: invoices } = trpc.invoice.list.useQuery(undefined, { enabled: open });
 
   useEffect(() => {
     if (open) {
@@ -70,6 +87,73 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   if (!open) return null;
 
+  function go(path: string) {
+    onClose();
+    navigate(path);
+  }
+
+  const now = new Date();
+  const groups: PaletteGroup[] = [
+    {
+      group: "Deals",
+      items: (deals ?? []).map((deal) => ({
+        id: deal.id,
+        label: `${deal.brand?.name ?? "Unknown brand"} — ${deal.title}`,
+        icon: KanbanSquare,
+        onSelect: () => go(`/pipeline/${deal.id}`),
+      })),
+    },
+    {
+      group: "Invoices",
+      items: (invoices ?? []).map((inv) => {
+        const dueDate = inv.dueAt ? new Date(inv.dueAt) : null;
+        const isOverdue = inv.status === "open" && dueDate !== null && dueDate < now;
+        const daysOverdue = isOverdue && dueDate
+          ? Math.floor((now.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
+          : 0;
+        const dueLabel = !dueDate
+          ? "no due date"
+          : isOverdue
+            ? `${daysOverdue}d overdue`
+            : `due ${dueDate.toLocaleDateString()}`;
+        return {
+          id: inv.id,
+          label: `${inv.title || `Invoice #${inv.number}`} · ${formatPaletteCents(inv.amountCents)} · ${dueLabel}`,
+          icon: FileText,
+          onSelect: () => go("/payments"),
+        };
+      }),
+    },
+    {
+      group: "Actions",
+      items: [
+        {
+          id: "new-deal",
+          label: "New deal",
+          icon: Plus,
+          onSelect: () => go("/pipeline?new=1"),
+        },
+        {
+          id: "create-invoice",
+          label: "Create invoice",
+          icon: Plus,
+          onSelect: () => {
+            onClose();
+            navigate("/pipeline");
+            toast("Create an invoice from a deal on the Pipeline page");
+          },
+        },
+      ],
+    },
+  ];
+
+  const filteredGroups = groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => item.label.toLowerCase().includes(query.toLowerCase())),
+    }))
+    .filter((group) => group.items.length > 0);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center pt-[18vh]"
@@ -87,37 +171,30 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search deals, brands, invoices…"
+            aria-label="Search deals, brands, invoices"
             className="w-full bg-transparent text-[14px] text-ink outline-none placeholder:text-ink-3"
           />
           <kbd className="rounded border border-hairline bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] text-ink-3">esc</kbd>
         </div>
         <div className="max-h-[320px] overflow-y-auto py-2">
-          {paletteResults.map((group) => (
+          {filteredGroups.length === 0 && (
+            <p className="px-4 py-6 text-center text-[13px] text-ink-3">No results</p>
+          )}
+          {filteredGroups.map((group) => (
             <div key={group.group} className="px-2 pb-1">
               <p className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-3">
                 {group.group}
               </p>
-              {group.items
-                .filter((i) => i.toLowerCase().includes(query.toLowerCase()))
-                .map((item) => (
-                  <button
-                    key={item}
-                    onClick={() => {
-                      onClose();
-                      toast(`${item} — selected (mock)`);
-                    }}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-[13px] text-ink-2 transition-colors hover:bg-pine-tint hover:text-pine"
-                  >
-                    {group.group === "Invoices" ? (
-                      <FileText className="h-3.5 w-3.5 text-ink-3" />
-                    ) : group.group === "Actions" ? (
-                      <Plus className="h-3.5 w-3.5 text-ink-3" />
-                    ) : (
-                      <KanbanSquare className="h-3.5 w-3.5 text-ink-3" />
-                    )}
-                    {item}
-                  </button>
-                ))}
+              {group.items.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={item.onSelect}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-[13px] text-ink-2 transition-colors hover:bg-pine-tint hover:text-pine"
+                >
+                  <item.icon className="h-3.5 w-3.5 text-ink-3" />
+                  {item.label}
+                </button>
+              ))}
             </div>
           ))}
         </div>
@@ -126,17 +203,44 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   );
 }
 
-export function Sidebar() {
+export function Sidebar({
+  open = false,
+  onClose,
+}: {
+  open?: boolean;
+  onClose?: () => void;
+}) {
   const { user } = useAuth();
   const { data: subscription } = trpc.billing.getSubscription.useQuery();
+  const location = useLocation();
 
   const plan = subscription?.plan ?? "starter";
   const dealSlotLimit = subscription?.dealSlotLimit ?? 5;
   const activeDealCount = subscription?.activeDealCount ?? 0;
   const usagePct = dealSlotLimit > 0 ? Math.min(100, (activeDealCount / dealSlotLimit) * 100) : 0;
 
+  // Below the lg breakpoint the sidebar is an off-canvas drawer (D-011); at
+  // lg+ it is always visible and `open`/`onClose` are ignored.
+  useEffect(() => {
+    onClose?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
   return (
-    <aside className="fixed inset-y-0 left-0 z-40 flex w-[232px] flex-col border-r border-hairline bg-surface">
+    <>
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 flex w-[232px] flex-col border-r border-hairline bg-surface transition-transform duration-200 lg:z-40 lg:translate-x-0",
+          open ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
       {/* Logo */}
       <div className="flex items-center gap-2 px-4 pb-3 pt-4">
         <img src="/logo.svg" alt="Sponsee" className="h-6 w-6" />
@@ -205,11 +309,12 @@ export function Sidebar() {
           Sponsee never touches your money
         </p>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }
 
-export function Topbar() {
+export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
@@ -230,21 +335,38 @@ export function Topbar() {
   }, []);
 
   return (
-    <header className="fixed left-[232px] right-0 top-0 z-30 flex h-14 items-center gap-4 border-b border-hairline bg-surface px-6">
+    <header className="fixed left-0 right-0 top-0 z-30 flex h-14 items-center gap-3 border-b border-hairline bg-surface px-3 sm:gap-4 sm:px-6 lg:left-[232px]">
+      {/* Mobile nav toggle */}
+      <button
+        onClick={onMenuClick}
+        aria-label="Open navigation menu"
+        className="rounded-lg p-2 text-ink-2 transition-colors hover:bg-surface-subtle lg:hidden"
+      >
+        <Menu className="h-4.5 w-4.5" />
+      </button>
+
       {/* Page title + breadcrumb */}
       <div className="flex items-baseline gap-2">
-        {page.crumb && <span className="text-[13px] text-ink-3">{page.crumb} /</span>}
+        {page.crumb && <span className="hidden text-[13px] text-ink-3 sm:inline">{page.crumb} /</span>}
         <h1 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">{page.title}</h1>
       </div>
 
       {/* Command search */}
       <button
         onClick={() => setPaletteOpen(true)}
-        className="flex h-8 w-[320px] items-center gap-2 rounded-lg border border-hairline bg-surface-subtle px-2.5 text-[13px] text-ink-3 transition-colors hover:border-ink-3/40"
+        aria-label="Search deals, brands, invoices"
+        className="hidden h-8 items-center gap-2 rounded-lg border border-hairline bg-surface-subtle px-2.5 text-[13px] text-ink-3 transition-colors hover:border-ink-3/40 md:flex md:w-[240px] lg:w-[320px]"
       >
         <Search className="h-3.5 w-3.5" />
         <span className="flex-1 text-left">Search deals, brands, invoices…</span>
         <kbd className="rounded border border-hairline bg-surface px-1 py-0.5 font-mono text-[10px]">⌘K</kbd>
+      </button>
+      <button
+        onClick={() => setPaletteOpen(true)}
+        aria-label="Search deals, brands, invoices"
+        className="rounded-lg p-2 text-ink-2 transition-colors hover:bg-surface-subtle md:hidden"
+      >
+        <Search className="h-4 w-4" />
       </button>
 
       <div className="ml-auto flex items-center gap-2">
@@ -257,7 +379,7 @@ export function Topbar() {
             <span className="absolute h-full w-full animate-ping rounded-full bg-pine opacity-60" />
             <span className="relative h-1.5 w-1.5 rounded-full bg-pine" />
           </span>
-          Go Live
+          <span className="hidden sm:inline">Go Live</span>
         </button>
 
         {/* Bell */}

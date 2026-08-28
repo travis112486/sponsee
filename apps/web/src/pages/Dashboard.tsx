@@ -7,8 +7,10 @@ import {
   AlertCircle,
   TrendingUp,
   ArrowRight,
+  Mail,
 } from "lucide-react";
 import { useNavigate } from "react-router";
+import QueryError from "@/components/QueryError";
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -18,10 +20,77 @@ function formatCents(cents: number) {
   }).format(cents / 100);
 }
 
+type ActivityPayload = {
+  step?: number;
+  status?: string;
+  action?: string;
+  reason?: string;
+};
+
+function describeActivity(actor: string, payload: unknown): string {
+  const p = (payload ?? {}) as ActivityPayload;
+  const step = p.step !== undefined ? `step ${p.step}` : "chase";
+
+  if (p.action === "pause") return `Chase paused${p.reason ? ` (${p.reason})` : ""}`;
+  if (p.action === "resume") return "Chase resumed";
+  if (p.action === "approve") return `Chase ${step} approved and sent`;
+  if (p.action === "edit_and_send") return `Chase ${step} edited and sent`;
+
+  switch (p.status) {
+    case "awaiting_review":
+      return `Chase ${step} ready for review`;
+    case "sent":
+      return `Chase ${step} sent`;
+    case "bounced":
+      return `Chase ${step} bounced`;
+    case "failed":
+      return `Chase ${step} failed to send`;
+    case "complained":
+      return `Spam complaint on chase ${step}`;
+    default:
+      return actor === "system" ? "Chase activity" : "Chase updated";
+  }
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { data: deals } = trpc.deals.list.useQuery();
-  const { data: invoices } = trpc.invoice.list.useQuery();
+  const {
+    data: deals,
+    isLoading: dealsLoading,
+    isError: dealsError,
+    refetch: refetchDeals,
+  } = trpc.deals.list.useQuery();
+  const {
+    data: invoices,
+    isLoading: invoicesLoading,
+    isError: invoicesError,
+    refetch: refetchInvoices,
+  } = trpc.invoice.list.useQuery();
+  const {
+    data: activity,
+    isLoading: activityLoading,
+    isError: activityError,
+  } = trpc.activity.list.useQuery({ limit: 8 });
+
+  if (dealsLoading || invoicesLoading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-pine border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (dealsError || invoicesError) {
+    return (
+      <QueryError
+        message="Couldn't load your dashboard."
+        onRetry={() => {
+          if (dealsError) refetchDeals();
+          if (invoicesError) refetchInvoices();
+        }}
+      />
+    );
+  }
 
   const activeDeals = deals?.filter((d) => d.stage !== "paid") ?? [];
   const pipelineValue = activeDeals.reduce((s, d) => s + d.valueCents, 0);
@@ -42,7 +111,7 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-[15px] font-semibold text-ink">Dashboard</h2>
+        <h2 className="font-serif text-[19px] text-ink">Dashboard</h2>
         <p className="text-[13px] text-ink-3">
           Overview of your sponsorship business
         </p>
@@ -119,8 +188,17 @@ export default function Dashboard() {
             {activeDeals.slice(0, 5).map((deal) => (
               <div
                 key={deal.id}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open ${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
                 onClick={() => navigate(`/pipeline/${deal.id}`)}
-                className="flex cursor-pointer items-center justify-between rounded-lg border border-hairline bg-surface-subtle px-3 py-2 transition-colors hover:border-pine/30"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    navigate(`/pipeline/${deal.id}`);
+                  }
+                }}
+                className="flex cursor-pointer items-center justify-between rounded-lg border border-hairline bg-surface-subtle px-3 py-2 transition-colors hover:border-pine/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
               >
                 <div>
                   <p className="text-[13px] font-medium text-ink">{deal.title}</p>
@@ -136,6 +214,34 @@ export default function Dashboard() {
           </div>
         ) : (
           <p className="mt-3 text-[13px] text-ink-3">No active deals yet.</p>
+        )}
+      </div>
+
+      {/* Recent activity — newest first (D-010) */}
+      <div className="rounded-xl border border-hairline bg-surface p-4">
+        <h3 className="text-[13px] font-semibold text-ink">Recent activity</h3>
+        {activityLoading ? (
+          <div className="mt-3 flex h-16 items-center justify-center">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-pine border-t-transparent" />
+          </div>
+        ) : activityError ? (
+          <p className="mt-3 text-[13px] text-ink-3">Couldn't load recent activity.</p>
+        ) : activity && activity.length > 0 ? (
+          <div className="mt-3 space-y-1">
+            {activity.map((event) => (
+              <div key={event.id} className="flex items-center gap-2.5 rounded-lg px-1 py-1.5">
+                <Mail className="h-3.5 w-3.5 shrink-0 text-ink-3" />
+                <p className="min-w-0 flex-1 truncate text-[12.5px] text-ink-2">
+                  {describeActivity(event.actor, event.payload)}
+                </p>
+                <span className="shrink-0 text-[11px] text-ink-3">
+                  {new Date(event.createdAt).toLocaleDateString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 text-[13px] text-ink-3">No activity yet.</p>
         )}
       </div>
     </div>

@@ -16,6 +16,7 @@ import {
   Send,
   Edit3,
 } from "lucide-react";
+import QueryError from "@/components/QueryError";
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -42,7 +43,7 @@ const statusConfig: Record<
 
 export default function Payments() {
   const utils = trpc.useUtils();
-  const { data: invoices, isLoading } = trpc.invoice.list.useQuery();
+  const { data: invoices, isLoading, isError, refetch } = trpc.invoice.list.useQuery();
   const { data: awaitingReview } = trpc.chase.awaitingReview.useQuery();
   const markPaid = trpc.invoice.markPaid.useMutation({
     onSuccess: () => {
@@ -78,6 +79,10 @@ export default function Payments() {
     );
   }
 
+  if (isError) {
+    return <QueryError message="Couldn't load your invoices." onRetry={() => refetch()} />;
+  }
+
   const now = new Date();
 
   return (
@@ -85,7 +90,7 @@ export default function Payments() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-[15px] font-semibold text-ink">Payments</h2>
+          <h2 className="font-serif text-[19px] text-ink">Payments</h2>
           <p className="text-[13px] text-ink-3">
             {invoices?.length ?? 0} invoices
           </p>

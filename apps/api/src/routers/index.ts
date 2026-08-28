@@ -8,6 +8,7 @@ import { chaseRouter } from "./chase.js";
 import { calculatorRouter } from "./calculator.js";
 import { settingsRouter } from "./settings.js";
 import { billingRouter } from "../billing/router.js";
+import { activityRouter } from "./activity.js";
 
 export const appRouter = createTRPCRouter({
   health: healthRouter,
@@ -19,6 +20,7 @@ export const appRouter = createTRPCRouter({
   calculator: calculatorRouter,
   settings: settingsRouter,
   billing: billingRouter,
+  activity: activityRouter,
 });
 
 export type AppRouter = typeof appRouter;

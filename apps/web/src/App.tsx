@@ -1,11 +1,9 @@
-import { Routes, Route } from "react-router";
+import { Routes, Route, Navigate } from "react-router";
 import Layout from "./components/Layout";
 import RequireAuth from "./components/RequireAuth";
 import Dashboard from "./pages/Dashboard";
 import Pipeline from "./pages/Pipeline";
 import DealDetail from "./pages/DealDetail";
-import Calculator from "./pages/Calculator";
-import CalendarPage from "./pages/CalendarPage";
 import Payments from "./pages/Payments";
 import SettingsPage from "./pages/SettingsPage";
 import LoginPage from "./pages/auth/LoginPage";
@@ -22,9 +20,12 @@ export default function App() {
         <Route path="pipeline" element={<Pipeline />} />
         <Route path="pipeline/:id" element={<DealDetail />} />
         <Route path="payments" element={<Payments />} />
-        <Route path="calendar" element={<CalendarPage />} />
-        <Route path="calculator" element={<Calculator />} />
         <Route path="settings" element={<SettingsPage />} />
+        {/* Calendar and the full Rate Calculator are approved post-beta scope
+            (SPO-5 §10) — no half-wired screens in beta (D-005). */}
+        <Route path="calendar" element={<Navigate to="/" replace />} />
+        <Route path="calculator" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   );

@@ -1,15 +1,17 @@
-import { useState } from "react";
-import { useNavigate } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { trpc } from "@/trpc";
 import { stageLabels, dealStages, type DealStage, platforms } from "@sponsee/shared";
 import { cn } from "@/lib/utils";
 import {
   Plus,
   ChevronRight,
+  ChevronLeft,
   DollarSign,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import QueryError from "@/components/QueryError";
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -28,10 +30,39 @@ const stageColors: Record<DealStage, string> = {
   paid: "bg-pine-tint text-pine",
 };
 
+function useHorizontalScrollEdges<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [atStart, setAtStart] = useState(true);
+  const [atEnd, setAtEnd] = useState(true);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    function update() {
+      if (!el) return;
+      setAtStart(el.scrollLeft <= 1);
+      setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
+    }
+
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener("scroll", update);
+      observer.disconnect();
+    };
+  }, []);
+
+  return { ref, atStart, atEnd };
+}
+
 export default function Pipeline() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const utils = trpc.useUtils();
-  const { data: deals, isLoading } = trpc.deals.list.useQuery();
+  const { data: deals, isLoading, isError, refetch } = trpc.deals.list.useQuery();
   const updateStage = trpc.deals.updateStage.useMutation({
     onSuccess: () => {
       utils.deals.list.invalidate();
@@ -40,7 +71,36 @@ export default function Pipeline() {
   });
 
   const [movingDealId, setMovingDealId] = useState<string | null>(null);
-  const [showNewDeal, setShowNewDeal] = useState(false);
+  // Sourced from the URL (not local state) so CommandPalette's "New deal"
+  // action (?new=1) opens the modal even when Pipeline is already mounted.
+  const showNewDeal = searchParams.get("new") === "1";
+  const { ref: boardRef, atStart, atEnd } = useHorizontalScrollEdges<HTMLDivElement>();
+
+  function openNewDeal() {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("new", "1");
+        return next;
+      },
+      { replace: true }
+    );
+  }
+
+  function closeNewDeal() {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("new");
+        return next;
+      },
+      { replace: true }
+    );
+  }
+
+  function scrollBoardBy(delta: number) {
+    boardRef.current?.scrollBy({ left: delta, behavior: "smooth" });
+  }
 
   if (isLoading) {
     return (
@@ -48,6 +108,10 @@ export default function Pipeline() {
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-pine border-t-transparent" />
       </div>
     );
+  }
+
+  if (isError) {
+    return <QueryError message="Couldn't load your pipeline." onRetry={() => refetch()} />;
   }
 
   const byStage = Object.fromEntries(
@@ -59,13 +123,13 @@ export default function Pipeline() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-[15px] font-semibold text-ink">Deal Pipeline</h2>
+          <h2 className="font-serif text-[19px] text-ink">Deal Pipeline</h2>
           <p className="text-[13px] text-ink-3">
             {deals?.length ?? 0} active deals
           </p>
         </div>
         <button
-          onClick={() => setShowNewDeal(true)}
+          onClick={openNewDeal}
           className="flex h-8 items-center gap-1.5 rounded-lg bg-pine px-3 text-[13px] font-medium text-white transition-colors hover:bg-pine-hover"
         >
           <Plus className="h-3.5 w-3.5" />
@@ -74,7 +138,41 @@ export default function Pipeline() {
       </div>
 
       {/* Board */}
-      <div className="flex gap-3 overflow-x-auto pb-2">
+      <div className="relative">
+        {!atStart && (
+          <button
+            onClick={() => scrollBoardBy(-280)}
+            aria-label="Scroll pipeline stages left"
+            className="absolute left-0 top-1/2 z-10 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-surface shadow-warm-md text-ink-2 hover:text-ink"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+        )}
+        {!atEnd && (
+          <button
+            onClick={() => scrollBoardBy(280)}
+            aria-label="Scroll pipeline stages right — more stages available"
+            className="absolute right-0 top-1/2 z-10 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-surface shadow-warm-md text-ink-2 hover:text-ink animate-pulse"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        )}
+        {!atEnd && (
+          <div className="pointer-events-none absolute right-0 top-0 z-[5] h-full w-12 bg-gradient-to-l from-paper to-transparent" />
+        )}
+
+        <div
+          ref={boardRef}
+          role="region"
+          aria-label="Pipeline stages — six stages, scroll horizontally or use arrow keys for more"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            if (e.key === "ArrowRight") scrollBoardBy(280);
+            if (e.key === "ArrowLeft") scrollBoardBy(-280);
+          }}
+          className="board-scroll flex gap-3 overflow-x-auto pb-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1 rounded-lg"
+        >
         {dealStages.map((stage) => (
           <div
             key={stage}
@@ -108,8 +206,18 @@ export default function Pipeline() {
               {byStage[stage]?.map((deal) => (
                 <div
                   key={deal.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open ${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
                   onClick={() => navigate(`/pipeline/${deal.id}`)}
-                  className="group cursor-pointer rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-all hover:border-pine/30 hover:shadow-warm-md"
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      navigate(`/pipeline/${deal.id}`);
+                    }
+                  }}
+                  className="group cursor-pointer rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-all hover:border-pine/30 hover:shadow-warm-md focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -201,9 +309,10 @@ export default function Pipeline() {
             </div>
           </div>
         ))}
+        </div>
       </div>
 
-      {showNewDeal && <NewDealModal onClose={() => setShowNewDeal(false)} />}
+      {showNewDeal && <NewDealModal onClose={closeNewDeal} />}
     </div>
   );
 }

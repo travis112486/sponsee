@@ -1,22 +1,24 @@
 import { Outlet, useLocation } from "react-router";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Toaster } from "sonner";
 import { Sidebar, Topbar } from "./Navbar";
 import Footer from "./Footer";
 
 /**
- * App shell: fixed 232px sidebar + 56px topbar + internally-scrolling content slot.
+ * App shell: 232px sidebar (off-canvas drawer below lg) + 56px topbar +
+ * internally-scrolling content slot (D-011).
  */
 export default function Layout() {
   const location = useLocation();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
     <div className="min-h-[100dvh] bg-paper">
-      <Sidebar />
-      <Topbar />
-      <main className="fixed bottom-0 left-[232px] right-0 top-14 overflow-y-auto">
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Topbar onMenuClick={() => setSidebarOpen(true)} />
+      <main className="fixed bottom-0 left-0 right-0 top-14 overflow-y-auto lg:left-[232px]">
         <ScrollReset key={location.pathname} />
-        <div className="mx-auto max-w-[1360px] p-6">
+        <div className="mx-auto max-w-[1360px] p-4 sm:p-6">
           <Outlet />
           <Footer />
         </div>

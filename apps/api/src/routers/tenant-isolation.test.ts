@@ -9,6 +9,7 @@ import { deliverableRouter } from "../routers/deliverable.js";
 import { dealsRouter } from "../routers/deals.js";
 import { invoiceRouter } from "../routers/invoice.js";
 import { chaseRouter } from "../routers/chase.js";
+import { activityRouter } from "../routers/activity.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 
 // ── Schema SQL (PGlite-compatible, derived from packages/db/src/init.ts) ─────
@@ -1317,6 +1318,72 @@ describe("chase router tenant isolation", () => {
         .where(eq(schema.chaseEvents.id, chaseEventBId));
       expect(row.status).toBe("awaiting_review");
       expect(row.subjectSnapshot).toBe("Pay up");
+    });
+  });
+});
+
+// ── Activity router ──────────────────────────────────────────────────────────
+
+describe("activity router tenant isolation", () => {
+  describe("list", () => {
+    it("returns only the caller's own activity events, newest first", async () => {
+      const older = new Date("2026-08-19T12:00:00Z");
+      const newer = new Date("2026-08-24T12:00:00Z");
+
+      await db.insert(schema.activityEvents).values([
+        {
+          creatorId: creatorAId,
+          actor: "system",
+          entityType: "invoice",
+          entityId: invoiceAId,
+          kind: "chase_sent",
+          payload: { status: "sent", step: 1 },
+          createdAt: older,
+        },
+        {
+          creatorId: creatorAId,
+          actor: "creator",
+          entityType: "invoice",
+          entityId: invoiceAId,
+          kind: "chase_sent",
+          payload: { action: "approve" },
+          createdAt: newer,
+        },
+        {
+          creatorId: creatorBId,
+          actor: "system",
+          entityType: "invoice",
+          entityId: invoiceBId,
+          kind: "chase_sent",
+          payload: { status: "sent", step: 1 },
+          createdAt: newer,
+        },
+      ]);
+
+      const caller = activityRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.list();
+
+      expect(result).toHaveLength(2);
+      expect(result.every((e) => e.creatorId === creatorAId)).toBe(true);
+      expect(result[0].createdAt.getTime()).toBe(newer.getTime());
+      expect(result[1].createdAt.getTime()).toBe(older.getTime());
+    });
+
+    it("respects the limit input", async () => {
+      await db.insert(schema.activityEvents).values(
+        Array.from({ length: 5 }, (_, i) => ({
+          creatorId: creatorAId,
+          actor: "system" as const,
+          entityType: "invoice",
+          entityId: invoiceAId,
+          kind: "chase_sent" as const,
+          payload: { step: i },
+        }))
+      );
+
+      const caller = activityRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.list({ limit: 2 });
+      expect(result).toHaveLength(2);
     });
   });
 });

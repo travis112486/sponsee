@@ -16,6 +16,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import QueryError from "@/components/QueryError";
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -47,10 +48,12 @@ export default function DealDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const utils = trpc.useUtils();
-  const { data: deal, isLoading } = trpc.deals.getById.useQuery(
-    { id: id! },
-    { enabled: !!id }
-  );
+  const {
+    data: deal,
+    isLoading,
+    isError,
+    refetch,
+  } = trpc.deals.getById.useQuery({ id: id! }, { enabled: !!id });
 
   const updateDeal = trpc.deals.update.useMutation({
     onSuccess: () => {
@@ -102,6 +105,10 @@ export default function DealDetail() {
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-pine border-t-transparent" />
       </div>
     );
+  }
+
+  if (isError) {
+    return <QueryError message="Couldn't load this deal." onRetry={() => refetch()} />;
   }
 
   if (!deal) {
@@ -205,7 +212,7 @@ export default function DealDetail() {
           ) : (
             <h1
               onClick={() => startEdit("title", deal.title)}
-              className="mt-1 cursor-text text-[18px] font-semibold tracking-[-0.01em] text-ink hover:text-ink-2"
+              className="mt-1 cursor-text font-serif text-[22px] text-ink hover:text-ink-2"
             >
               {deal.title}
             </h1>

@@ -43,4 +43,21 @@
   .tnum {
     font-variant-numeric: tabular-nums;
   }
+  /* Always-visible scrollbar affordance for horizontally-clipped regions
+     (e.g. the pipeline board) — overlay scrollbars on macOS/iOS otherwise
+     give no indication that more content exists off-screen. */
+  .board-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #C9C2B6 transparent;
+  }
+  .board-scroll::-webkit-scrollbar {
+    height: 8px;
+  }
+  .board-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .board-scroll::-webkit-scrollbar-thumb {
+    background-color: #C9C2B6;
+    border-radius: 8px;
+  }
 }

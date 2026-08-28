@@ -171,8 +171,14 @@ export default function ChaseTemplatesPanel() {
             {isEditing ? (
               <div className="mt-3 space-y-3">
                 <div>
-                  <label className="mb-1 block text-[11px] font-medium text-ink-2">Subject</label>
+                  <label
+                    htmlFor={`template-subject-${template.id}`}
+                    className="mb-1 block text-[11px] font-medium text-ink-2"
+                  >
+                    Subject
+                  </label>
                   <input
+                    id={`template-subject-${template.id}`}
                     value={draftSubject}
                     onChange={(e) => {
                       setDraftSubject(e.target.value);
@@ -182,8 +188,14 @@ export default function ChaseTemplatesPanel() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-[11px] font-medium text-ink-2">Body</label>
+                  <label
+                    htmlFor={`template-body-${template.id}`}
+                    className="mb-1 block text-[11px] font-medium text-ink-2"
+                  >
+                    Body
+                  </label>
                   <textarea
+                    id={`template-body-${template.id}`}
                     value={draftBody}
                     onChange={(e) => {
                       setDraftBody(e.target.value);
