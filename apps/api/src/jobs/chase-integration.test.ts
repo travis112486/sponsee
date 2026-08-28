@@ -943,4 +943,18 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(timeline[0].status).toBe("sent");
     expect(timeline[0].providerMessageId).toBe(result.providerMessageId);
   });
+
+  it("fresh database: chase_events has updated_at and it is auto-populated", async () => {
+    const { invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    expect(event).toBeDefined();
+    expect(event.updatedAt).not.toBeNull();
+    expect(new Date(event.updatedAt!).getTime()).toBeGreaterThan(0);
+  });
 });
