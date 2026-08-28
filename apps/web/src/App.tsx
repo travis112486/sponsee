@@ -1,31 +1,91 @@
+import { lazy, Suspense } from "react";
 import { Routes, Route, Navigate } from "react-router";
 import Layout from "./components/Layout";
 import RequireAuth from "./components/RequireAuth";
-import Dashboard from "./pages/Dashboard";
-import Pipeline from "./pages/Pipeline";
-import DealDetail from "./pages/DealDetail";
-import Payments from "./pages/Payments";
-import SettingsPage from "./pages/SettingsPage";
-import LoginPage from "./pages/auth/LoginPage";
+
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Pipeline = lazy(() => import("./pages/Pipeline"));
+const DealDetail = lazy(() => import("./pages/DealDetail"));
+const Payments = lazy(() => import("./pages/Payments"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const LoginPage = lazy(() => import("./pages/auth/LoginPage"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+
+function PageSpinner() {
+  return (
+    <div className="flex h-64 items-center justify-center">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-pine border-t-transparent" />
+    </div>
+  );
+}
 
 export default function App() {
   return (
     <Routes>
       {/* Public routes — no auth required */}
-      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/login"
+        element={
+          <Suspense fallback={<PageSpinner />}>
+            <LoginPage />
+          </Suspense>
+        }
+      />
 
       {/* Protected routes — wrapped in Layout + RequireAuth */}
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
-        <Route index element={<Dashboard />} />
-        <Route path="pipeline" element={<Pipeline />} />
-        <Route path="pipeline/:id" element={<DealDetail />} />
-        <Route path="payments" element={<Payments />} />
-        <Route path="settings" element={<SettingsPage />} />
+        <Route
+          index
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <Dashboard />
+            </Suspense>
+          }
+        />
+        <Route
+          path="pipeline"
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <Pipeline />
+            </Suspense>
+          }
+        />
+        <Route
+          path="pipeline/:id"
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <DealDetail />
+            </Suspense>
+          }
+        />
+        <Route
+          path="payments"
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <Payments />
+            </Suspense>
+          }
+        />
+        <Route
+          path="settings"
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <SettingsPage />
+            </Suspense>
+          }
+        />
         {/* Calendar and the full Rate Calculator are approved post-beta scope
             (SPO-5 §10) — no half-wired screens in beta (D-005). */}
         <Route path="calendar" element={<Navigate to="/" replace />} />
         <Route path="calculator" element={<Navigate to="/" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route
+          path="*"
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <NotFound />
+            </Suspense>
+          }
+        />
       </Route>
     </Routes>
   );

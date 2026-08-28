@@ -17,6 +17,7 @@ import {
   Trash2,
 } from "lucide-react";
 import QueryError from "@/components/QueryError";
+import { Skeleton, SkeletonCard } from "@/components/Skeleton";
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -101,8 +102,26 @@ export default function DealDetail() {
 
   if (isLoading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-pine border-t-transparent" />
+      <div className="space-y-6">
+        <Skeleton className="h-4 w-24" />
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <Skeleton className="h-5 w-20" />
+            <Skeleton className="mt-2 h-8 w-3/4" />
+          </div>
+          <Skeleton className="h-6 w-24" />
+        </div>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <div className="space-y-4 lg:col-span-2">
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+          <div className="space-y-4">
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+        </div>
       </div>
     );
   }
@@ -510,7 +529,11 @@ function CPVHHelper({ dealValueCents }: { dealValueCents: number }) {
   const [deliverableType, setDeliverableType] =
     useState<(typeof benchmarkDeliverableTypes)[number]>("ad-read");
 
-  const { data: benchmark } = trpc.calculator.compute.useQuery({
+  const {
+    data: benchmark,
+    isLoading: benchmarkLoading,
+    isError: benchmarkError,
+  } = trpc.calculator.compute.useQuery({
     ccv,
     durationMinutes: durationMin,
     deliverableType,
@@ -551,6 +574,10 @@ function CPVHHelper({ dealValueCents }: { dealValueCents: number }) {
         </select>
       </div>
 
+      {benchmarkLoading && <Skeleton className="h-16 w-full" />}
+      {benchmarkError && (
+        <p className="text-[12px] text-brick">Couldn't load benchmark.</p>
+      )}
       {benchmark && (
         <>
           <div className="rounded-lg bg-surface-subtle p-2">

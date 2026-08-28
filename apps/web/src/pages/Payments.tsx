@@ -17,6 +17,7 @@ import {
   Edit3,
 } from "lucide-react";
 import QueryError from "@/components/QueryError";
+import { Skeleton, SkeletonRow } from "@/components/Skeleton";
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -44,7 +45,11 @@ const statusConfig: Record<
 export default function Payments() {
   const utils = trpc.useUtils();
   const { data: invoices, isLoading, isError, refetch } = trpc.invoice.list.useQuery();
-  const { data: awaitingReview } = trpc.chase.awaitingReview.useQuery();
+  const {
+    data: awaitingReview,
+    isLoading: awaitingReviewLoading,
+    isError: awaitingReviewError,
+  } = trpc.chase.awaitingReview.useQuery();
   const markPaid = trpc.invoice.markPaid.useMutation({
     onSuccess: () => {
       utils.invoice.list.invalidate();
@@ -73,8 +78,24 @@ export default function Payments() {
 
   if (isLoading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-pine border-t-transparent" />
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <Skeleton className="h-6 w-28" />
+            <Skeleton className="mt-2 h-4 w-20" />
+          </div>
+          <Skeleton className="h-8 w-28" />
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Skeleton className="h-20 w-full" />
+          <Skeleton className="h-20 w-full" />
+          <Skeleton className="h-20 w-full" />
+        </div>
+        <div className="rounded-xl border border-hairline bg-surface">
+          <SkeletonRow />
+          <SkeletonRow />
+          <SkeletonRow />
+        </div>
       </div>
     );
   }
@@ -105,6 +126,17 @@ export default function Payments() {
       </div>
 
       {/* Awaiting review queue */}
+      {awaitingReviewLoading && (
+        <div className="rounded-xl border border-amber/30 bg-amber-tint/30 p-4">
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="mt-2 h-16 w-full" />
+        </div>
+      )}
+      {awaitingReviewError && (
+        <div className="rounded-xl border border-brick/30 bg-brick-tint/30 p-4">
+          <p className="text-[13px] text-brick">Couldn't load chase review queue.</p>
+        </div>
+      )}
       {awaitingReview && awaitingReview.length > 0 && (
         <div className="rounded-xl border border-amber/30 bg-amber-tint/30 p-4">
           <div className="flex items-center gap-2">
@@ -370,8 +402,16 @@ function StatCard({
 }
 
 function InvoiceChasePanel({ invoiceId }: { invoiceId: string }) {
-  const { data: state } = trpc.chase.state.useQuery({ invoiceId });
-  const { data: events } = trpc.chase.events.useQuery({ invoiceId });
+  const {
+    data: state,
+    isLoading: stateLoading,
+    isError: stateError,
+  } = trpc.chase.state.useQuery({ invoiceId });
+  const {
+    data: events,
+    isLoading: eventsLoading,
+    isError: eventsError,
+  } = trpc.chase.events.useQuery({ invoiceId });
   const pause = trpc.chase.pause.useMutation({
     onSuccess: () => {
       utils.chase.state.invalidate({ invoiceId });
@@ -383,6 +423,23 @@ function InvoiceChasePanel({ invoiceId }: { invoiceId: string }) {
     },
   });
   const utils = trpc.useUtils();
+
+  if (stateLoading || eventsLoading) {
+    return (
+      <div className="mx-4 mb-3 rounded-lg border border-hairline bg-surface-subtle p-3">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="mt-2 h-8 w-full" />
+      </div>
+    );
+  }
+
+  if (stateError || eventsError) {
+    return (
+      <div className="mx-4 mb-3 rounded-lg border border-hairline bg-surface-subtle p-3">
+        <p className="text-[12px] text-brick">Couldn't load chase data.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-4 mb-3 rounded-lg border border-hairline bg-surface-subtle p-3">

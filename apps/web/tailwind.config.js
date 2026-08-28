@@ -47,7 +47,7 @@ export default {
         ink: {
           DEFAULT: "#1B1815",
           2: "#57504A",
-          3: "#8A8178",
+          3: "#756C63",
         },
         hairline: "#E8E3DB",
         pine: {

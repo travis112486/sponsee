@@ -10,6 +10,7 @@ import {
   Mail,
 } from "lucide-react";
 import { useNavigate } from "react-router";
+import { Skeleton, SkeletonKpi, SkeletonCard } from "@/components/Skeleton";
 import QueryError from "@/components/QueryError";
 
 function formatCents(cents: number) {
@@ -74,8 +75,19 @@ export default function Dashboard() {
 
   if (dealsLoading || invoicesLoading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-pine border-t-transparent" />
+      <div className="space-y-6">
+        <div>
+          <Skeleton className="h-5 w-32" />
+          <Skeleton className="mt-2 h-4 w-48" />
+        </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <SkeletonKpi />
+          <SkeletonKpi />
+          <SkeletonKpi />
+          <SkeletonKpi />
+        </div>
+        <SkeletonCard />
+        <SkeletonCard />
       </div>
     );
   }
@@ -186,19 +198,10 @@ export default function Dashboard() {
         {activeDeals.length > 0 ? (
           <div className="mt-3 space-y-2">
             {activeDeals.slice(0, 5).map((deal) => (
-              <div
+              <button
                 key={deal.id}
-                role="button"
-                tabIndex={0}
-                aria-label={`Open ${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
                 onClick={() => navigate(`/pipeline/${deal.id}`)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    navigate(`/pipeline/${deal.id}`);
-                  }
-                }}
-                className="flex cursor-pointer items-center justify-between rounded-lg border border-hairline bg-surface-subtle px-3 py-2 transition-colors hover:border-pine/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
+                className="flex w-full items-center justify-between rounded-lg border border-hairline bg-surface-subtle px-3 py-2 text-left transition-colors hover:border-pine/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
               >
                 <div>
                   <p className="text-[13px] font-medium text-ink">{deal.title}</p>
@@ -209,7 +212,7 @@ export default function Dashboard() {
                 <p className="text-[13px] font-semibold text-ink">
                   {formatCents(deal.valueCents)}
                 </p>
-              </div>
+              </button>
             ))}
           </div>
         ) : (

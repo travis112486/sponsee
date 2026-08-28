@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import QueryError from "@/components/QueryError";
+import { Skeleton } from "@/components/Skeleton";
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -104,8 +105,26 @@ export default function Pipeline() {
 
   if (isLoading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-pine border-t-transparent" />
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <Skeleton className="h-6 w-32" />
+            <Skeleton className="mt-2 h-4 w-24" />
+          </div>
+          <Skeleton className="h-8 w-24" />
+        </div>
+        <div className="flex gap-3">
+          {dealStages.map((stage) => (
+            <div
+              key={stage}
+              className="flex w-[260px] shrink-0 flex-col rounded-xl border border-hairline bg-surface-subtle p-3"
+            >
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="mt-3 h-20 w-full" />
+              <Skeleton className="mt-2 h-20 w-full" />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -299,7 +318,7 @@ export default function Pipeline() {
                         e.stopPropagation();
                         setMovingDealId(deal.id);
                       }}
-                      className="mt-2 text-[11px] font-medium text-pine opacity-0 transition-opacity hover:text-pine-hover group-hover:opacity-100"
+                      className="mt-2 text-[11px] font-medium text-pine opacity-0 transition-opacity hover:text-pine-hover group-hover:opacity-100 focus:opacity-100"
                     >
                       Move…
                     </button>
@@ -330,6 +349,14 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
       onClose();
     },
   });
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
 
   const [brandMode, setBrandMode] = useState<"select" | "create">("select");
   const [selectedBrandId, setSelectedBrandId] = useState("");
@@ -391,8 +418,17 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-xl border border-hairline bg-surface shadow-lg">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="New deal"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg rounded-xl border border-hairline bg-surface shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between border-b border-hairline px-4 py-3">
           <h3 className="text-[15px] font-semibold text-ink">New deal</h3>
           <button onClick={onClose} className="text-ink-3 hover:text-ink">

@@ -4,6 +4,29 @@ import { Toaster } from "sonner";
 import { Sidebar, Topbar } from "./Navbar";
 import Footer from "./Footer";
 
+const pageTitles: Record<string, string> = {
+  "/": "Dashboard",
+  "/pipeline": "Pipeline",
+  "/payments": "Payments",
+  "/settings": "Settings",
+  "/login": "Login",
+};
+
+function useDocumentTitle() {
+  const location = useLocation();
+  useEffect(() => {
+    const base = "Sponsee";
+    const routeTitle = pageTitles[location.pathname];
+    if (routeTitle) {
+      document.title = `${routeTitle} · ${base}`;
+    } else if (location.pathname.startsWith("/pipeline/")) {
+      document.title = `Deal · ${base}`;
+    } else {
+      document.title = base;
+    }
+  }, [location.pathname]);
+}
+
 /**
  * App shell: 232px sidebar (off-canvas drawer below lg) + 56px topbar +
  * internally-scrolling content slot (D-011).
@@ -11,6 +34,8 @@ import Footer from "./Footer";
 export default function Layout() {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  useDocumentTitle();
 
   return (
     <div className="min-h-[100dvh] bg-paper">

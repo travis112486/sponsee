@@ -75,10 +75,6 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        onClose();
-      }
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handler);
@@ -159,6 +155,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       className="fixed inset-0 z-50 flex items-start justify-center pt-[18vh]"
       style={{ backgroundColor: "rgba(27,24,21,.4)" }}
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
     >
       <div
         className="w-full max-w-[560px] overflow-hidden rounded-[10px] border border-hairline bg-surface shadow-warm-lg"
@@ -462,7 +461,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
         </div>
       </div>
 
-      <CommandPalette key={paletteOpen ? "open" : "closed"} open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </header>
   );
 }
