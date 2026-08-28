@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Loader2, Eye, EyeOff, AlertCircle, Check, RotateCcw } from "lucide-react";
 import QueryError from "@/components/QueryError";
+import PageLoader from "@/components/PageLoader";
 
 const STEP_NAMES: Record<number, string> = {
   1: "Friendly reminder",
@@ -82,11 +83,7 @@ export default function ChaseTemplatesPanel() {
   };
 
   if (isLoading) {
-    return (
-      <div className="flex h-40 items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-ink-3" />
-      </div>
-    );
+    return <PageLoader message="Loading templates…" />;
   }
 
   if (isError) {

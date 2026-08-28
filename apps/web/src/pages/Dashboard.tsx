@@ -9,9 +9,12 @@ import {
   TrendingUp,
   ArrowRight,
   Mail,
+  Plus,
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import QueryError from "@/components/QueryError";
+import EmptyState from "@/components/EmptyState";
+import PageLoader from "@/components/PageLoader";
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -215,7 +218,20 @@ export default function Dashboard() {
             ))}
           </div>
         ) : (
-          <p className="mt-3 text-[13px] text-ink-3">No active deals yet.</p>
+          <EmptyState
+            icon={KanbanSquare}
+            title="No active deals yet"
+            description="Track your brand partnerships from first contact to paid."
+            action={
+              <button
+                onClick={() => navigate("/pipeline?new=1")}
+                className="flex items-center gap-1.5 rounded-lg bg-pine px-3 py-2 text-[13px] font-medium text-white transition-colors hover:bg-pine-hover"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                New deal
+              </button>
+            }
+          />
         )}
       </div>
 
@@ -223,9 +239,7 @@ export default function Dashboard() {
       <div className="rounded-xl border border-hairline bg-surface p-4">
         <h3 className="text-[13px] font-semibold text-ink">Recent activity</h3>
         {activityLoading ? (
-          <div className="mt-3 flex h-16 items-center justify-center">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-pine border-t-transparent" />
-          </div>
+          <PageLoader message="Loading activity…" />
         ) : activityError ? (
           <p className="mt-3 text-[13px] text-ink-3">Couldn't load recent activity.</p>
         ) : activity && activity.length > 0 ? (
@@ -243,7 +257,7 @@ export default function Dashboard() {
             ))}
           </div>
         ) : (
-          <p className="mt-3 text-[13px] text-ink-3">No activity yet.</p>
+          <EmptyState icon={Mail} title="No activity yet" />
         )}
       </div>
     </div>
