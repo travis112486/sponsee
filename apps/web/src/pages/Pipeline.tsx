@@ -13,6 +13,17 @@ import {
 import { toast } from "sonner";
 import QueryError from "@/components/QueryError";
 import { Skeleton } from "@/components/Skeleton";
+import {
+  DndContext,
+  type DragEndEvent,
+  type DragStartEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  useDraggable,
+  useDroppable,
+} from "@dnd-kit/core";
+import { CSS } from "@dnd-kit/utilities";
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -59,21 +70,213 @@ function useHorizontalScrollEdges<T extends HTMLElement>() {
   return { ref, atStart, atEnd };
 }
 
+/* ------------------------------------------------------------------ */
+//  Drag-and-drop subcomponents
+/* ------------------------------------------------------------------ */
+
+function DroppableStageColumn({
+  stage,
+  children,
+  isOver,
+}: {
+  stage: DealStage;
+  children: React.ReactNode;
+  isOver: boolean;
+}) {
+  const { setNodeRef } = useDroppable({
+    id: stage,
+    data: { stage },
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "flex w-[260px] shrink-0 flex-col rounded-xl border transition-colors",
+        isOver
+          ? "border-pine bg-pine/5"
+          : "border-hairline bg-surface-subtle"
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+function DraggableDealCard({
+  deal,
+  onNavigate,
+}: {
+  deal: {
+    id: string;
+    stage: DealStage;
+    title: string;
+    brand?: { name?: string } | null;
+    valueCents: number;
+    platforms?: string[] | null;
+    notes?: string | null;
+  };
+  onNavigate: (id: string) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    isDragging,
+  } = useDraggable({
+    id: deal.id,
+    data: { deal, sourceStage: deal.stage },
+    disabled: false,
+  });
+
+  const style = transform
+    ? {
+        transform: CSS.Translate.toString(transform),
+        zIndex: 50,
+      }
+    : undefined;
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      aria-label={`${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
+      style={style}
+      className={cn(
+        "group cursor-grab rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-all hover:border-pine/30 hover:shadow-warm-md focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1",
+        isDragging && "opacity-40 cursor-grabbing"
+      )}
+    >
+      {/* Click target for navigation — plain div so we don't nest interactive roles inside the draggable */}
+      <div
+        onClick={() => onNavigate(deal.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onNavigate(deal.id);
+          }
+        }}
+        className="focus:outline-none"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-[12px] font-semibold text-ink-2">
+              {deal.brand?.name ?? "Unknown brand"}
+            </p>
+            <p className="mt-0.5 truncate text-[13px] font-medium text-ink">
+              {deal.title}
+            </p>
+          </div>
+          <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-3 opacity-0 transition-opacity group-hover:opacity-100" />
+        </div>
+
+        <div className="mt-2 flex items-center gap-3">
+          <div className="flex items-center gap-1 text-[12px] font-medium text-ink-2">
+            <DollarSign className="h-3 w-3 text-ink-3" />
+            {formatCents(deal.valueCents)}
+          </div>
+          {deal.platforms && deal.platforms.length > 0 && (
+            <div className="flex gap-1">
+              {deal.platforms.map((p) => (
+                <span
+                  key={p}
+                  className={cn(
+                    "text-[10px] font-semibold uppercase tracking-wider",
+                    p === "twitch" && "text-twitch",
+                    p === "youtube" && "text-youtube",
+                    p === "kick" && "text-kick",
+                    p === "tiktok" && "text-ink-3"
+                  )}
+                >
+                  {p}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {deal.notes && (
+          <p className="mt-1.5 line-clamp-2 text-[11px] leading-4 text-ink-3">
+            {deal.notes}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+//  Main page
+/* ------------------------------------------------------------------ */
+
 export default function Pipeline() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const utils = trpc.useUtils();
   const { data: deals, isLoading, isError, refetch } = trpc.deals.list.useQuery();
+
+  // Optimistic stage overrides for drag-and-drop (dealId -> stage)
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [overStage, setOverStage] = useState<DealStage | null>(null);
+
   const updateStage = trpc.deals.updateStage.useMutation({
+    onMutate: async (vars) => {
+      await utils.deals.list.cancel();
+      const previousDeals = utils.deals.list.getData();
+      utils.deals.list.setData(undefined, (old) => {
+        if (!old) return old;
+        return old.map((d) =>
+          d.id === vars.id ? { ...d, stage: vars.stage } : d
+        );
+      });
+      return { previousDeals };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previousDeals) {
+        utils.deals.list.setData(undefined, context.previousDeals);
+      }
+      toast.error("Failed to move deal");
+    },
     onSuccess: () => {
-      utils.deals.list.invalidate();
       toast("Deal moved");
+    },
+    onSettled: () => {
+      utils.deals.list.invalidate();
     },
   });
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 4 },
+    })
+  );
+
+  function handleDragStart(event: DragStartEvent) {
+    setActiveDragId(event.active.id as string);
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    setActiveDragId(null);
+    setOverStage(null);
+
+    if (!over || !active) return;
+
+    const dealId = active.id as string;
+    const newStage = over.id as DealStage;
+    const deal = deals?.find((d) => d.id === dealId);
+    if (!deal || deal.stage === newStage) return;
+
+    updateStage.mutate({ id: dealId, stage: newStage });
+  }
+
+  function handleDragOver(event: DragEndEvent) {
+    setOverStage((event.over?.id as DealStage) ?? null);
+  }
+
   const [movingDealId, setMovingDealId] = useState<string | null>(null);
-  // Sourced from the URL (not local state) so CommandPalette's "New deal"
-  // action (?new=1) opens the modal even when Pipeline is already mounted.
   const showNewDeal = searchParams.get("new") === "1";
   const { ref: boardRef, atStart, atEnd } = useHorizontalScrollEdges<HTMLDivElement>();
 
@@ -157,184 +360,144 @@ export default function Pipeline() {
       </div>
 
       {/* Board */}
-      <div className="relative">
-        {!atStart && (
-          <button
-            onClick={() => scrollBoardBy(-280)}
-            aria-label="Scroll pipeline stages left"
-            className="absolute left-0 top-1/2 z-10 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-surface shadow-warm-md text-ink-2 hover:text-ink"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-        )}
-        {!atEnd && (
-          <button
-            onClick={() => scrollBoardBy(280)}
-            aria-label="Scroll pipeline stages right — more stages available"
-            className="absolute right-0 top-1/2 z-10 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-surface shadow-warm-md text-ink-2 hover:text-ink animate-pulse"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        )}
-        {!atEnd && (
-          <div className="pointer-events-none absolute right-0 top-0 z-[5] h-full w-12 bg-gradient-to-l from-paper to-transparent" />
-        )}
+      <DndContext
+        sensors={sensors}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="relative">
+          {!atStart && (
+            <button
+              onClick={() => scrollBoardBy(-280)}
+              aria-label="Scroll pipeline stages left"
+              className="absolute left-0 top-1/2 z-10 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-surface shadow-warm-md text-ink-2 hover:text-ink"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+          )}
+          {!atEnd && (
+            <button
+              onClick={() => scrollBoardBy(280)}
+              aria-label="Scroll pipeline stages right — more stages available"
+              className="absolute right-0 top-1/2 z-10 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-surface shadow-warm-md text-ink-2 hover:text-ink animate-pulse"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          )}
+          {!atEnd && (
+            <div className="pointer-events-none absolute right-0 top-0 z-[5] h-full w-12 bg-gradient-to-l from-paper to-transparent" />
+          )}
 
-        <div
-          ref={boardRef}
-          role="region"
-          aria-label="Pipeline stages — six stages, scroll horizontally or use arrow keys for more"
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.target !== e.currentTarget) return;
-            if (e.key === "ArrowRight") scrollBoardBy(280);
-            if (e.key === "ArrowLeft") scrollBoardBy(-280);
-          }}
-          className="board-scroll flex gap-3 overflow-x-auto pb-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1 rounded-lg"
-        >
-        {dealStages.map((stage) => (
           <div
-            key={stage}
-            className="flex w-[260px] shrink-0 flex-col rounded-xl border border-hairline bg-surface-subtle"
+            ref={boardRef}
+            role="region"
+            aria-label="Pipeline stages — six stages, scroll horizontally or use arrow keys for more"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (e.key === "ArrowRight") scrollBoardBy(280);
+              if (e.key === "ArrowLeft") scrollBoardBy(-280);
+            }}
+            className="board-scroll flex gap-3 overflow-x-auto pb-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1 rounded-lg"
           >
-            {/* Column header */}
-            <div className="flex items-center justify-between px-3 py-2.5">
-              <div className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "inline-flex h-2 w-2 rounded-full",
-                    stage === "inbound" && "bg-ink-3",
-                    stage === "negotiating" && "bg-amber",
-                    stage === "contract_sent" && "bg-pine",
-                    stage === "live" && "bg-pine",
-                    stage === "delivered" && "bg-blue-500",
-                    stage === "paid" && "bg-pine"
-                  )}
-                />
-                <span className="text-[13px] font-semibold text-ink">
-                  {stageLabels[stage]}
-                </span>
-              </div>
-              <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-medium text-ink-3">
-                {byStage[stage]?.length ?? 0}
-              </span>
-            </div>
-
-            {/* Cards */}
-            <div className="flex flex-1 flex-col gap-2 px-2 pb-2">
-              {byStage[stage]?.map((deal) => (
-                <div
-                  key={deal.id}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Open ${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
-                  onClick={() => navigate(`/pipeline/${deal.id}`)}
-                  onKeyDown={(e) => {
-                    if (e.target !== e.currentTarget) return;
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      navigate(`/pipeline/${deal.id}`);
-                    }
-                  }}
-                  className="group cursor-pointer rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-all hover:border-pine/30 hover:shadow-warm-md focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-[12px] font-semibold text-ink-2">
-                        {deal.brand?.name ?? "Unknown brand"}
-                      </p>
-                      <p className="mt-0.5 truncate text-[13px] font-medium text-ink">
-                        {deal.title}
-                      </p>
-                    </div>
-                    <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-3 opacity-0 transition-opacity group-hover:opacity-100" />
+            {dealStages.map((stage) => (
+              <DroppableStageColumn
+                key={stage}
+                stage={stage}
+                isOver={overStage === stage && activeDragId !== null}
+              >
+                {/* Column header */}
+                <div className="flex items-center justify-between px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "inline-flex h-2 w-2 rounded-full",
+                        stage === "inbound" && "bg-ink-3",
+                        stage === "negotiating" && "bg-amber",
+                        stage === "contract_sent" && "bg-pine",
+                        stage === "live" && "bg-pine",
+                        stage === "delivered" && "bg-blue-500",
+                        stage === "paid" && "bg-pine"
+                      )}
+                    />
+                    <span className="text-[13px] font-semibold text-ink">
+                      {stageLabels[stage]}
+                    </span>
                   </div>
+                  <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-medium text-ink-3">
+                    {byStage[stage]?.length ?? 0}
+                  </span>
+                </div>
 
-                  <div className="mt-2 flex items-center gap-3">
-                    <div className="flex items-center gap-1 text-[12px] font-medium text-ink-2">
-                      <DollarSign className="h-3 w-3 text-ink-3" />
-                      {formatCents(deal.valueCents)}
-                    </div>
-                    {deal.platforms && deal.platforms.length > 0 && (
-                      <div className="flex gap-1">
-                        {deal.platforms.map((p) => (
-                          <span
-                            key={p}
-                            className={cn(
-                              "text-[10px] font-semibold uppercase tracking-wider",
-                              p === "twitch" && "text-twitch",
-                              p === "youtube" && "text-youtube",
-                              p === "kick" && "text-kick",
-                              p === "tiktok" && "text-ink-3"
-                            )}
-                          >
-                            {p}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                {/* Cards */}
+                <div className="flex flex-1 flex-col gap-2 px-2 pb-2">
+                  {byStage[stage]?.map((deal) => (
+                    <div key={deal.id} className="group">
+                      <DraggableDealCard
+                        deal={deal}
+                        onNavigate={(id) => navigate(`/pipeline/${id}`)}
+                      />
 
-                  {deal.notes && (
-                    <p className="mt-1.5 line-clamp-2 text-[11px] leading-4 text-ink-3">
-                      {deal.notes}
-                    </p>
-                  )}
-
-                  {/* Stage mover */}
-                  {movingDealId === deal.id ? (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {dealStages
-                        .filter((s) => s !== deal.stage)
-                        .map((s) => (
+                      {/* Stage mover (keyboard / screen-reader path) */}
+                      {movingDealId === deal.id ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {dealStages
+                            .filter((s) => s !== deal.stage)
+                            .map((s) => (
+                              <button
+                                key={s}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  updateStage.mutate({ id: deal.id, stage: s });
+                                  setMovingDealId(null);
+                                }}
+                                className={cn(
+                                  "rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
+                                  stageColors[s]
+                                )}
+                              >
+                                {stageLabels[s]}
+                              </button>
+                            ))}
                           <button
-                            key={s}
                             onClick={(e) => {
                               e.stopPropagation();
-                              updateStage.mutate({ id: deal.id, stage: s });
                               setMovingDealId(null);
                             }}
-                            className={cn(
-                              "rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
-                              stageColors[s]
-                            )}
+                            className="rounded px-1.5 py-0.5 text-[10px] text-ink-3 hover:bg-surface-subtle"
                           >
-                            {stageLabels[s]}
+                            Cancel
                           </button>
-                        ))}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setMovingDealId(null);
-                        }}
-                        className="rounded px-1.5 py-0.5 text-[10px] text-ink-3 hover:bg-surface-subtle"
-                      >
-                        Cancel
-                      </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMovingDealId(deal.id);
+                          }}
+                          className="mt-2 text-[11px] font-medium text-pine opacity-0 transition-opacity hover:text-pine-hover group-hover:opacity-100 focus:opacity-100"
+                        >
+                          Move…
+                        </button>
+                      )}
                     </div>
-                  ) : (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setMovingDealId(deal.id);
-                      }}
-                      className="mt-2 text-[11px] font-medium text-pine opacity-0 transition-opacity hover:text-pine-hover group-hover:opacity-100 focus:opacity-100"
-                    >
-                      Move…
-                    </button>
-                  )}
+                  ))}
                 </div>
-              ))}
-            </div>
+              </DroppableStageColumn>
+            ))}
           </div>
-        ))}
         </div>
-      </div>
+      </DndContext>
 
       {showNewDeal && <NewDealModal onClose={closeNewDeal} />}
     </div>
   );
 }
+
+/* ------------------------------------------------------------------ */
+//  New-deal modal (unchanged except for indentation fix)
+/* ------------------------------------------------------------------ */
 
 function NewDealModal({ onClose }: { onClose: () => void }) {
   const utils = trpc.useUtils();
