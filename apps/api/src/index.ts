@@ -23,6 +23,9 @@ async function shutdown(signal: string) {
 
   server.close(async () => {
     console.log("[server] HTTP server closed");
+    // Wait for in-flight job registration to settle before stopping pg-boss,
+    // so shutdown never races a still-registering boss instance.
+    await jobsPromise;
     await stopBoss();
     console.log("[jobs] pg-boss stopped");
     process.exit(0);
