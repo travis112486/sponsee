@@ -36,7 +36,9 @@ async function waitForMailpit(apiUrl: string, timeoutMs = 5000): Promise<void> {
     try {
       const res = await fetch(`${apiUrl}/api/v1/messages`);
       if (res.ok) return;
-    } catch {}
+    } catch {
+      // probe failure — keep polling
+    }
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error("Mailpit did not become ready in time");
