@@ -232,11 +232,47 @@ export async function runChaseTick(): Promise<number> {
       )
     );
 
-  for (const event of strandedSending) {
-    await db
-      .update(chaseEvents)
-      .set({ status: "failed", updatedAt: new Date() })
-      .where(eq(chaseEvents.id, event.id));
+  if (strandedSending.length > 0) {
+    const boss = await getBoss();
+    for (const event of strandedSending) {
+      await db
+        .update(chaseEvents)
+        .set({ status: "failed", updatedAt: new Date() })
+        .where(eq(chaseEvents.id, event.id));
+
+      // Re-enqueue so the retry worker can pick it up.
+      // singletonKey deduplicates against any surviving original job.
+      const invoice = await db.query.invoices.findFirst({
+        where: (i, { eq }) => eq(i.id, event.invoiceId),
+      });
+      if (!invoice) continue;
+
+      const fromEmail = process.env.CHASE_FROM_EMAIL || "chase@sponsee.app";
+      const idempotencyKey =
+        event.idempotencyKey || `invoice:${event.invoiceId}:step:${event.step}`;
+
+      await boss.send(
+        "chase-send",
+        {
+          chaseEventId: event.id,
+          invoiceId: event.invoiceId,
+          step: event.step,
+          toEmail: event.toEmail || "",
+          fromEmail,
+          replyToEmail: fromEmail,
+          subject: event.subjectSnapshot || "",
+          body: event.bodySnapshot || "",
+          idempotencyKey,
+        },
+        {
+          singletonKey: idempotencyKey,
+          singletonSeconds: 3600,
+          retryLimit: 3,
+          retryDelay: 30,
+          retryBackoff: true,
+        }
+      );
+    }
   }
 
   return created;

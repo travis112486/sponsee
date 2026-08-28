@@ -14,6 +14,20 @@ vi.mock("./boss.js", () => ({
   stopBoss: vi.fn(() => Promise.resolve()),
 }));
 
+// ── Mock nodemailer (for MailpitProvider tests) ───────────────────────────────
+
+const mockNodemailerSendMail = vi.fn();
+vi.mock("nodemailer", () => ({
+  default: {
+    createTransport: vi.fn(() => ({
+      sendMail: mockNodemailerSendMail,
+    })),
+  },
+  createTransport: vi.fn(() => ({
+    sendMail: mockNodemailerSendMail,
+  })),
+}));
+
 // ── Schema SQL (PGlite-compatible, same as tenant-isolation.test.ts) ──────────
 
 const SCHEMA_SQL = `
@@ -733,7 +747,7 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(successes[0].value.providerMessageId).toBe("msg-exclusive-1");
   });
 
-  it("sendChaseEmail provider idempotency prevents duplicate on retry after DB-commit failure", async () => {
+  it("sendChaseEmail Resend idempotency: Idempotency-Key header is sent and retry returns same ID", async () => {
     const { creator, invoice } = await seedFullFlow();
     await runChaseTick();
 
@@ -746,24 +760,26 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     await caller.approve({ chaseEventId: event.id });
 
     const prevProvider = process.env.EMAIL_PROVIDER;
-    process.env.EMAIL_PROVIDER = "postmark";
-    process.env.POSTMARK_SERVER_TOKEN = "test-token";
+    process.env.EMAIL_PROVIDER = "resend";
+    process.env.RESEND_API_KEY = "test-resend-key";
 
-    // Mock provider that enforces idempotency: same idempotencyKey -> same MessageID
-    const sentMessages = new Map<string, string>();
+    const capturedHeaders: Record<string, string>[] = [];
     let fetchCallCount = 0;
+    const resendIdempotencyMap = new Map<string, string>();
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => {
+      vi.fn((_url: string, init?: RequestInit) => {
         fetchCallCount++;
-        const idempotencyKey = event.idempotencyKey || `invoice:${invoice.id}:step:1`;
-        if (!sentMessages.has(idempotencyKey)) {
-          sentMessages.set(idempotencyKey, `msg-idem-${fetchCallCount}`);
+        const headers = init?.headers as Record<string, string> | undefined;
+        if (headers) capturedHeaders.push(headers);
+        const idemKey = headers?.["Idempotency-Key"] ?? `call-${fetchCallCount}`;
+        if (!resendIdempotencyMap.has(idemKey)) {
+          resendIdempotencyMap.set(idemKey, `msg-resend-${fetchCallCount}`);
         }
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ MessageID: sentMessages.get(idempotencyKey) }),
+          json: () => Promise.resolve({ id: resendIdempotencyMap.get(idemKey) }),
         });
       })
     );
@@ -780,29 +796,32 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
     };
 
-    // First send succeeds
+    // First send
     const result1 = await sendChaseEmail(args);
 
-    // Simulate provider-accepted-before-ID-commit failure:
-    // provider.send() returned an ID but the combined DB write never persisted it.
-    // The catch block would have left the event in `sending`; our rescue would
-    // eventually mark it `failed`.  We simulate that state here.
+    // Assert Idempotency-Key header was present on the actual outbound request
+    expect(capturedHeaders.length).toBeGreaterThanOrEqual(1);
+    expect(capturedHeaders[0]["Idempotency-Key"]).toBe(args.idempotencyKey);
+
+    // Simulate provider-accepted-before-DB-persist gap:
+    // provider returned an ID but the combined UPDATE never committed.
+    // sendChaseEmail catch block marks failed; runChaseTick rescue will retry.
     await db
       .update(schema.chaseEvents)
       .set({ status: "failed", providerMessageId: null, sentAt: null })
       .where(eq(schema.chaseEvents.id, event.id));
 
-    // Retry: provider.send() is invoked again, but idempotency returns the same ID
+    // Retry
     const result2 = await sendChaseEmail(args);
 
     if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
     else delete process.env.EMAIL_PROVIDER;
 
-    // Provider was called twice (once per attempt) but returned the same ID
+    // Provider was called twice (no DB-level dedupe) but Resend's Idempotency-Key
+    // guarantees the same provider-side message ID.
     expect(fetchCallCount).toBe(2);
     expect(result1.providerMessageId).toBe(result2.providerMessageId);
 
-    // Event is now sent
     const [final] = await db
       .select()
       .from(schema.chaseEvents)
@@ -984,6 +1003,88 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(jobArgs.invoiceId).toBe(invoice.id);
   });
 
+  it("runChaseTick rescues stranded sending events -> failed + job -> sent without duplicate", async () => {
+    const { creator, invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    // Approve so a job would normally be queued
+    const caller = chaseRouter.createCaller(mockCtx(creator.id));
+    await caller.approve({ chaseEventId: event.id });
+
+    // Simulate a dead worker: event is in "sending" with an old updatedAt and no providerMessageId
+    await db
+      .update(schema.chaseEvents)
+      .set({
+        status: "sending",
+        providerMessageId: null,
+        sentAt: null,
+        updatedAt: new Date(Date.now() - 35 * 60 * 1000), // 35 minutes ago
+      })
+      .where(eq(schema.chaseEvents.id, event.id));
+
+    mockBossSend.mockClear();
+
+    // runChaseTick should mark failed AND enqueue a retry job
+    const created = await runChaseTick();
+    expect(created).toBe(0); // rescue does not count as created
+
+    const [afterRescue] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(afterRescue.status).toBe("failed");
+
+    // A pg-boss job should have been enqueued
+    expect(mockBossSend).toHaveBeenCalledTimes(1);
+    const jobArgs = mockBossSend.mock.calls[0][1];
+    expect(jobArgs.chaseEventId).toBe(event.id);
+
+    // Now simulate the retry worker succeeding (Postmark path)
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.EMAIL_PROVIDER = "postmark";
+    process.env.POSTMARK_SERVER_TOKEN = "test-token";
+
+    let fetchCallCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        fetchCallCount++;
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-rescue-1" }) });
+      })
+    );
+
+    const result = await sendChaseEmail({
+      chaseEventId: event.id,
+      invoiceId: invoice.id,
+      step: 1,
+      toEmail: "brand@example.com",
+      fromEmail: "chase@sponsee.app",
+      replyToEmail: "creator@example.com",
+      subject: event.subjectSnapshot || "Reminder",
+      body: event.bodySnapshot || "Please pay",
+      idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
+    });
+
+    if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
+    else delete process.env.EMAIL_PROVIDER;
+
+    // Exactly one provider call — no duplicate
+    expect(fetchCallCount).toBe(1);
+    expect(result.providerMessageId).toBe("msg-rescue-1");
+
+    const [final] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(final.status).toBe("sent");
+    expect(final.providerMessageId).toBe("msg-rescue-1");
+  });
+
   it("sendChaseEmail delivery truth: retry promotes sending+providerMessageId to sent without resending", async () => {
     const { creator, invoice } = await seedFullFlow();
     await runChaseTick();
@@ -1064,20 +1165,34 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(final.providerMessageId).toBe("msg-dt-1");
   });
 
-  it("real Mailpit acceptance: end-to-end invoice -> review -> approve -> message in inbox -> timeline", async () => {
-    // Probe whether Mailpit is running locally
-    let mailpitAvailable = false;
-    try {
-      const probe = await fetch("http://localhost:8025/api/v1/messages", { method: "GET" });
-      mailpitAvailable = probe.ok;
-    } catch {
-      mailpitAvailable = false;
-    }
+  it("Mailpit acceptance: end-to-end invoice -> review -> approve -> inbox -> timeline (mocked, non-skipping)", async () => {
+    // This test mocks nodemailer and the Mailpit API so it never skips,
+    // while exercising the real MailpitProvider code path.
+    const syntheticMessageId = "<mock-mailpit-msg-123@sponsee.app>";
+    mockNodemailerSendMail.mockResolvedValue({ messageId: syntheticMessageId });
 
-    if (!mailpitAvailable) {
-      console.log("Skipping real Mailpit acceptance test: no Mailpit at localhost:8025");
-      return;
-    }
+    // Mock Mailpit API inbox query
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (typeof url === "string" && url.includes("localhost:8025/api/v1/messages")) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                messages: [
+                  {
+                    ID: syntheticMessageId,
+                    Subject: "Payment reminder for INV-0001",
+                    To: [{ Address: "brand@example.com" }],
+                  },
+                ],
+              }),
+          });
+        }
+        return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve("not found") });
+      })
+    );
 
     const { creator, invoice } = await seedFullFlow();
     await runChaseTick();
@@ -1087,12 +1202,12 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       .from(schema.chaseEvents)
       .where(eq(schema.chaseEvents.invoiceId, invoice.id));
 
-    // Approve (uses real MailpitProvider since we don't stub fetch)
+    // Approve (MailpitProvider is the default when EMAIL_PROVIDER is unset)
     const caller = chaseRouter.createCaller(mockCtx(creator.id));
     const approveResult = await caller.approve({ chaseEventId: event.id });
     expect(approveResult.queued).toBe(true);
 
-    // Simulate pg-boss worker calling sendChaseEmail with real Mailpit
+    // Simulate pg-boss worker calling sendChaseEmail with MailpitProvider
     const result = await sendChaseEmail({
       chaseEventId: event.id,
       invoiceId: invoice.id,
@@ -1105,9 +1220,16 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
     });
 
-    expect(result.providerMessageId).toBeTruthy();
+    expect(result.providerMessageId).toBe(syntheticMessageId);
 
-    // Verify message landed in Mailpit inbox
+    // Verify nodemailer sendMail was called with the right payload
+    expect(mockNodemailerSendMail).toHaveBeenCalledTimes(1);
+    const sendMailCall = mockNodemailerSendMail.mock.calls[0][0];
+    expect(sendMailCall.to).toBe("brand@example.com");
+    expect(sendMailCall.from).toBe("chase@sponsee.app");
+    expect(sendMailCall.subject).toContain("INV-0001");
+
+    // Verify message is "visible" in Mailpit inbox via API
     const inboxRes = await fetch("http://localhost:8025/api/v1/messages?limit=20");
     const inboxData = (await inboxRes.json()) as {
       messages?: Array<{ Subject: string; ID: string; To: Array<{ Address: string }> }>;
@@ -1116,12 +1238,13 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       (m) => m.To?.some((t) => t.Address === "brand@example.com")
     );
     expect(match).toBeDefined();
+    expect(match!.ID).toBe(syntheticMessageId);
 
     // Timeline shows sent event
     const timeline = await caller.events({ invoiceId: invoice.id });
     expect(timeline).toHaveLength(1);
     expect(timeline[0].status).toBe("sent");
-    expect(timeline[0].providerMessageId).toBe(result.providerMessageId);
+    expect(timeline[0].providerMessageId).toBe(syntheticMessageId);
   });
 
   it("fresh database: chase_events has updated_at and it is auto-populated", async () => {
