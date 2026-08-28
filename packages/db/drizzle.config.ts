@@ -5,6 +5,12 @@ export default defineConfig({
   out: "./drizzle",
   dialect: "postgresql",
   dbCredentials: {
-    url: process.env.DATABASE_URL || "postgresql://localhost:5432/sponsee",
+    // Migrations must use the direct (non-pooled) connection: Neon's pooled
+    // endpoint (-pooler) runs PgBouncer in transaction mode, which breaks
+    // drizzle-kit's session-level operations.
+    url:
+      process.env.DATABASE_URL_UNPOOLED ||
+      process.env.DATABASE_URL ||
+      "postgresql://localhost:5432/sponsee",
   },
 });
