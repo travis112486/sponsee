@@ -5,6 +5,8 @@ import { eq, and, desc } from "drizzle-orm";
 import { runChaseTick, sendChaseEmail } from "./chase-tick.js";
 import { chaseRouter } from "../routers/chase.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
+import { spawn, type ChildProcess } from "child_process";
+import { createServer } from "net";
 
 // ── Mock pg-boss (no DATABASE_URL in test env) ───────────────────────────────
 
@@ -14,19 +16,48 @@ vi.mock("./boss.js", () => ({
   stopBoss: vi.fn(() => Promise.resolve()),
 }));
 
-// ── Mock nodemailer (for MailpitProvider tests) ───────────────────────────────
+// ── Mailpit lifecycle helpers (real instance for acceptance test) ─────────────
 
-const mockNodemailerSendMail = vi.fn();
-vi.mock("nodemailer", () => ({
-  default: {
-    createTransport: vi.fn(() => ({
-      sendMail: mockNodemailerSendMail,
-    })),
-  },
-  createTransport: vi.fn(() => ({
-    sendMail: mockNodemailerSendMail,
-  })),
-}));
+async function getFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+      server.close(() => resolve(port));
+    });
+    server.on("error", reject);
+  });
+}
+
+async function waitForMailpit(apiUrl: string, timeoutMs = 5000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${apiUrl}/api/v1/messages`);
+      if (res.ok) return;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("Mailpit did not become ready in time");
+}
+
+function startMailpit(smtpPort: number, httpPort: number): ChildProcess {
+  return spawn("/opt/homebrew/bin/mailpit", [
+    "-s", `127.0.0.1:${smtpPort}`,
+    "-l", `127.0.0.1:${httpPort}`,
+    "-d", "/tmp/mailpit-integration-test.db",
+    "-q",
+  ], { stdio: "ignore" });
+}
+
+async function stopMailpit(proc: ChildProcess): Promise<void> {
+  if (!proc.killed) {
+    proc.kill("SIGTERM");
+    await new Promise((r) => setTimeout(r, 500));
+    if (!proc.killed) proc.kill("SIGKILL");
+  }
+}
 
 // ── Schema SQL (PGlite-compatible, same as tenant-isolation.test.ts) ──────────
 
@@ -1165,86 +1196,74 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(final.providerMessageId).toBe("msg-dt-1");
   });
 
-  it("Mailpit acceptance: end-to-end invoice -> review -> approve -> inbox -> timeline (mocked, non-skipping)", async () => {
-    // This test mocks nodemailer and the Mailpit API so it never skips,
-    // while exercising the real MailpitProvider code path.
-    const syntheticMessageId = "<mock-mailpit-msg-123@sponsee.app>";
-    mockNodemailerSendMail.mockResolvedValue({ messageId: syntheticMessageId });
+  it("Mailpit acceptance: end-to-end invoice -> review -> approve -> real inbox -> timeline", async () => {
+    const smtpPort = await getFreePort();
+    const httpPort = await getFreePort();
+    const apiUrl = `http://127.0.0.1:${httpPort}`;
 
-    // Mock Mailpit API inbox query
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((url: string) => {
-        if (typeof url === "string" && url.includes("localhost:8025/api/v1/messages")) {
-          return Promise.resolve({
-            ok: true,
-            json: () =>
-              Promise.resolve({
-                messages: [
-                  {
-                    ID: syntheticMessageId,
-                    Subject: "Payment reminder for INV-0001",
-                    To: [{ Address: "brand@example.com" }],
-                  },
-                ],
-              }),
-          });
-        }
-        return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve("not found") });
-      })
-    );
+    const prevSmtpHost = process.env.MAILPIT_SMTP_HOST;
+    const prevSmtpPort = process.env.MAILPIT_SMTP_PORT;
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.MAILPIT_SMTP_HOST = "127.0.0.1";
+    process.env.MAILPIT_SMTP_PORT = String(smtpPort);
+    delete process.env.EMAIL_PROVIDER; // force MailpitProvider
 
-    const { creator, invoice } = await seedFullFlow();
-    await runChaseTick();
+    const mailpit = startMailpit(smtpPort, httpPort);
+    try {
+      await waitForMailpit(apiUrl, 5000);
 
-    const [event] = await db
-      .select()
-      .from(schema.chaseEvents)
-      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+      const { creator, invoice } = await seedFullFlow();
+      await runChaseTick();
 
-    // Approve (MailpitProvider is the default when EMAIL_PROVIDER is unset)
-    const caller = chaseRouter.createCaller(mockCtx(creator.id));
-    const approveResult = await caller.approve({ chaseEventId: event.id });
-    expect(approveResult.queued).toBe(true);
+      const [event] = await db
+        .select()
+        .from(schema.chaseEvents)
+        .where(eq(schema.chaseEvents.invoiceId, invoice.id));
 
-    // Simulate pg-boss worker calling sendChaseEmail with MailpitProvider
-    const result = await sendChaseEmail({
-      chaseEventId: event.id,
-      invoiceId: invoice.id,
-      step: 1,
-      toEmail: "brand@example.com",
-      fromEmail: "chase@sponsee.app",
-      replyToEmail: "creator@example.com",
-      subject: event.subjectSnapshot || "Reminder",
-      body: event.bodySnapshot || "Please pay",
-      idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
-    });
+      const caller = chaseRouter.createCaller(mockCtx(creator.id));
+      const approveResult = await caller.approve({ chaseEventId: event.id });
+      expect(approveResult.queued).toBe(true);
 
-    expect(result.providerMessageId).toBe(syntheticMessageId);
+      // sendChaseEmail uses the real MailpitProvider because EMAIL_PROVIDER is unset
+      const result = await sendChaseEmail({
+        chaseEventId: event.id,
+        invoiceId: invoice.id,
+        step: 1,
+        toEmail: "brand@example.com",
+        fromEmail: "chase@sponsee.app",
+        replyToEmail: "creator@example.com",
+        subject: event.subjectSnapshot || "Reminder",
+        body: event.bodySnapshot || "Please pay",
+        idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
+      });
 
-    // Verify nodemailer sendMail was called with the right payload
-    expect(mockNodemailerSendMail).toHaveBeenCalledTimes(1);
-    const sendMailCall = mockNodemailerSendMail.mock.calls[0][0];
-    expect(sendMailCall.to).toBe("brand@example.com");
-    expect(sendMailCall.from).toBe("chase@sponsee.app");
-    expect(sendMailCall.subject).toContain("INV-0001");
+      expect(result.providerMessageId).toBeTruthy();
 
-    // Verify message is "visible" in Mailpit inbox via API
-    const inboxRes = await fetch("http://localhost:8025/api/v1/messages?limit=20");
-    const inboxData = (await inboxRes.json()) as {
-      messages?: Array<{ Subject: string; ID: string; To: Array<{ Address: string }> }>;
-    };
-    const match = inboxData.messages?.find(
-      (m) => m.To?.some((t) => t.Address === "brand@example.com")
-    );
-    expect(match).toBeDefined();
-    expect(match!.ID).toBe(syntheticMessageId);
+      // Verify message landed in the real Mailpit inbox
+      const inboxRes = await fetch(`${apiUrl}/api/v1/messages?limit=20`);
+      const inboxData = (await inboxRes.json()) as {
+        messages?: Array<{ Subject: string; ID: string; To: Array<{ Address: string }> }>;
+      };
+      const match = inboxData.messages?.find(
+        (m) => m.To?.some((t) => t.Address === "brand@example.com")
+      );
+      expect(match).toBeDefined();
+      expect(match!.Subject).toContain("INV-0001");
 
-    // Timeline shows sent event
-    const timeline = await caller.events({ invoiceId: invoice.id });
-    expect(timeline).toHaveLength(1);
-    expect(timeline[0].status).toBe("sent");
-    expect(timeline[0].providerMessageId).toBe(syntheticMessageId);
+      // Timeline shows sent event
+      const timeline = await caller.events({ invoiceId: invoice.id });
+      expect(timeline).toHaveLength(1);
+      expect(timeline[0].status).toBe("sent");
+      expect(timeline[0].providerMessageId).toBe(result.providerMessageId);
+    } finally {
+      await stopMailpit(mailpit);
+      if (prevSmtpHost !== undefined) process.env.MAILPIT_SMTP_HOST = prevSmtpHost;
+      else delete process.env.MAILPIT_SMTP_HOST;
+      if (prevSmtpPort !== undefined) process.env.MAILPIT_SMTP_PORT = prevSmtpPort;
+      else delete process.env.MAILPIT_SMTP_PORT;
+      if (prevProvider !== undefined) process.env.EMAIL_PROVIDER = prevProvider;
+      else delete process.env.EMAIL_PROVIDER;
+    }
   });
 
   it("fresh database: chase_events has updated_at and it is auto-populated", async () => {
