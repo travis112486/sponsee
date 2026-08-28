@@ -68,51 +68,6 @@ describe("MailpitProvider", () => {
   it("ingestWebhook returns null", () => {
     expect(provider.ingestWebhook({})).toBeNull();
   });
-
-  it("sends real message to Mailpit when available", async () => {
-    // Probe whether Mailpit is running locally
-    let mailpitAvailable = false;
-    try {
-      const probe = await fetch("http://localhost:8025/api/v1/messages", { method: "GET" });
-      mailpitAvailable = probe.ok;
-    } catch {
-      mailpitAvailable = false;
-    }
-
-    if (!mailpitAvailable) {
-      console.log("Skipping real Mailpit test: no Mailpit instance at localhost:8025");
-      return;
-    }
-
-    // Temporarily delegate the mock to real nodemailer so we exercise the full provider stack
-    const realNodemailer = await vi.importActual<typeof import("nodemailer")>("nodemailer");
-    mockSendMail.mockImplementation(async (...args) => {
-      const transporter = (realNodemailer as any).default.createTransport({
-        host: "localhost",
-        port: 1025,
-        secure: false,
-        tls: { rejectUnauthorized: false },
-      });
-      return transporter.sendMail(...args);
-    });
-
-    const realProvider = new MailpitProvider("localhost", 1025);
-    const result = await realProvider.send({
-      to: "test-brand@example.com",
-      from: "chase@sponsee.app",
-      replyTo: "creator@example.com",
-      subject: "SPO-30 real Mailpit acceptance",
-      text: "This is a real Mailpit acceptance test.",
-    });
-
-    expect(result.providerMessageId).toBeTruthy();
-
-    // Verify the message landed in the Mailpit inbox
-    const inbox = await fetch("http://localhost:8025/api/v1/messages?limit=10");
-    const data = (await inbox.json()) as { messages?: Array<{ Subject: string; ID: string }> };
-    const match = data.messages?.find((m) => m.Subject === "SPO-30 real Mailpit acceptance");
-    expect(match).toBeDefined();
-  });
 });
 
 describe("PostmarkProvider", () => {

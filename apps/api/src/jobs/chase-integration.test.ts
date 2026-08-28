@@ -5,8 +5,10 @@ import { eq, and, desc } from "drizzle-orm";
 import { runChaseTick, sendChaseEmail } from "./chase-tick.js";
 import { chaseRouter } from "../routers/chase.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess, execSync } from "child_process";
 import { createServer } from "net";
+import { existsSync } from "fs";
+import { join } from "path";
 
 // ── Mock pg-boss (no DATABASE_URL in test env) ───────────────────────────────
 
@@ -44,11 +46,35 @@ async function waitForMailpit(apiUrl: string, timeoutMs = 5000): Promise<void> {
   throw new Error("Mailpit did not become ready in time");
 }
 
+function findMailpitBinary(): string {
+  const candidates = [
+    process.env.MAILPIT_BINARY,
+    "/opt/homebrew/bin/mailpit",
+    "/usr/local/bin/mailpit",
+  ];
+  for (const c of candidates) {
+    if (c && existsSync(c)) return c;
+  }
+  try {
+    const found = execSync("command -v mailpit", { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }).trim();
+    if (found) return found;
+  } catch {
+    // fall through
+  }
+  throw new Error(
+    "mailpit binary not found. Install Mailpit (https://mailpit.axllent.org/) or set MAILPIT_BINARY env var."
+  );
+}
+
 function startMailpit(smtpPort: number, httpPort: number): ChildProcess {
-  return spawn("/opt/homebrew/bin/mailpit", [
+  const binary = findMailpitBinary();
+  const dbPath = process.env.PAPERCLIP_RUN_SCRATCH_DIR
+    ? join(process.env.PAPERCLIP_RUN_SCRATCH_DIR, "mailpit-integration-test.db")
+    : "/tmp/mailpit-integration-test.db";
+  return spawn(binary, [
     "-s", `127.0.0.1:${smtpPort}`,
     "-l", `127.0.0.1:${httpPort}`,
-    "-d", "/tmp/mailpit-integration-test.db",
+    "-d", dbPath,
     "-q",
   ], { stdio: "ignore" });
 }
