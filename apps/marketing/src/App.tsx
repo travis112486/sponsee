@@ -187,6 +187,9 @@ export default function App() {
             <a href="#product" className="text-sm text-ink-2 hover:text-ink transition">Product</a>
             <a href="#pricing" className="text-sm text-ink-2 hover:text-ink transition">Pricing</a>
             <a href="#faq" className="text-sm text-ink-2 hover:text-ink transition">FAQ</a>
+            <a href="/blog/rate-calculator-for-streamers.html" className="text-sm text-ink-2 hover:text-ink transition">Rate Calculator</a>
+            <a href="/blog/pricing-your-first-sponsorship.html" className="text-sm text-ink-2 hover:text-ink transition">Pricing Guide</a>
+            <a href="/blog/how-to-chase-late-payments.html" className="text-sm text-ink-2 hover:text-ink transition">Chase Guide</a>
           </nav>
           <button
             onClick={scrollToWaitlist}
@@ -330,6 +333,11 @@ export default function App() {
               <CheckItem>See your past deals against the benchmark band</CheckItem>
               <CheckItem>The &quot;we usually do $200 flat&quot; reply-guy rate stops working on you</CheckItem>
             </ul>
+            <div className="mt-4">
+              <a href="/blog/rate-calculator-for-streamers.html" className="text-sm font-medium text-pine hover:underline">
+                Try the free rate calculator →
+              </a>
+            </div>
           </div>
           <div className="md:col-span-3">
             <BrowserFrame label="calculator.sponsee.app">
@@ -392,6 +400,11 @@ export default function App() {
             </ul>
             <div className="mt-6 rounded-[10px] bg-pine-tint p-4 text-sm text-pine">
               <strong>Sponsee never holds your money.</strong> Invoices point to your own PayPal / Wise / bank details; brands pay you directly.
+            </div>
+            <div className="mt-4">
+              <a href="/blog/how-to-chase-late-payments.html" className="text-sm font-medium text-pine hover:underline">
+                Read the chase guide →
+              </a>
             </div>
           </div>
         </div>
@@ -468,6 +481,42 @@ export default function App() {
               <p className="text-ink-2 leading-relaxed">{body}</p>
             </div>
           ))}
+        </div>
+      </Section>
+
+      {/* Free guides */}
+      <Section id="guides" alt>
+        <h2 className="font-serif text-[30px] md:text-[40px] leading-tight text-ink text-center mb-12">
+          Free tools &amp; guides.
+        </h2>
+        <div className="grid md:grid-cols-3 gap-6 max-w-[960px] mx-auto">
+          <a
+            href="/blog/rate-calculator-for-streamers.html"
+            className="rounded-[14px] border border-hairline bg-surface shadow-warm-md p-6 hover:border-pine transition"
+          >
+            <h3 className="font-sans text-lg font-semibold text-ink mb-2">Rate Calculator</h3>
+            <p className="text-ink-2 leading-relaxed text-sm">
+              Calculate what to charge for Twitch, YouTube Live, TikTok Live, and Kick sponsorships using real CPVH benchmarks.
+            </p>
+          </a>
+          <a
+            href="/blog/pricing-your-first-sponsorship.html"
+            className="rounded-[14px] border border-hairline bg-surface shadow-warm-md p-6 hover:border-pine transition"
+          >
+            <h3 className="font-sans text-lg font-semibold text-ink mb-2">Pricing Your First Sponsorship</h3>
+            <p className="text-ink-2 leading-relaxed text-sm">
+              How much should you charge for your first brand deal? A data-backed guide for streamers with 100–5,000 viewers.
+            </p>
+          </a>
+          <a
+            href="/blog/how-to-chase-late-payments.html"
+            className="rounded-[14px] border border-hairline bg-surface shadow-warm-md p-6 hover:border-pine transition"
+          >
+            <h3 className="font-sans text-lg font-semibold text-ink mb-2">How to Chase Late Payments</h3>
+            <p className="text-ink-2 leading-relaxed text-sm">
+              The three-email ladder that gets you paid without burning bridges — and the exact scripts to copy.
+            </p>
+          </a>
         </div>
       </Section>
 
@@ -591,6 +640,9 @@ export default function App() {
               <p className="text-sm text-ink-3">The sponsorship CRM for streamers.</p>
             </div>
             <div className="flex flex-wrap gap-6 text-sm text-ink-2">
+              <a href="/blog/rate-calculator-for-streamers.html" className="hover:text-ink transition">Rate Calculator</a>
+              <a href="/blog/pricing-your-first-sponsorship.html" className="hover:text-ink transition">Pricing Guide</a>
+              <a href="/blog/how-to-chase-late-payments.html" className="hover:text-ink transition">Chase Late Payments</a>
               <a href="/privacy.html" className="hover:text-ink transition">Privacy</a>
               <a href="/terms.html" className="hover:text-ink transition">Terms</a>
               <a href="mailto:hello@sponsee.app" className="hover:text-ink transition">Contact</a>
