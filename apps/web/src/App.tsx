@@ -8,6 +8,7 @@ const Pipeline = lazy(() => import("./pages/Pipeline"));
 const DealDetail = lazy(() => import("./pages/DealDetail"));
 const Payments = lazy(() => import("./pages/Payments"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const LoginPage = lazy(() => import("./pages/auth/LoginPage"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
@@ -67,6 +68,14 @@ export default function App() {
           }
         />
         <Route
+          path="calendar"
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <CalendarPage />
+            </Suspense>
+          }
+        />
+        <Route
           path="settings"
           element={
             <Suspense fallback={<PageSpinner />}>
@@ -74,9 +83,7 @@ export default function App() {
             </Suspense>
           }
         />
-        {/* Calendar and the full Rate Calculator are approved post-beta scope
-            (SPO-5 §10) — no half-wired screens in beta (D-005). */}
-        <Route path="calendar" element={<Navigate to="/" replace />} />
+        {/* Rate Calculator remains post-beta scope (SPO-5 §10). */}
         <Route path="calculator" element={<Navigate to="/" replace />} />
         <Route
           path="*"
