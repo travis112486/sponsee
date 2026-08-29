@@ -37,6 +37,30 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
+  test:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      # apps/* import @sponsee/db and @sponsee/shared through their `dist`
+      # entrypoints and dist/ is gitignored, so without this the suite dies on
+      # "Cannot find package '@sponsee/db'". Only the libraries are built — the
+      # web bundle is the `build` job's business.
+      - run: pnpm --filter "./packages/*" build
+      # Deliberately no DATABASE_URL: packages/db falls back to in-memory PGlite
+      # when it is unset, and that is what the integration tests are written
+      # against. Pointing them at a real Postgres would silently change what
+      # they exercise.
+      - run: pnpm test
+
   db-check:
     runs-on: ubuntu-latest
     needs: lint-and-typecheck
