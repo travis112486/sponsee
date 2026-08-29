@@ -13,6 +13,20 @@ import { TRPCError } from "@trpc/server";
 
 const CHASE_SEND_JOB = "chase-send";
 
+// `status = approved` is claimed atomically *before* boss.send() resolves, and
+// is reverted if that enqueue fails. So an overlapping request that merely sees
+// `approved` has no idea whether a durable job exists yet. It waits for the
+// in-flight winner to resolve (enqueuedAt written, or status reverted) instead
+// of reporting a "queued" it cannot vouch for.
+const APPROVE_INFLIGHT_TIMEOUT_MS = 3000;
+const APPROVE_INFLIGHT_POLL_MS = 25;
+
+// Statuses only reachable after the chase-send job was picked up off the queue,
+// which itself proves the enqueue succeeded durably.
+const POST_ENQUEUE_STATUSES = new Set(["sending", "sent", "delivered", "opened"]);
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export const chaseRouter = createTRPCRouter({
   // ── Templates ──
   templates: creatorScopedProcedure.query(async ({ ctx }) => {
@@ -172,101 +186,141 @@ export const chaseRouter = createTRPCRouter({
   approve: creatorScopedProcedure
     .input(z.object({ chaseEventId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const [event] = await ctx.db
-        .select()
-        .from(chaseEvents)
-        .innerJoin(invoices, eq(chaseEvents.invoiceId, invoices.id))
-        .where(
-          and(
-            eq(chaseEvents.id, input.chaseEventId),
-            eq(invoices.creatorId, ctx.creatorId)
-          )
-        );
+      const inflightDeadline = Date.now() + APPROVE_INFLIGHT_TIMEOUT_MS;
 
-      if (!event) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Chase event not found" });
-      }
+      // Re-read on every attempt: a concurrent approve can claim the event, then
+      // either finish its enqueue (durable) or fail and hand the event back.
+      for (;;) {
+        const [event] = await ctx.db
+          .select()
+          .from(chaseEvents)
+          .innerJoin(invoices, eq(chaseEvents.invoiceId, invoices.id))
+          .where(
+            and(
+              eq(chaseEvents.id, input.chaseEventId),
+              eq(invoices.creatorId, ctx.creatorId)
+            )
+          );
 
-      const chaseEvent = event.chase_events;
-      if (chaseEvent.status === "approved") {
-        // Idempotent repeat: the first approve already claimed the event and
-        // enqueued the send job. Return success instead of erroring so a
-        // double-click never surfaces a spurious failure (the job layer's
-        // atomic claim + pg-boss singletonKey already prevent a second message).
-        return { success: true, queued: true, alreadyQueued: true };
-      }
+        if (!event) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Chase event not found" });
+        }
 
-      if (chaseEvent.status !== "awaiting_review") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: `Event is ${chaseEvent.status}` });
-      }
+        const chaseEvent = event.chase_events;
 
-      if (!chaseEvent.toEmail) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "No recipient email configured" });
-      }
+        // The worker already pulled the job off the queue — the enqueue is proven.
+        if (POST_ENQUEUE_STATUSES.has(chaseEvent.status)) {
+          return { success: true, queued: true, alreadyQueued: true };
+        }
 
-      // Atomic claim: only one request can move from awaiting_review -> approved
-      const [claimed] = await ctx.db
-        .update(chaseEvents)
-        .set({ status: "approved", updatedAt: new Date() })
-        .where(and(eq(chaseEvents.id, input.chaseEventId), eq(chaseEvents.status, "awaiting_review")))
-        .returning();
+        if (chaseEvent.status === "approved") {
+          if (chaseEvent.enqueuedAt) {
+            // Idempotent repeat: a previous approve durably enqueued the send
+            // job, so a double-click never surfaces a spurious failure (the job
+            // layer's atomic claim + pg-boss singletonKey prevent a second message).
+            return { success: true, queued: true, alreadyQueued: true };
+          }
 
-      if (!claimed) {
-        throw new TRPCError({ code: "CONFLICT", message: "Event already claimed or processed" });
-      }
+          // Claimed, but the winner's boss.send() has not resolved yet. Reporting
+          // "queued" here would be a lie if that enqueue then fails and reverts
+          // the event. Wait for the winner to settle one way or the other.
+          if (Date.now() >= inflightDeadline) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "An approval for this chase email is still being queued. Please retry.",
+            });
+          }
+          await sleep(APPROVE_INFLIGHT_POLL_MS);
+          continue;
+        }
 
-      const fromEmail = process.env.CHASE_FROM_EMAIL || "chase@sponsee.app";
-      const replyToEmail = ctx.session.user.email || fromEmail;
-      const idempotencyKey = chaseEvent.idempotencyKey || `invoice:${event.invoices.id}:step:${chaseEvent.step}`;
+        if (chaseEvent.status !== "awaiting_review") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `Event is ${chaseEvent.status}` });
+        }
 
-      // Enqueue durable send job (singletonKey guarantees idempotency within the TTL)
-      const boss = await getBoss();
-      try {
-        await boss.send(CHASE_SEND_JOB, {
-          chaseEventId: chaseEvent.id,
-          invoiceId: event.invoices.id,
-          step: chaseEvent.step,
-          toEmail: chaseEvent.toEmail,
-          fromEmail,
-          replyToEmail,
-          subject: chaseEvent.subjectSnapshot || "",
-          body: chaseEvent.bodySnapshot || "",
-          idempotencyKey,
-        }, {
-          singletonKey: idempotencyKey,
-          singletonSeconds: 3600,
-          retryLimit: 3,
-          retryDelay: 30,
-          retryBackoff: true,
-        });
-      } catch (enqueueErr) {
-        // Revert status so the creator can retry approval; do not strand in approved
+        if (!chaseEvent.toEmail) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "No recipient email configured" });
+        }
+
+        // Atomic claim: only one request can move from awaiting_review -> approved
+        const [claimed] = await ctx.db
+          .update(chaseEvents)
+          .set({ status: "approved", enqueuedAt: null, sendJobId: null, updatedAt: new Date() })
+          .where(and(eq(chaseEvents.id, input.chaseEventId), eq(chaseEvents.status, "awaiting_review")))
+          .returning();
+
+        if (!claimed) {
+          // Lost the claim to an overlapping request; loop to resolve against
+          // that winner's actual enqueue outcome rather than guessing.
+          if (Date.now() >= inflightDeadline) {
+            throw new TRPCError({ code: "CONFLICT", message: "Event already claimed or processed" });
+          }
+          continue;
+        }
+
+        const fromEmail = process.env.CHASE_FROM_EMAIL || "chase@sponsee.app";
+        const replyToEmail = ctx.session.user.email || fromEmail;
+        const idempotencyKey = chaseEvent.idempotencyKey || `invoice:${event.invoices.id}:step:${chaseEvent.step}`;
+
+        // Enqueue durable send job (singletonKey guarantees idempotency within the TTL)
+        const boss = await getBoss();
+        let jobId: string | null = null;
+        try {
+          jobId = (await boss.send(CHASE_SEND_JOB, {
+            chaseEventId: chaseEvent.id,
+            invoiceId: event.invoices.id,
+            step: chaseEvent.step,
+            toEmail: chaseEvent.toEmail,
+            fromEmail,
+            replyToEmail,
+            subject: chaseEvent.subjectSnapshot || "",
+            body: chaseEvent.bodySnapshot || "",
+            idempotencyKey,
+          }, {
+            singletonKey: idempotencyKey,
+            singletonSeconds: 3600,
+            retryLimit: 3,
+            retryDelay: 30,
+            retryBackoff: true,
+          })) ?? null;
+        } catch (enqueueErr) {
+          // Revert status so the creator can retry approval; do not strand in
+          // approved. Scoped to `approved` so we never clobber a worker that has
+          // already moved the row on.
+          await ctx.db
+            .update(chaseEvents)
+            .set({ status: "awaiting_review", updatedAt: new Date() })
+            .where(and(eq(chaseEvents.id, input.chaseEventId), eq(chaseEvents.status, "approved")));
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Failed to queue chase email. Please retry.",
+            cause: enqueueErr,
+          });
+        }
+
+        // Durable, observable proof of the enqueue. Status is deliberately not
+        // touched here: the worker may already have advanced it to sending/sent.
         await ctx.db
           .update(chaseEvents)
-          .set({ status: "awaiting_review", updatedAt: new Date() })
+          .set({ enqueuedAt: new Date(), sendJobId: jobId, updatedAt: new Date() })
           .where(eq(chaseEvents.id, input.chaseEventId));
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to queue chase email. Please retry.",
-          cause: enqueueErr,
+
+        // Write activity event for approval
+        await ctx.db.insert(activityEvents).values({
+          creatorId: ctx.creatorId,
+          actor: "creator",
+          entityType: "invoice",
+          entityId: event.invoices.id,
+          kind: "chase_sent",
+          payload: {
+            step: chaseEvent.step,
+            status: "approved",
+            action: "approve",
+          },
         });
+
+        return { success: true, queued: true };
       }
-
-      // Write activity event for approval
-      await ctx.db.insert(activityEvents).values({
-        creatorId: ctx.creatorId,
-        actor: "creator",
-        entityType: "invoice",
-        entityId: event.invoices.id,
-        kind: "chase_sent",
-        payload: {
-          step: chaseEvent.step,
-          status: "approved",
-          action: "approve",
-        },
-      });
-
-      return { success: true, queued: true };
     }),
 
   // ── Edit and send (new) ──
@@ -307,7 +361,14 @@ export const chaseRouter = createTRPCRouter({
       // losing concurrent request cannot overwrite subject/body after the winner claims.
       const [claimed] = await ctx.db
         .update(chaseEvents)
-        .set({ status: "approved", subjectSnapshot: input.subject, bodySnapshot: input.body, updatedAt: new Date() })
+        .set({
+          status: "approved",
+          subjectSnapshot: input.subject,
+          bodySnapshot: input.body,
+          enqueuedAt: null,
+          sendJobId: null,
+          updatedAt: new Date(),
+        })
         .where(and(eq(chaseEvents.id, input.chaseEventId), eq(chaseEvents.status, "awaiting_review")))
         .returning();
 
@@ -320,8 +381,9 @@ export const chaseRouter = createTRPCRouter({
       const idempotencyKey = chaseEvent.idempotencyKey || `invoice:${event.invoices.id}:step:${chaseEvent.step}`;
 
       const boss = await getBoss();
+      let jobId: string | null = null;
       try {
-        await boss.send(CHASE_SEND_JOB, {
+        jobId = (await boss.send(CHASE_SEND_JOB, {
           chaseEventId: chaseEvent.id,
           invoiceId: event.invoices.id,
           step: chaseEvent.step,
@@ -337,19 +399,27 @@ export const chaseRouter = createTRPCRouter({
           retryLimit: 3,
           retryDelay: 30,
           retryBackoff: true,
-        });
+        })) ?? null;
       } catch (enqueueErr) {
         // Revert status so the creator can retry; snapshots are preserved
         await ctx.db
           .update(chaseEvents)
           .set({ status: "awaiting_review", updatedAt: new Date() })
-          .where(eq(chaseEvents.id, input.chaseEventId));
+          .where(and(eq(chaseEvents.id, input.chaseEventId), eq(chaseEvents.status, "approved")));
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to queue chase email. Please retry.",
           cause: enqueueErr,
         });
       }
+
+      // Same durable enqueue marker the approve path writes, so a follow-up
+      // approve() on this event resolves immediately instead of waiting on a
+      // winner that already finished.
+      await ctx.db
+        .update(chaseEvents)
+        .set({ enqueuedAt: new Date(), sendJobId: jobId, updatedAt: new Date() })
+        .where(eq(chaseEvents.id, input.chaseEventId));
 
       await ctx.db.insert(activityEvents).values({
         creatorId: ctx.creatorId,

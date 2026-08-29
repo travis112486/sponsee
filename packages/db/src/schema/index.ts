@@ -359,6 +359,11 @@ export const chaseEvents = pgTable(
     providerMessageId: text("provider_message_id"),
     idempotencyKey: varchar("idempotency_key", { length: 255 }).unique(),
     queuedAt: timestamp("queued_at", { withTimezone: true }),
+    // Durable proof that a chase-send job reached the queue. `status = approved`
+    // is claimed before boss.send() resolves and can still be reverted, so it is
+    // NOT evidence of an enqueue; enqueuedAt is only written after send succeeds.
+    enqueuedAt: timestamp("enqueued_at", { withTimezone: true }),
+    sendJobId: text("send_job_id"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     openedAt: timestamp("opened_at", { withTimezone: true }),

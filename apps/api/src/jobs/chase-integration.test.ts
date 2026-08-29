@@ -353,6 +353,8 @@ CREATE TABLE chase_events (
   provider_message_id TEXT,
   idempotency_key VARCHAR(255) UNIQUE,
   queued_at TIMESTAMPTZ,
+  enqueued_at TIMESTAMPTZ,
+  send_job_id TEXT,
   sent_at TIMESTAMPTZ,
   delivered_at TIMESTAMPTZ,
   opened_at TIMESTAMPTZ,
@@ -505,7 +507,11 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await cleanTables();
-  mockBossSend.mockClear();
+  // mockClear() leaves queued mockImplementationOnce() entries behind, so a test
+  // that throws before consuming one would poison the next test. Reset fully and
+  // restore the default "enqueue succeeds" behaviour.
+  mockBossSend.mockReset();
+  mockBossSend.mockImplementation(() => Promise.resolve());
 });
 
 afterEach(() => {
@@ -628,13 +634,54 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       .from(schema.chaseEvents)
       .where(eq(schema.chaseEvents.invoiceId, invoice.id));
     expect(after.status).toBe("approved");
+    // The first approve recorded durable proof of its enqueue; that — not the
+    // approved status — is what makes the second approve safe to short-circuit.
+    expect(after.enqueuedAt).not.toBeNull();
   });
 
   // The tests above only ever await one approve() call before starting the
   // next, so they never exercise real overlap between two in-flight requests.
-  // These use a deferred boss.send() to hold request A open inside its
-  // enqueue call while request B runs concurrently against the same event.
-  it("concurrent approve: overlapping requests share one durable enqueue", async () => {
+  // These use a deferred boss.send() to hold request A open inside its enqueue
+  // call while request B runs concurrently against the same event.
+  //
+  // The invariant under test (SPO-68): a request must never report the send as
+  // queued on behalf of an overlapping request whose enqueue has not resolved.
+  // `status = approved` is claimed before boss.send() resolves and is reverted
+  // if it fails, so only `enqueued_at` proves a durable job exists.
+
+  // Tracks settlement without swallowing the result, so a test can assert that
+  // request B is still pending while request A holds the enqueue open.
+  function track<T>(promise: Promise<T>) {
+    const state = { settled: false, value: undefined as T | undefined, error: undefined as unknown };
+    const tracked = promise.then(
+      (value) => {
+        state.settled = true;
+        state.value = value;
+        return value;
+      },
+      (error) => {
+        state.settled = true;
+        state.error = error;
+        throw error;
+      }
+    );
+    // Keep a terminal handler so a rejection asserted later is never reported
+    // as an unhandled rejection in the meantime.
+    tracked.catch(() => {});
+    return { state, promise: tracked };
+  }
+
+  async function waitForClaim(eventId: string) {
+    await vi.waitFor(async () => {
+      const [current] = await db
+        .select()
+        .from(schema.chaseEvents)
+        .where(eq(schema.chaseEvents.id, eventId));
+      expect(current.status).toBe("approved");
+    });
+  }
+
+  it("concurrent approve: overlapping request cannot report queued until the enqueue is durable", async () => {
     const { creator, invoice } = await seedFullFlow();
     await runChaseTick();
 
@@ -654,35 +701,84 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
 
     // Wait for A's atomic claim to land WITHOUT waiting for A's enqueue to
     // finish — this is the overlap window request B runs in.
-    await vi.waitFor(async () => {
-      const [current] = await db
-        .select()
-        .from(schema.chaseEvents)
-        .where(eq(schema.chaseEvents.id, event.id));
-      expect(current.status).toBe("approved");
-    });
+    await waitForClaim(event.id);
 
-    // Request B overlaps A: it sees the event already approved and must
-    // report alreadyQueued rather than attempting a second enqueue.
-    const requestB = await caller.approve({ chaseEventId: event.id });
-    expect(requestB).toEqual({ success: true, queued: true, alreadyQueued: true });
+    const [midflight] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(midflight.status).toBe("approved");
+    expect(midflight.enqueuedAt).toBeNull();
+
+    // Request B overlaps A. It must not answer "queued" off the approved status
+    // alone: A's enqueue can still fail. B stays open until A settles.
+    const requestB = track(caller.approve({ chaseEventId: event.id }));
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(requestB.state.settled).toBe(false);
 
     // Only request A ever attempted to enqueue — exactly one durable job.
     expect(mockBossSend).toHaveBeenCalledTimes(1);
 
-    // Let A's enqueue succeed.
+    // Let A's enqueue succeed; B may now truthfully report alreadyQueued.
     deferred.resolve();
-    const resultA = await requestA;
-    expect(resultA).toEqual({ success: true, queued: true });
+    await expect(requestA).resolves.toEqual({ success: true, queued: true });
+    await expect(requestB.promise).resolves.toEqual({ success: true, queued: true, alreadyQueued: true });
+
+    expect(mockBossSend).toHaveBeenCalledTimes(1);
 
     const [after] = await db
       .select()
       .from(schema.chaseEvents)
       .where(eq(schema.chaseEvents.id, event.id));
     expect(after.status).toBe("approved");
+    expect(after.enqueuedAt).not.toBeNull();
   });
 
-  it("concurrent approve: enqueue failure during an overlapping request reverts to awaiting_review", async () => {
+  it("concurrent approve: enqueue failure never leaves an overlapping request reporting a phantom queue", async () => {
+    const { creator, invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    // A's enqueue is held open, then fails. B's takeover attempt fails too, so
+    // no durable job exists for this event at any point in the interleaving.
+    const deferred = createDeferred<void>();
+    mockBossSend.mockImplementationOnce(() => deferred.promise);
+    mockBossSend.mockImplementationOnce(() => Promise.reject(new Error("pg-boss unavailable")));
+
+    const caller = chaseRouter.createCaller(mockCtx(creator.id));
+
+    const requestA = track(caller.approve({ chaseEventId: event.id }));
+    await waitForClaim(event.id);
+
+    const requestB = track(caller.approve({ chaseEventId: event.id }));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(requestB.state.settled).toBe(false);
+
+    // A's enqueue now fails and reverts the event.
+    deferred.reject(new Error("pg-boss send failed"));
+    await expect(requestA.promise).rejects.toThrow("Failed to queue chase email");
+
+    // B must surface the failure rather than a stale "alreadyQueued": there is
+    // no durable job to be already-queued against.
+    await expect(requestB.promise).rejects.toThrow("Failed to queue chase email");
+
+    const [after] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(after.status).toBe("awaiting_review");
+    expect(after.enqueuedAt).toBeNull();
+    expect(after.sendJobId).toBeNull();
+
+    expect(mockBossSend).toHaveBeenCalledTimes(2);
+  });
+
+  it("concurrent approve: overlapping request takes over and queues after the winner's enqueue fails", async () => {
     const { creator, invoice } = await seedFullFlow();
     await runChaseTick();
 
@@ -696,36 +792,55 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
 
     const caller = chaseRouter.createCaller(mockCtx(creator.id));
 
-    const requestA = caller.approve({ chaseEventId: event.id });
+    const requestA = track(caller.approve({ chaseEventId: event.id }));
+    await waitForClaim(event.id);
 
-    await vi.waitFor(async () => {
-      const [current] = await db
-        .select()
-        .from(schema.chaseEvents)
-        .where(eq(schema.chaseEvents.id, event.id));
-      expect(current.status).toBe("approved");
-    });
+    const requestB = track(caller.approve({ chaseEventId: event.id }));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(requestB.state.settled).toBe(false);
 
-    // Request B overlaps while A's enqueue is still pending: the event is
-    // already claimed, so B reports alreadyQueued — a response that will
-    // turn out to be stale once A's enqueue below fails.
-    const requestB = await caller.approve({ chaseEventId: event.id });
-    expect(requestB).toEqual({ success: true, queued: true, alreadyQueued: true });
-
-    // Now A's enqueue fails.
     deferred.reject(new Error("pg-boss send failed"));
-    await expect(requestA).rejects.toThrow("Failed to queue chase email");
+    await expect(requestA.promise).rejects.toThrow("Failed to queue chase email");
 
-    // The event reverts to awaiting_review: request B's "alreadyQueued" was
-    // stale, since no durable job actually exists for this event. A future
-    // approve (or a UI retry) is required to actually queue a send.
+    // B waited on A instead of trusting the approved status, so once A hands the
+    // event back B claims it and performs its own enqueue — and reports queued
+    // only because that enqueue actually succeeded.
+    await expect(requestB.promise).resolves.toEqual({ success: true, queued: true });
+
+    expect(mockBossSend).toHaveBeenCalledTimes(2);
+
     const [after] = await db
       .select()
       .from(schema.chaseEvents)
       .where(eq(schema.chaseEvents.id, event.id));
-    expect(after.status).toBe("awaiting_review");
+    expect(after.status).toBe("approved");
+    expect(after.enqueuedAt).not.toBeNull();
+  });
 
-    // Only one enqueue attempt was ever made.
+  it("approve after a worker already picked the job up reports alreadyQueued", async () => {
+    const { creator, invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    const caller = chaseRouter.createCaller(mockCtx(creator.id));
+    await caller.approve({ chaseEventId: event.id });
+
+    // The chase-send worker claims the job and moves the event to sending
+    // before the creator clicks approve a second time.
+    await db
+      .update(schema.chaseEvents)
+      .set({ status: "sending" })
+      .where(eq(schema.chaseEvents.id, event.id));
+
+    await expect(caller.approve({ chaseEventId: event.id })).resolves.toEqual({
+      success: true,
+      queued: true,
+      alreadyQueued: true,
+    });
     expect(mockBossSend).toHaveBeenCalledTimes(1);
   });
 
