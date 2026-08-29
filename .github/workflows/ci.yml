@@ -70,3 +70,12 @@ jobs:
       - run: pnpm db:migrate
         env:
           DATABASE_URL: postgres://sponsee:sponsee@localhost:5432/sponsee
+
+      # The Render pre-deploy migrator (SPO-74). Proves a clean database ends up
+      # fully migrated, that re-running is a no-op, and — the part that matters —
+      # that a database drizzle would silently skip exits non-zero so Render
+      # aborts the deploy instead of releasing code against a stale schema.
+      - run: pnpm --filter @sponsee/db build
+      - run: node scripts/verify-deploy-migrator.mjs
+        env:
+          DATABASE_URL: postgres://sponsee:sponsee@localhost:5432/sponsee
