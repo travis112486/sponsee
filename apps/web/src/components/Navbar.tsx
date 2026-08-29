@@ -74,17 +74,17 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     }
   }, [open]);
 
+  // Escape closes the palette. The ⌘K toggle is owned exclusively by Topbar;
+  // registering it here too would fire on the same keypress and immediately
+  // re-close the just-opened palette (SPO-25).
   useEffect(() => {
+    if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        onClose();
-      }
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  }, [open, onClose]);
 
   if (!open) return null;
 
