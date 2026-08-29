@@ -7,6 +7,15 @@ import path from "path";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
+ * Booting a fresh PGlite is inherently slower than a unit test — it compiles
+ * and starts a WASM Postgres. Locally that is ~1s; on a 2-core CI runner it is
+ * several times that, which puts it right on top of vitest's 5s default. The
+ * default is simply the wrong budget for this test, so give it an explicit one
+ * with enough headroom that a slow runner is not a red build.
+ */
+const COLD_PGLITE_BOOT_TIMEOUT_MS = 60_000;
+
+/**
  * Smoke test: prove the committed Drizzle migration can create a clean
  * database from scratch and that the resulting schema supports Better Auth.
  *
@@ -99,5 +108,5 @@ describe("deployable migration smoke test", () => {
     expect(membershipRes.rows[0].role).toBe("owner");
 
     await client.close();
-  });
+  }, COLD_PGLITE_BOOT_TIMEOUT_MS);
 });
