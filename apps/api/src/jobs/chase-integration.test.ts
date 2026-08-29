@@ -490,7 +490,7 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(activities[0].payload).toMatchObject({ action: "approve", status: "approved" });
   });
 
-  it("double-approve returns CONFLICT", async () => {
+  it("repeated approve is idempotent: second approve returns alreadyQueued, one job only", async () => {
     const { creator, invoice } = await seedFullFlow();
     await runChaseTick();
 
@@ -500,12 +500,16 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       .where(eq(schema.chaseEvents.invoiceId, invoice.id));
 
     const caller = chaseRouter.createCaller(mockCtx(creator.id));
-    await caller.approve({ chaseEventId: event.id });
+    const first = await caller.approve({ chaseEventId: event.id });
+    expect(first.success).toBe(true);
+    expect(first.queued).toBe(true);
 
-    // Second approve should fail with BAD_REQUEST because status is already approved
-    await expect(caller.approve({ chaseEventId: event.id })).rejects.toSatisfy(
-      (err: any) => err.code === "BAD_REQUEST"
-    );
+    // Identical second approve must succeed idempotently, not error.
+    const second = await caller.approve({ chaseEventId: event.id });
+    expect(second).toMatchObject({ success: true, queued: true, alreadyQueued: true });
+
+    // Exactly one chase-send job was enqueued (no double-send).
+    expect(mockBossSend).toHaveBeenCalledTimes(1);
   });
 
   it("sendChaseEmail sends via provider and records sent status + timeline", async () => {
@@ -1207,7 +1211,7 @@ describe("SPO-64 delivery-truth audit (against Mailpit + current implementation)
     expect(afterRetry.providerMessageId).toBe("retry-ok-1");
   });
 
-  it("4. AUDIT GAP: repeated approval is NOT idempotent today — second approve rejects", async () => {
+  it("4. repeated approval is idempotent — second approve succeeds, no second send", async () => {
     const recipient = `audit-4-${Date.now()}@example.com`;
     const { creator, invoice } = await seedIsolatedFlow(recipient);
     await runChaseTick();
@@ -1220,14 +1224,12 @@ describe("SPO-64 delivery-truth audit (against Mailpit + current implementation)
     const caller = chaseRouter.createCaller(ctxFor(creator.id));
     const first = await caller.approve({ chaseEventId: event.id });
     expect(first.success).toBe(true);
+    expect(first.queued).toBe(true);
 
-    // Documented current behaviour: the identical second approve is REJECTED,
-    // not an idempotent success. A double-click therefore surfaces an error to
-    // the creator even though the job layer's atomic claim (+ pg-boss singleton)
-    // already prevents a second real message. See handoff in SPO-64 report.
-    await expect(caller.approve({ chaseEventId: event.id })).rejects.toSatisfy(
-      (err: any) => err.code === "BAD_REQUEST" || err.code === "CONFLICT"
-    );
+    // An identical repeated approval must be idempotent: success, no error,
+    // and the flag telling the caller the enqueue already happened.
+    const second = await caller.approve({ chaseEventId: event.id });
+    expect(second).toMatchObject({ success: true, queued: true, alreadyQueued: true });
 
     // The identical approval must not have produced a second message: confirm
     // only ONE send-chase job was ever enqueued (singletonKey dedupes).

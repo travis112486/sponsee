@@ -188,6 +188,14 @@ export const chaseRouter = createTRPCRouter({
       }
 
       const chaseEvent = event.chase_events;
+      if (chaseEvent.status === "approved") {
+        // Idempotent repeat: the first approve already claimed the event and
+        // enqueued the send job. Return success instead of erroring so a
+        // double-click never surfaces a spurious failure (the job layer's
+        // atomic claim + pg-boss singletonKey already prevent a second message).
+        return { success: true, queued: true, alreadyQueued: true };
+      }
+
       if (chaseEvent.status !== "awaiting_review") {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Event is ${chaseEvent.status}` });
       }
