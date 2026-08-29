@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { resolveTopbarPage } from "@/lib/route-titles";
 import { trpc } from "@/trpc";
 import { planLabels, planPricesCents } from "@sponsee/shared";
 
@@ -28,14 +29,6 @@ const navItems = [
   { to: "/calendar", label: "Calendar", icon: Calendar },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
-
-const pageTitles: Record<string, { title: string; crumb?: string }> = {
-  "/": { title: "Dashboard" },
-  "/pipeline": { title: "Pipeline" },
-  "/payments": { title: "Payments" },
-  "/calendar": { title: "Calendar" },
-  "/settings": { title: "Settings" },
-};
 
 function formatPaletteCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -325,7 +318,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
-  const page = pageTitles[location.pathname] ?? { title: "Dashboard" };
+  const page = resolveTopbarPage(location.pathname);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

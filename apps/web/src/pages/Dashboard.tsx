@@ -100,6 +100,7 @@ export default function Dashboard() {
     (i) => i.dueAt && new Date(i.dueAt) < new Date()
   );
   const outstanding = openInvoices.reduce((s, i) => s + i.amountCents, 0);
+  const overdueAmountCents = overdueInvoices.reduce((s, i) => s + i.amountCents, 0);
 
   const stageCounts = Object.fromEntries(
     dealStages.map((s) => [
@@ -149,6 +150,28 @@ export default function Dashboard() {
           onClick={() => navigate("/payments")}
         />
       </div>
+
+      {/* Overdue callout — money-at-risk reads before operational detail (P-01) */}
+      {overdueInvoices.length > 0 && (
+        <div className="rounded-xl border border-brick/20 bg-brick-tint/40 p-4">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-brick" />
+            <h3 className="text-[13px] font-semibold text-brick">
+              {overdueInvoices.length} overdue invoice{overdueInvoices.length > 1 ? "s" : ""}
+            </h3>
+          </div>
+          <p className="mt-1 text-[12.5px] text-ink-2">
+            {formatCents(overdueAmountCents)} at risk across{" "}
+            {overdueInvoices.length} unpaid invoice{overdueInvoices.length > 1 ? "s" : ""}
+          </p>
+          <button
+            onClick={() => navigate("/payments")}
+            className="mt-2 text-[12px] font-medium text-brick underline-offset-2 hover:underline"
+          >
+            Review payments
+          </button>
+        </div>
+      )}
 
       {/* Stage breakdown */}
       <div className="rounded-xl border border-hairline bg-surface p-4">

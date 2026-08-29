@@ -4,6 +4,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { CommandPalette } from "./Navbar";
+import { resolveTopbarPage } from "@/lib/route-titles";
 
 vi.mock("@/trpc", () => ({
   trpc: {
@@ -64,5 +65,24 @@ describe("CommandPalette keyboard handling", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Search deals, brands, invoices" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
+  });
+});
+
+describe("resolveTopbarPage", () => {
+  it("resolves static routes to their exact titles", () => {
+    expect(resolveTopbarPage("/")).toEqual({ title: "Dashboard" });
+    expect(resolveTopbarPage("/pipeline")).toEqual({ title: "Pipeline" });
+    expect(resolveTopbarPage("/payments")).toEqual({ title: "Payments" });
+  });
+
+  it("resolves dynamic deal routes to Deal with Pipeline crumb, not Dashboard (P-04)", () => {
+    expect(resolveTopbarPage("/pipeline/d9e933a7-a7ab-4b46-a39e-56e7bc22f0af")).toEqual({
+      title: "Deal",
+      crumb: "Pipeline",
+    });
+  });
+
+  it("falls back to Dashboard for unknown routes", () => {
+    expect(resolveTopbarPage("/somewhere-else")).toEqual({ title: "Dashboard" });
   });
 });
