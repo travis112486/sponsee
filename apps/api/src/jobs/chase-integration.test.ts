@@ -5,6 +5,10 @@ import { eq, and, desc } from "drizzle-orm";
 import { runChaseTick, sendChaseEmail } from "./chase-tick.js";
 import { chaseRouter } from "../routers/chase.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
+import { spawn, type ChildProcess, execSync } from "child_process";
+import { createServer } from "net";
+import { existsSync } from "fs";
+import { join } from "path";
 
 // ── Mock pg-boss (no DATABASE_URL in test env) ───────────────────────────────
 
@@ -13,6 +17,75 @@ vi.mock("./boss.js", () => ({
   getBoss: vi.fn(() => Promise.resolve({ send: mockBossSend })),
   stopBoss: vi.fn(() => Promise.resolve()),
 }));
+
+// ── Mailpit lifecycle helpers (real instance for acceptance test) ─────────────
+
+async function getFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+      server.close(() => resolve(port));
+    });
+    server.on("error", reject);
+  });
+}
+
+async function waitForMailpit(apiUrl: string, timeoutMs = 5000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${apiUrl}/api/v1/messages`);
+      if (res.ok) return;
+    } catch {
+      // probe failure — keep polling
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("Mailpit did not become ready in time");
+}
+
+function findMailpitBinary(): string {
+  const candidates = [
+    process.env.MAILPIT_BINARY,
+    "/opt/homebrew/bin/mailpit",
+    "/usr/local/bin/mailpit",
+  ];
+  for (const c of candidates) {
+    if (c && existsSync(c)) return c;
+  }
+  try {
+    const found = execSync("command -v mailpit", { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }).trim();
+    if (found) return found;
+  } catch {
+    // fall through
+  }
+  throw new Error(
+    "mailpit binary not found. Install Mailpit (https://mailpit.axllent.org/) or set MAILPIT_BINARY env var."
+  );
+}
+
+function startMailpit(smtpPort: number, httpPort: number): ChildProcess {
+  const binary = findMailpitBinary();
+  const dbPath = process.env.PAPERCLIP_RUN_SCRATCH_DIR
+    ? join(process.env.PAPERCLIP_RUN_SCRATCH_DIR, "mailpit-integration-test.db")
+    : "/tmp/mailpit-integration-test.db";
+  return spawn(binary, [
+    "-s", `127.0.0.1:${smtpPort}`,
+    "-l", `127.0.0.1:${httpPort}`,
+    "-d", dbPath,
+    "-q",
+  ], { stdio: "ignore" });
+}
+
+async function stopMailpit(proc: ChildProcess): Promise<void> {
+  if (!proc.killed) {
+    proc.kill("SIGTERM");
+    await new Promise((r) => setTimeout(r, 500));
+    if (!proc.killed) proc.kill("SIGKILL");
+  }
+}
 
 // ── Schema SQL (PGlite-compatible, same as tenant-isolation.test.ts) ──────────
 
@@ -501,15 +574,21 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
 
     const caller = chaseRouter.createCaller(mockCtx(creator.id));
     const first = await caller.approve({ chaseEventId: event.id });
-    expect(first.success).toBe(true);
-    expect(first.queued).toBe(true);
+    expect(first).toMatchObject({ success: true, queued: true });
 
-    // Identical second approve must succeed idempotently, not error.
+    // Second approve on an already-approved event must succeed idempotently,
+    // not surface a spurious error to a double-click.
     const second = await caller.approve({ chaseEventId: event.id });
-    expect(second).toMatchObject({ success: true, queued: true, alreadyQueued: true });
+    expect(second).toEqual({ success: true, queued: true, alreadyQueued: true });
 
     // Exactly one chase-send job was enqueued (no double-send).
     expect(mockBossSend).toHaveBeenCalledTimes(1);
+
+    const [after] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+    expect(after.status).toBe("approved");
   });
 
   it("sendChaseEmail sends via provider and records sent status + timeline", async () => {
@@ -657,7 +736,7 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(afterRetry.status).toBe("sent");
   });
 
-  it("sendChaseEmail is idempotent: second call on already-sent returns existing message id", async () => {
+  it("sendChaseEmail exclusive claim prevents concurrent workers from double-sending", async () => {
     const { creator, invoice } = await seedFullFlow();
     await runChaseTick();
 
@@ -666,22 +745,32 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       .from(schema.chaseEvents)
       .where(eq(schema.chaseEvents.invoiceId, invoice.id));
 
-    // Approve
     const caller = chaseRouter.createCaller(mockCtx(creator.id));
     await caller.approve({ chaseEventId: event.id });
 
-    // Use PostmarkProvider so fetch stub works
     const prevProvider = process.env.EMAIL_PROVIDER;
     process.env.EMAIL_PROVIDER = "postmark";
     process.env.POSTMARK_SERVER_TOKEN = "test-token";
 
-    // First send succeeds
+    let fetchCallCount = 0;
+    let releaseFirstFetch: (() => void) | null = null;
+
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-abc" }) }))
+      vi.fn(() => {
+        fetchCallCount++;
+        return new Promise((resolve) => {
+          if (fetchCallCount === 1) {
+            releaseFirstFetch = () =>
+              resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-exclusive-1" }) });
+          } else {
+            resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-exclusive-2" }) });
+          }
+        });
+      })
     );
 
-    const result1 = await sendChaseEmail({
+    const args = {
       chaseEventId: event.id,
       invoiceId: invoice.id,
       step: 1,
@@ -691,28 +780,123 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       subject: event.subjectSnapshot || "Reminder",
       body: event.bodySnapshot || "Please pay",
       idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
-    });
+    };
 
-    // Second concurrent send should return the existing message id (atomic claim skips)
-    const result2 = await sendChaseEmail({
-      chaseEventId: event.id,
-      invoiceId: invoice.id,
-      step: 1,
-      toEmail: "brand@example.com",
-      fromEmail: "chase@sponsee.app",
-      replyToEmail: "creator@example.com",
-      subject: event.subjectSnapshot || "Reminder",
-      body: event.bodySnapshot || "Please pay",
-      idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
-    });
+    // Start worker A and let it claim the event before worker B starts.
+    const workerA = sendChaseEmail(args);
+    await new Promise((r) => setTimeout(r, 20)); // PGlite claim is near-instant
+
+    // Worker B races while worker A is still inside provider.send()
+    const workerB = sendChaseEmail(args);
+    workerB.catch(() => {}); // swallow early rejection so Vitest doesn't flag it as unhandled
+
+    // Give worker B time to hit the exclusive claim and fail
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Now release worker A
+    if (releaseFirstFetch) releaseFirstFetch();
+
+    const [resultA, resultB] = await Promise.allSettled([workerA, workerB]);
 
     if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
     else delete process.env.EMAIL_PROVIDER;
 
-    expect(result2.providerMessageId).toBe(result1.providerMessageId);
+    // Exactly one provider call — the second worker lost the race at the DB claim
+    expect(fetchCallCount).toBe(1);
 
-    // Only one fetch call should have been made (the second was skipped by atomic claim)
-    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+    const successes = (resultA.status === "fulfilled" ? [resultA] : []).concat(
+      resultB.status === "fulfilled" ? [resultB] : []
+    ) as PromiseFulfilledResult<{ providerMessageId: string }>[];
+    const failures = (resultA.status === "rejected" ? [resultA] : []).concat(
+      resultB.status === "rejected" ? [resultB] : []
+    );
+
+    expect(successes).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(successes[0].value.providerMessageId).toBe("msg-exclusive-1");
+  });
+
+  it("sendChaseEmail Resend idempotency: Idempotency-Key header is sent and retry returns same ID", async () => {
+    const { creator, invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    const caller = chaseRouter.createCaller(mockCtx(creator.id));
+    await caller.approve({ chaseEventId: event.id });
+
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.EMAIL_PROVIDER = "resend";
+    process.env.RESEND_API_KEY = "test-resend-key";
+
+    const capturedHeaders: Record<string, string>[] = [];
+    let fetchCallCount = 0;
+    const resendIdempotencyMap = new Map<string, string>();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        fetchCallCount++;
+        const headers = init?.headers as Record<string, string> | undefined;
+        if (headers) capturedHeaders.push(headers);
+        const idemKey = headers?.["Idempotency-Key"] ?? `call-${fetchCallCount}`;
+        if (!resendIdempotencyMap.has(idemKey)) {
+          resendIdempotencyMap.set(idemKey, `msg-resend-${fetchCallCount}`);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ id: resendIdempotencyMap.get(idemKey) }),
+        });
+      })
+    );
+
+    const args = {
+      chaseEventId: event.id,
+      invoiceId: invoice.id,
+      step: 1,
+      toEmail: "brand@example.com",
+      fromEmail: "chase@sponsee.app",
+      replyToEmail: "creator@example.com",
+      subject: event.subjectSnapshot || "Reminder",
+      body: event.bodySnapshot || "Please pay",
+      idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
+    };
+
+    // First send
+    const result1 = await sendChaseEmail(args);
+
+    // Assert Idempotency-Key header was present on the actual outbound request
+    expect(capturedHeaders.length).toBeGreaterThanOrEqual(1);
+    expect(capturedHeaders[0]["Idempotency-Key"]).toBe(args.idempotencyKey);
+
+    // Simulate provider-accepted-before-DB-persist gap:
+    // provider returned an ID but the combined UPDATE never committed.
+    // sendChaseEmail catch block marks failed; runChaseTick rescue will retry.
+    await db
+      .update(schema.chaseEvents)
+      .set({ status: "failed", providerMessageId: null, sentAt: null })
+      .where(eq(schema.chaseEvents.id, event.id));
+
+    // Retry
+    const result2 = await sendChaseEmail(args);
+
+    if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
+    else delete process.env.EMAIL_PROVIDER;
+
+    // Provider was called twice (no DB-level dedupe) but Resend's Idempotency-Key
+    // guarantees the same provider-side message ID.
+    expect(fetchCallCount).toBe(2);
+    expect(result1.providerMessageId).toBe(result2.providerMessageId);
+
+    const [final] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(final.status).toBe("sent");
+    expect(final.providerMessageId).toBe(result1.providerMessageId);
   });
 
   it("runChaseTick schedules next action from template offsetDays, not hard-coded +1 day", async () => {
@@ -888,21 +1072,7 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(jobArgs.invoiceId).toBe(invoice.id);
   });
 
-  it("real Mailpit acceptance: end-to-end invoice -> review -> approve -> message in inbox -> timeline", async () => {
-    // Probe whether Mailpit is running locally
-    let mailpitAvailable = false;
-    try {
-      const probe = await fetch("http://localhost:8025/api/v1/messages", { method: "GET" });
-      mailpitAvailable = probe.ok;
-    } catch {
-      mailpitAvailable = false;
-    }
-
-    if (!mailpitAvailable) {
-      console.log("Skipping real Mailpit acceptance test: no Mailpit at localhost:8025");
-      return;
-    }
-
+  it("runChaseTick rescues stranded sending events -> failed + job -> sent without duplicate", async () => {
     const { creator, invoice } = await seedFullFlow();
     await runChaseTick();
 
@@ -911,12 +1081,52 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       .from(schema.chaseEvents)
       .where(eq(schema.chaseEvents.invoiceId, invoice.id));
 
-    // Approve (uses real MailpitProvider since we don't stub fetch)
+    // Approve so a job would normally be queued
     const caller = chaseRouter.createCaller(mockCtx(creator.id));
-    const approveResult = await caller.approve({ chaseEventId: event.id });
-    expect(approveResult.queued).toBe(true);
+    await caller.approve({ chaseEventId: event.id });
 
-    // Simulate pg-boss worker calling sendChaseEmail with real Mailpit
+    // Simulate a dead worker: event is in "sending" with an old updatedAt and no providerMessageId
+    await db
+      .update(schema.chaseEvents)
+      .set({
+        status: "sending",
+        providerMessageId: null,
+        sentAt: null,
+        updatedAt: new Date(Date.now() - 35 * 60 * 1000), // 35 minutes ago
+      })
+      .where(eq(schema.chaseEvents.id, event.id));
+
+    mockBossSend.mockClear();
+
+    // runChaseTick should mark failed AND enqueue a retry job
+    const created = await runChaseTick();
+    expect(created).toBe(0); // rescue does not count as created
+
+    const [afterRescue] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(afterRescue.status).toBe("failed");
+
+    // A pg-boss job should have been enqueued
+    expect(mockBossSend).toHaveBeenCalledTimes(1);
+    const jobArgs = mockBossSend.mock.calls[0][1];
+    expect(jobArgs.chaseEventId).toBe(event.id);
+
+    // Now simulate the retry worker succeeding (Postmark path)
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.EMAIL_PROVIDER = "postmark";
+    process.env.POSTMARK_SERVER_TOKEN = "test-token";
+
+    let fetchCallCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        fetchCallCount++;
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-rescue-1" }) });
+      })
+    );
+
     const result = await sendChaseEmail({
       chaseEventId: event.id,
       invoiceId: invoice.id,
@@ -929,23 +1139,169 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
     });
 
-    expect(result.providerMessageId).toBeTruthy();
+    if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
+    else delete process.env.EMAIL_PROVIDER;
 
-    // Verify message landed in Mailpit inbox
-    const inboxRes = await fetch("http://localhost:8025/api/v1/messages?limit=20");
-    const inboxData = (await inboxRes.json()) as {
-      messages?: Array<{ Subject: string; ID: string; To: Array<{ Address: string }> }>;
-    };
-    const match = inboxData.messages?.find(
-      (m) => m.To?.some((t) => t.Address === "brand@example.com")
+    // Exactly one provider call — no duplicate
+    expect(fetchCallCount).toBe(1);
+    expect(result.providerMessageId).toBe("msg-rescue-1");
+
+    const [final] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(final.status).toBe("sent");
+    expect(final.providerMessageId).toBe("msg-rescue-1");
+  });
+
+  it("sendChaseEmail delivery truth: retry promotes sending+providerMessageId to sent without resending", async () => {
+    const { creator, invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    // Approve
+    const caller = chaseRouter.createCaller(mockCtx(creator.id));
+    await caller.approve({ chaseEventId: event.id });
+
+    // Use PostmarkProvider so fetch stub works
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.EMAIL_PROVIDER = "postmark";
+    process.env.POSTMARK_SERVER_TOKEN = "test-token";
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-dt-1" }) }))
     );
-    expect(match).toBeDefined();
 
-    // Timeline shows sent event
-    const timeline = await caller.events({ invoiceId: invoice.id });
-    expect(timeline).toHaveLength(1);
-    expect(timeline[0].status).toBe("sent");
-    expect(timeline[0].providerMessageId).toBe(result.providerMessageId);
+    // First send succeeds
+    const result1 = await sendChaseEmail({
+      chaseEventId: event.id,
+      invoiceId: invoice.id,
+      step: 1,
+      toEmail: "brand@example.com",
+      fromEmail: "chase@sponsee.app",
+      replyToEmail: "creator@example.com",
+      subject: event.subjectSnapshot || "Reminder",
+      body: event.bodySnapshot || "Please pay",
+      idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
+    });
+    expect(result1.providerMessageId).toBe("msg-dt-1");
+
+    // Simulate a failed status update: the providerMessageId is recorded but status is still "sending"
+    await db
+      .update(schema.chaseEvents)
+      .set({ status: "sending", sentAt: null })
+      .where(eq(schema.chaseEvents.id, event.id));
+
+    // Reset fetch mock to verify no second network call
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ MessageID: "msg-dt-2" }) }))
+    );
+
+    // Retry should promote to sent without calling provider.send() again
+    const result2 = await sendChaseEmail({
+      chaseEventId: event.id,
+      invoiceId: invoice.id,
+      step: 1,
+      toEmail: "brand@example.com",
+      fromEmail: "chase@sponsee.app",
+      replyToEmail: "creator@example.com",
+      subject: event.subjectSnapshot || "Reminder",
+      body: event.bodySnapshot || "Please pay",
+      idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
+    });
+
+    if (prevProvider) process.env.EMAIL_PROVIDER = prevProvider;
+    else delete process.env.EMAIL_PROVIDER;
+
+    // Must return the original providerMessageId
+    expect(result2.providerMessageId).toBe("msg-dt-1");
+
+    // No second fetch call (no double-send)
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(0);
+
+    // Status is now sent
+    const [final] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(final.status).toBe("sent");
+    expect(final.providerMessageId).toBe("msg-dt-1");
+  });
+
+  it("Mailpit acceptance: end-to-end invoice -> review -> approve -> real inbox -> timeline", async () => {
+    const smtpPort = await getFreePort();
+    const httpPort = await getFreePort();
+    const apiUrl = `http://127.0.0.1:${httpPort}`;
+
+    const prevSmtpHost = process.env.MAILPIT_SMTP_HOST;
+    const prevSmtpPort = process.env.MAILPIT_SMTP_PORT;
+    const prevProvider = process.env.EMAIL_PROVIDER;
+    process.env.MAILPIT_SMTP_HOST = "127.0.0.1";
+    process.env.MAILPIT_SMTP_PORT = String(smtpPort);
+    delete process.env.EMAIL_PROVIDER; // force MailpitProvider
+
+    const mailpit = startMailpit(smtpPort, httpPort);
+    try {
+      await waitForMailpit(apiUrl, 5000);
+
+      const { creator, invoice } = await seedFullFlow();
+      await runChaseTick();
+
+      const [event] = await db
+        .select()
+        .from(schema.chaseEvents)
+        .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+      const caller = chaseRouter.createCaller(mockCtx(creator.id));
+      const approveResult = await caller.approve({ chaseEventId: event.id });
+      expect(approveResult.queued).toBe(true);
+
+      // sendChaseEmail uses the real MailpitProvider because EMAIL_PROVIDER is unset
+      const result = await sendChaseEmail({
+        chaseEventId: event.id,
+        invoiceId: invoice.id,
+        step: 1,
+        toEmail: "brand@example.com",
+        fromEmail: "chase@sponsee.app",
+        replyToEmail: "creator@example.com",
+        subject: event.subjectSnapshot || "Reminder",
+        body: event.bodySnapshot || "Please pay",
+        idempotencyKey: event.idempotencyKey || `invoice:${invoice.id}:step:1`,
+      });
+
+      expect(result.providerMessageId).toBeTruthy();
+
+      // Verify message landed in the real Mailpit inbox
+      const inboxRes = await fetch(`${apiUrl}/api/v1/messages?limit=20`);
+      const inboxData = (await inboxRes.json()) as {
+        messages?: Array<{ Subject: string; ID: string; To: Array<{ Address: string }> }>;
+      };
+      const match = inboxData.messages?.find(
+        (m) => m.To?.some((t) => t.Address === "brand@example.com")
+      );
+      expect(match).toBeDefined();
+      expect(match!.Subject).toContain("INV-0001");
+
+      // Timeline shows sent event
+      const timeline = await caller.events({ invoiceId: invoice.id });
+      expect(timeline).toHaveLength(1);
+      expect(timeline[0].status).toBe("sent");
+      expect(timeline[0].providerMessageId).toBe(result.providerMessageId);
+    } finally {
+      await stopMailpit(mailpit);
+      if (prevSmtpHost !== undefined) process.env.MAILPIT_SMTP_HOST = prevSmtpHost;
+      else delete process.env.MAILPIT_SMTP_HOST;
+      if (prevSmtpPort !== undefined) process.env.MAILPIT_SMTP_PORT = prevSmtpPort;
+      else delete process.env.MAILPIT_SMTP_PORT;
+      if (prevProvider !== undefined) process.env.EMAIL_PROVIDER = prevProvider;
+      else delete process.env.EMAIL_PROVIDER;
+    }
   });
 
   it("fresh database: chase_events has updated_at and it is auto-populated", async () => {
