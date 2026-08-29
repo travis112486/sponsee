@@ -79,7 +79,8 @@ Add these to the Render Web Service:
 
 | Variable | Value | Source |
 |----------|-------|--------|
-| `DATABASE_URL` | `postgresql://...` | Neon dashboard |
+| `DATABASE_URL` | `postgresql://...` | Neon dashboard (pooled endpoint is fine here) |
+| `DATABASE_URL_UNPOOLED` | `postgresql://...` | Neon dashboard, **direct** endpoint — no `-pooler` in the host. Required by the pre-deploy migrator (§6). |
 | `BETTER_AUTH_SECRET` | generate fresh (`openssl rand -base64 32` or Render **Generate**) | new secret, staging-only |
 | `BETTER_AUTH_URL` | `https://<render-service>.onrender.com` | Render service URL |
 | `WEB_URL` | `https://sponsee.vercel.app` | Known |
@@ -144,17 +145,82 @@ RENDER_SERVICE_URL=https://...
 
 ---
 
-## 6. Acceptance Criteria
+## 6. Migrations (automated — SPO-74)
+
+**Migrations are not a manual step.** Render runs them as a **Pre-Deploy Command**, before
+the new instance takes traffic:
+
+```
+node /prod/api/node_modules/@sponsee/db/dist/migrate.js
+```
+
+Render aborts the deploy if that exits non-zero, so the ordering is fail-closed: a bad
+migration blocks the rollout and the previous version keeps serving. Merging a schema
+change to `main` is all that is required to get it onto staging Neon.
+
+### Required service configuration
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| **Pre-Deploy Command** | `node /prod/api/node_modules/@sponsee/db/dist/migrate.js` | Runs before the new instance takes traffic |
+| `DATABASE_URL_UNPOOLED` | Neon's **direct** endpoint (no `-pooler` in the host) | The pooled endpoint is PgBouncer in transaction mode and cannot run migrations. The migrator **refuses to start** against a `-pooler` host rather than half-apply a schema. |
+
+`DATABASE_URL` stays as-is — the API itself should keep using the pooled endpoint.
+
+### Why a script instead of `drizzle-kit migrate`
+
+`drizzle-kit` is a devDependency, and `apps/api/Dockerfile` finishes with
+`pnpm deploy --prod`, which prunes dev dependencies — the CLI does not exist in the
+runtime image. `drizzle-orm` is a prod dependency, so `packages/db/src/migrate.ts` calls
+the migrator programmatically instead. The Dockerfile asserts at build time that both
+`dist/migrate.js` and `drizzle/meta/_journal.json` survived the prune.
+
+### It fails loudly on a skipped migration
+
+drizzle decides what to apply from the newest `created_at` in its
+`drizzle.__drizzle_migrations` ledger alone. A journal entry dated ahead of the ones
+after it therefore makes them permanent no-ops while the CLI still prints
+`migrations applied successfully!` — that is exactly what SPO-72 was. After migrating,
+this script re-reads the ledger and exits non-zero if any journal entry is missing from
+it, naming the entries. `scripts/verify-deploy-migrator.mjs` covers that case against a
+real Postgres in the `db-check` CI job.
+
+If a deploy fails with `still unapplied`, compare `packages/db/drizzle/meta/_journal.json`
+against the ledger:
+
+```sql
+select hash, created_at from drizzle."__drizzle_migrations" order by created_at;
+```
+
+A journal `when` that is out of order needs fixing in the journal *and* in the ledger row
+that recorded it — fixing the file alone is not enough, because the bad `created_at` is
+already stored and is what drizzle compares against.
+
+### Running it by hand
+
+Against a database you have a direct URL for (a local Postgres, or Neon for a one-off
+repair):
+
+```bash
+pnpm --filter @sponsee/db build
+DATABASE_URL_UNPOOLED='postgresql://...' node packages/db/dist/migrate.js
+```
+
+It takes a Postgres advisory lock, so two concurrent runs serialise rather than race.
+
+---
+
+## 7. Acceptance Criteria
 
 Once the above is done, the agent will:
-1. Run `drizzle-kit migrate` against the Neon database.
+1. Confirm the pre-deploy migrator has brought the Neon database up to date.
 2. Run the seed script to populate demo data.
 3. Wire `VITE_API_URL` in Vercel.
 4. Verify: open `https://sponsee.vercel.app`, sign in with magic link, create a deal, refresh, and see it persist.
 
 ---
 
-## 7. Technical Prep Already Done
+## 8. Technical Prep Already Done
 
 - [x] Drizzle migrations exist (`packages/db/drizzle/0000_*.sql` … `0002_*.sql`)
 - [x] Seed script exists (`packages/db/src/seed.ts`)
@@ -163,7 +229,6 @@ Once the above is done, the agent will:
 - [ ] `BETTER_AUTH_SECRET` generated fresh for Render (never set in Vercel)
 
 **Remaining work (agent-owned, post-secrets):**
-- Run migrations against hosted DB
 - Run seed script
 - Set `VITE_API_URL` on Vercel
 - Verify end-to-end sign-in + deal creation

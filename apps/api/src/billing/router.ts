@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq, and, isNull, ne, count } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import * as schema from "@sponsee/db/schema";
 import { stripe } from "./stripe.js";
 import { getPriceId } from "./plans.js";
 import { getDealSlotLimit } from "./entitlements.js";
+import { countActiveDeals } from "./gate.js";
 import type { PlanTier } from "@sponsee/shared";
 
 const webURL = process.env.WEB_URL || "http://localhost:3000";
@@ -28,16 +29,7 @@ export const billingRouter = createTRPCRouter({
     const plan = creator?.plan ?? "starter";
     const status = creator?.subscriptionStatus ?? null;
 
-    const [{ activeDealCount }] = await ctx.db
-      .select({ activeDealCount: count() })
-      .from(schema.deals)
-      .where(
-        and(
-          eq(schema.deals.creatorId, ctx.creatorId),
-          isNull(schema.deals.deletedAt),
-          ne(schema.deals.stage, "paid")
-        )
-      );
+    const activeDealCount = await countActiveDeals(ctx.db, ctx.creatorId);
 
     return {
       plan,
@@ -96,7 +88,10 @@ export const billingRouter = createTRPCRouter({
         success_url: `${webURL}/settings?tab=billing&result=success`,
         cancel_url: `${webURL}/settings?tab=billing&result=cancel`,
         subscription_data: {
-          metadata: { creatorId: ctx.creatorId },
+          // `tier` must be on the subscription too, not just the session: the
+          // subscription is what every later webhook carries, and without it a
+          // paid creator's `plan` column would never leave its default.
+          metadata: { creatorId: ctx.creatorId, tier },
         },
         metadata: { creatorId: ctx.creatorId, tier },
       });
