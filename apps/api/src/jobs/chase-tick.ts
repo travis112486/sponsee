@@ -171,12 +171,15 @@ export async function runChaseTick(): Promise<number> {
   }
 
   // ── Rescue: approved events that were stranded before enqueue ──
+  // enqueuedAt is the durable proof that a send job reached the queue, so only
+  // events missing it can actually be stranded.
   const stranded = await db
     .select()
     .from(chaseEvents)
     .where(
       and(
         eq(chaseEvents.status, "approved"),
+        isNull(chaseEvents.enqueuedAt),
         isNull(chaseEvents.sentAt),
         sql`${chaseEvents.updatedAt} < NOW() - INTERVAL '5 minutes'`
       )
@@ -194,7 +197,7 @@ export async function runChaseTick(): Promise<number> {
       const idempotencyKey =
         event.idempotencyKey || `invoice:${event.invoiceId}:step:${event.step}`;
 
-      await boss.send(
+      const jobId = await boss.send(
         "chase-send",
         {
           chaseEventId: event.id,
@@ -215,6 +218,12 @@ export async function runChaseTick(): Promise<number> {
           retryBackoff: true,
         }
       );
+
+      // Record the enqueue so the next tick does not rescue this event again.
+      await db
+        .update(chaseEvents)
+        .set({ enqueuedAt: new Date(), sendJobId: jobId ?? null })
+        .where(eq(chaseEvents.id, event.id));
     }
   }
 

@@ -239,6 +239,8 @@ CREATE TABLE chase_events (
   provider_message_id TEXT,
   idempotency_key VARCHAR(255) UNIQUE,
   queued_at TIMESTAMPTZ,
+  enqueued_at TIMESTAMPTZ,
+  send_job_id TEXT,
   sent_at TIMESTAMPTZ,
   delivered_at TIMESTAMPTZ,
   opened_at TIMESTAMPTZ,
