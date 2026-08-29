@@ -4,6 +4,7 @@ import { renderMergeTokens, validateMergeTokens } from "@sponsee/shared";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Loader2, Eye, EyeOff, AlertCircle, Check, RotateCcw } from "lucide-react";
+import QueryError from "@/components/QueryError";
 
 const STEP_NAMES: Record<number, string> = {
   1: "Friendly reminder",
@@ -24,7 +25,7 @@ const PREVIEW_CTX = {
 
 export default function ChaseTemplatesPanel() {
   const utils = trpc.useUtils();
-  const { data: templates, isLoading } = trpc.chase.templates.useQuery();
+  const { data: templates, isLoading, isError, refetch } = trpc.chase.templates.useQuery();
   const update = trpc.chase.updateTemplate.useMutation({
     onSuccess: () => {
       toast.success("Template saved");
@@ -85,6 +86,15 @@ export default function ChaseTemplatesPanel() {
       <div className="flex h-40 items-center justify-center">
         <Loader2 className="h-5 w-5 animate-spin text-ink-3" />
       </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <QueryError
+        message="Couldn't load chase templates."
+        onRetry={() => refetch()}
+      />
     );
   }
 

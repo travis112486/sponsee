@@ -5,6 +5,7 @@ import { z } from "zod";
 import { trpc } from "@/trpc";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
+import QueryError from "@/components/QueryError";
 
 const railsSchema = z.object({
   paypalLink: z.string().url().optional().or(z.literal("")),
@@ -16,7 +17,7 @@ type RailsForm = z.infer<typeof railsSchema>;
 
 export default function RailsPanel() {
   const utils = trpc.useUtils();
-  const { data: rails, isLoading } = trpc.settings.getRails.useQuery();
+  const { data: rails, isLoading, isError, refetch } = trpc.settings.getRails.useQuery();
   const update = trpc.settings.updateRails.useMutation({
     onSuccess: () => {
       toast.success("Payout rails saved");
@@ -62,6 +63,15 @@ export default function RailsPanel() {
       <div className="flex h-40 items-center justify-center">
         <Loader2 className="h-5 w-5 animate-spin text-ink-3" />
       </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <QueryError
+        message="Couldn't load your payout rails."
+        onRetry={() => refetch()}
+      />
     );
   }
 

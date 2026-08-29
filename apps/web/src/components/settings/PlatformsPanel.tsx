@@ -6,6 +6,7 @@ import { trpc } from "@/trpc";
 import { toast } from "sonner";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { platforms, type Platform } from "@sponsee/shared";
+import QueryError from "@/components/QueryError";
 
 const platformSchema = z.object({
   platform: z.enum(platforms),
@@ -18,7 +19,7 @@ type PlatformForm = z.infer<typeof platformSchema>;
 
 export default function PlatformsPanel() {
   const utils = trpc.useUtils();
-  const { data, isLoading } = trpc.settings.getPlatforms.useQuery();
+  const { data, isLoading, isError, refetch } = trpc.settings.getPlatforms.useQuery();
   const upsert = trpc.settings.upsertPlatform.useMutation({
     onSuccess: () => {
       toast.success("Platform saved");
@@ -101,6 +102,15 @@ export default function PlatformsPanel() {
     );
   }
 
+  if (isError) {
+    return (
+      <QueryError
+        message="Couldn't load your platforms."
+        onRetry={() => refetch()}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Existing platforms list */}
@@ -137,6 +147,7 @@ export default function PlatformsPanel() {
               <button
                 onClick={() => remove.mutate({ id: p.id })}
                 disabled={remove.isPending}
+                aria-label="Remove platform"
                 className="rounded p-1 text-ink-3 transition-colors hover:text-brick"
               >
                 <Trash2 className="h-4 w-4" />
@@ -153,8 +164,9 @@ export default function PlatformsPanel() {
         </h4>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <label className="mb-1.5 block text-[12.5px] font-medium text-ink">Platform</label>
+            <label htmlFor="platform" className="mb-1.5 block text-[12.5px] font-medium text-ink">Platform</label>
             <select
+              id="platform"
               {...register("platform")}
               className="h-10 w-full rounded-lg border border-hairline bg-surface px-3 text-[13.5px] text-ink outline-none focus:border-pine focus:ring-1 focus:ring-pine"
             >
@@ -170,8 +182,9 @@ export default function PlatformsPanel() {
           </div>
 
           <div>
-            <label className="mb-1.5 block text-[12.5px] font-medium text-ink">CCV (avg viewers)</label>
+            <label htmlFor="ccv" className="mb-1.5 block text-[12.5px] font-medium text-ink">CCV (avg viewers)</label>
             <input
+              id="ccv"
               type="number"
               min={0}
               {...register("ccv")}
@@ -181,8 +194,9 @@ export default function PlatformsPanel() {
           </div>
 
           <div>
-            <label className="mb-1.5 block text-[12.5px] font-medium text-ink">Followers</label>
+            <label htmlFor="followers" className="mb-1.5 block text-[12.5px] font-medium text-ink">Followers</label>
             <input
+              id="followers"
               type="number"
               min={0}
               {...register("followers")}
@@ -192,8 +206,9 @@ export default function PlatformsPanel() {
           </div>
 
           <div>
-            <label className="mb-1.5 block text-[12.5px] font-medium text-ink">Schedule label</label>
+            <label htmlFor="scheduleLabel" className="mb-1.5 block text-[12.5px] font-medium text-ink">Schedule label</label>
             <input
+              id="scheduleLabel"
               {...register("scheduleLabel")}
               placeholder="e.g. Mon/Wed/Fri 8pm ET"
               className="h-10 w-full rounded-lg border border-hairline bg-surface px-3 text-[13.5px] text-ink outline-none placeholder:text-ink-3 focus:border-pine focus:ring-1 focus:ring-pine"
