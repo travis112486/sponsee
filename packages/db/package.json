@@ -5,6 +5,11 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "//files": "dist/migrate.js is the Render pre-deploy entrypoint and reads ../drizzle at runtime, so both must survive `pnpm deploy --prod` in apps/api/Dockerfile.",
+  "files": [
+    "dist",
+    "drizzle"
+  ],
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -21,6 +26,7 @@
     "db:generate": "drizzle-kit generate",
     "db:doctor": "tsx src/doctor.ts",
     "db:migrate": "tsx src/doctor.ts --preflight && drizzle-kit migrate && tsx src/doctor.ts",
+    "db:migrate:deploy": "node dist/migrate.js",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:init": "tsx src/init.ts",
