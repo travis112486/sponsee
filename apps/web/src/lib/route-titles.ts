@@ -3,6 +3,7 @@ export const pageTitles: Record<string, { title: string; crumb?: string }> = {
   "/pipeline": { title: "Pipeline" },
   "/payments": { title: "Payments" },
   "/calendar": { title: "Calendar" },
+  "/calculator": { title: "Rate Calculator" },
   "/settings": { title: "Settings" },
 };
 

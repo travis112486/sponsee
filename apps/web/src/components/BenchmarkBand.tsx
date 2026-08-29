@@ -1,8 +1,39 @@
+/* eslint-disable react-refresh/only-export-components */
 import { cn } from "@/lib/utils";
+
+export interface Benchmark {
+  floor: number;
+  mid: number;
+  agency: number;
+}
+
+export interface BandPlacement {
+  /** Human-readable band the value falls in */
+  label: string;
+  /** Tailwind background class for the band chip / marker */
+  color: string;
+  /** True when the value is under the benchmark floor */
+  belowFloor: boolean;
+}
+
+/**
+ * Single source of truth for "which benchmark band does this value sit in".
+ * Shared by the deal-form widget and the Calculator screen so the two can
+ * never disagree about the same number (SPO-53).
+ */
+export function bandPlacement(
+  valueCents: number,
+  { floor, mid, agency }: Benchmark
+): BandPlacement {
+  if (valueCents >= agency) return { label: "Agency+", color: "bg-pine", belowFloor: false };
+  if (valueCents >= mid) return { label: "Mid–agency", color: "bg-blue-500", belowFloor: false };
+  if (valueCents >= floor) return { label: "Floor–mid", color: "bg-amber-400", belowFloor: false };
+  return { label: "Below floor", color: "bg-brick", belowFloor: true };
+}
 
 interface BenchmarkBandProps {
   /** Benchmark-suggested range (cents) */
-  benchmark: { floor: number; mid: number; agency: number };
+  benchmark: Benchmark;
   /** Actual deal value (cents) */
   dealValueCents: number;
   /** Label shown above the band */
@@ -30,18 +61,7 @@ export function BenchmarkBand({
       : 50;
 
   // Determine which band the deal sits in
-  let bandLabel = "Below floor";
-  let bandColor = "bg-brick";
-  if (dealValueCents >= agency) {
-    bandLabel = "Agency+";
-    bandColor = "bg-pine";
-  } else if (dealValueCents >= mid) {
-    bandLabel = "Mid–agency";
-    bandColor = "bg-blue-500";
-  } else if (dealValueCents >= floor) {
-    bandLabel = "Floor–mid";
-    bandColor = "bg-amber-400";
-  }
+  const { label: bandLabel, color: bandColor } = bandPlacement(dealValueCents, benchmark);
 
   const fmt = (cents: number) =>
     new Intl.NumberFormat("en-US", {
