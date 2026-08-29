@@ -3,6 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 
+import { readJournal, type JournalEntry as JournalFileEntry } from "./journal.js";
+
 // Ledger doctor for the failure mode found in SPO-72 / SPO-76.
 //
 // `drizzle-kit migrate` applies a journal entry only when its `when` is greater
@@ -15,12 +17,29 @@ import { Client } from "pg";
 // sufficient: fixing the journal does not repair a database whose ledger
 // already recorded the bad timestamp. This checks the *ledger* against the
 // journal, which is the half that survives a correct journal.
+//
+// SPO-81 adds a second, disjoint comparison over the ledger's `hash` column.
+// The two catch different things and neither subsumes the other:
+//
+//   positional `created_at`  a ledger ahead of the journal, so drizzle skips
+//                            migrations while reporting success (SPO-72)
+//   `hash`                   a .sql edited after it was applied, or a row
+//                            applied from a journal this checkout does not have
+//
+// A hash-only doctor would call the SPO-72 case "migrations pending" — true,
+// but silent about *why* drizzle is about to skip them, which is the diagnosis
+// this tool exists to produce.
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const journalPath = path.join(packageDir, "drizzle/meta/_journal.json");
+const migrationsFolder = path.join(packageDir, "drizzle");
 
-export type JournalEntry = { idx: number; when: number; tag: string };
-export type LedgerRow = { id: number; createdAt: number };
+/**
+ * `hash` is optional on both sides so the timestamp checks stay usable without
+ * it: a caller that has not read the .sql files, or a ledger row predating the
+ * column, simply skips the hash comparison rather than reporting a false edit.
+ */
+export type JournalEntry = JournalFileEntry & { hash?: string };
+export type LedgerRow = { id: number; createdAt: number; hash?: string };
 
 export type Problem = {
   title: string;
@@ -69,6 +88,78 @@ export function diagnose(
         `${rows.length} applied vs ${entries.length} in the journal — a ` +
         "migration was applied from a journal that no longer matches this " +
         "checkout. Resolve by hand; this is not mechanically repairable.",
+    });
+  }
+
+  // ── hash checks ─────────────────────────────────────────────────────────
+  //
+  // drizzle keys applied migrations by the sha256 of the .sql it ran. Editing
+  // an applied file leaves every timestamp in perfect order while the schema in
+  // the repo stops describing the schema in the database, so nothing above can
+  // see it.
+  const journalHashes = new Set(entries.flatMap((e) => (e.hash ? [e.hash] : [])));
+  const ledgerHashes = new Set(rows.flatMap((r) => (r.hash ? [r.hash] : [])));
+
+  const modified: Array<{ id: number; tag: string; applied: string; onDisk: string }> = [];
+  for (let i = 0; i < Math.min(rows.length, entries.length); i++) {
+    const { hash: applied, id } = rows[i];
+    const { hash: onDisk, tag } = entries[i];
+    if (!applied || !onDisk || applied === onDisk) continue;
+
+    // An in-place edit is the case that orphans *both* sides: the ledger holds
+    // a hash for content that no longer exists on disk, and the file on disk
+    // hashes to something no row ever applied. Reordered-but-intact migrations
+    // find both hashes elsewhere in the other set, so they fall through to the
+    // timestamp checks below instead of being misreported as an edit.
+    if (!journalHashes.has(applied) && !ledgerHashes.has(onDisk)) {
+      modified.push({ id, tag, applied, onDisk });
+    }
+  }
+
+  if (modified.length > 0) {
+    problems.push({
+      title: "migration files were modified after they were applied",
+      detail:
+        modified
+          .map(
+            ({ id, tag, applied, onDisk }) =>
+              `  ${tag}: ledger row ${id} applied ${short(applied)}, ` +
+              `${tag}.sql now hashes to ${short(onDisk)}`,
+          )
+          .join("\n") +
+        "\n\ndrizzle never re-runs a migration it has already recorded, so this " +
+        "edit exists in the repo and in no database that ran the original. " +
+        "Restore the file (`git checkout` the .sql) and ship the change as a " +
+        "new migration; `db:generate` will not do it for you.",
+    });
+  }
+
+  // Set membership, the same comparison `migrate.ts` makes on the deploy side:
+  // a row whose hash matches no .sql in this journal ran from a journal this
+  // checkout does not have. Rows already explained as an in-place edit are
+  // excluded so the operator gets one diagnosis per row, not two.
+  const modifiedIds = new Set(modified.map((m) => m.id));
+  const foreign = rows.flatMap((row) =>
+    row.hash && !journalHashes.has(row.hash) && !modifiedIds.has(row.id)
+      ? [{ id: row.id, hash: row.hash, createdAt: row.createdAt }]
+      : [],
+  );
+
+  if (foreign.length > 0) {
+    problems.push({
+      title: "ledger contains migrations that are not in this journal",
+      detail:
+        foreign
+          .map(
+            ({ id, hash, createdAt }) =>
+              `  row ${id}: ${short(hash)}, applied ${iso(createdAt)}`,
+          )
+          .join("\n") +
+        "\n\nNo .sql in drizzle/ hashes to these, so this database ran " +
+        "migrations from a journal this checkout is missing — usually a branch " +
+        "whose migrations were applied here and then abandoned. Point at the " +
+        "right database, or rebase onto the branch that generated them; " +
+        "applying this journal on top risks conflicting DDL.",
     });
   }
 
@@ -147,6 +238,11 @@ function iso(epochMs: number): string {
   return new Date(epochMs).toISOString();
 }
 
+/** Enough sha256 to compare two by eye; the full 64 chars are noise in a diff. */
+function short(hash: string): string {
+  return hash.slice(0, 12);
+}
+
 // ── runner ────────────────────────────────────────────────────────────────
 
 /**
@@ -196,21 +292,26 @@ async function main(): Promise<void> {
     process.env.DATABASE_URL ||
     "postgresql://localhost:5432/sponsee";
 
-  const journal = JSON.parse(readFileSync(journalPath, "utf8")) as {
-    entries: JournalEntry[];
-  };
+  // Hashes the .sql files as it reads the journal, so `diagnose` can compare
+  // them against the ledger's own `hash` column.
+  const entries = readJournal(migrationsFolder);
 
   const client = new Client({ connectionString: url });
   await client.connect();
 
   let rows: LedgerRow[] = [];
   try {
-    const result = await client.query<{ id: string; created_at: string }>(
-      "select id, created_at from drizzle.__drizzle_migrations order by id asc",
+    const result = await client.query<{
+      id: string;
+      hash: string | null;
+      created_at: string;
+    }>(
+      "select id, hash, created_at from drizzle.__drizzle_migrations order by id asc",
     );
     rows = result.rows.map((r) => ({
       id: Number(r.id),
       createdAt: Number(r.created_at),
+      hash: r.hash ?? undefined,
     }));
   } catch (error) {
     // No ledger table yet — a fresh database. Nothing is applied, which is a
@@ -220,11 +321,11 @@ async function main(): Promise<void> {
     await client.end();
   }
 
-  const { applied, pending, problems } = diagnose(journal.entries, rows, { strict });
+  const { applied, pending, problems } = diagnose(entries, rows, { strict });
 
   console.log(
     `db:doctor (${label}) — ${new URL(url).host}: ` +
-      `${applied}/${journal.entries.length} applied, ${pending.length} pending`,
+      `${applied}/${entries.length} applied, ${pending.length} pending`,
   );
 
   if (problems.length === 0) {
