@@ -251,10 +251,12 @@ export const chaseRouter = createTRPCRouter({
 
         if (!claimed) {
           // Lost the claim to an overlapping request; loop to resolve against
-          // that winner's actual enqueue outcome rather than guessing.
+          // that winner's actual enqueue outcome rather than guessing. Back off
+          // so a claim that keeps flapping cannot spin this loop hot.
           if (Date.now() >= inflightDeadline) {
             throw new TRPCError({ code: "CONFLICT", message: "Event already claimed or processed" });
           }
+          await sleep(APPROVE_INFLIGHT_POLL_MS);
           continue;
         }
 
