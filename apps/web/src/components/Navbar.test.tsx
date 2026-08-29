@@ -58,4 +58,11 @@ describe("CommandPalette keyboard handling", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.queryByLabelText("Search deals, brands, invoices")).not.toBeInTheDocument();
   });
+
+  it("exposes dialog semantics for screen readers", () => {
+    renderPalette(true, vi.fn());
+
+    const dialog = screen.getByRole("dialog", { name: "Search deals, brands, invoices" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+  });
 });

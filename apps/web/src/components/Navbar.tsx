@@ -162,6 +162,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search deals, brands, invoices"
         className="w-full max-w-[560px] overflow-hidden rounded-[10px] border border-hairline bg-surface shadow-warm-lg"
         onClick={(e) => e.stopPropagation()}
       >
@@ -392,6 +395,8 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
             }}
             className="relative rounded-lg p-2 text-ink-2 transition-colors hover:bg-surface-subtle"
             aria-label="Notifications"
+            aria-haspopup="true"
+            aria-expanded={bellOpen}
           >
             <Bell className="h-4 w-4" />
             <span className="absolute right-1.5 top-1.5 flex h-2 w-2 items-center justify-center rounded-full bg-brick text-[0px]" />
@@ -417,6 +422,9 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
               setBellOpen(false);
             }}
             className="flex items-center gap-1 rounded-lg p-1 transition-colors hover:bg-surface-subtle"
+            aria-label="Account menu"
+            aria-haspopup="true"
+            aria-expanded={avatarOpen}
           >
             <img
               src={user?.image || "/pixelpanda-avatar.png"}

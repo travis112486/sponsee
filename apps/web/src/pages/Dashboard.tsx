@@ -186,30 +186,23 @@ export default function Dashboard() {
         {activeDeals.length > 0 ? (
           <div className="mt-3 space-y-2">
             {activeDeals.slice(0, 5).map((deal) => (
-              <div
+              <button
                 key={deal.id}
-                role="button"
-                tabIndex={0}
+                type="button"
                 aria-label={`Open ${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
                 onClick={() => navigate(`/pipeline/${deal.id}`)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    navigate(`/pipeline/${deal.id}`);
-                  }
-                }}
-                className="flex cursor-pointer items-center justify-between rounded-lg border border-hairline bg-surface-subtle px-3 py-2 transition-colors hover:border-pine/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
+                className="flex w-full cursor-pointer items-center justify-between rounded-lg border border-hairline bg-surface-subtle px-3 py-2 text-left transition-colors hover:border-pine/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
               >
-                <div>
-                  <p className="text-[13px] font-medium text-ink">{deal.title}</p>
-                  <p className="text-[11px] text-ink-3">
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-medium text-ink">{deal.title}</span>
+                  <span className="block text-[11px] text-ink-3">
                     {deal.brand?.name} · {stageLabels[deal.stage]}
-                  </p>
-                </div>
-                <p className="text-[13px] font-semibold text-ink">
+                  </span>
+                </span>
+                <span className="text-[13px] font-semibold text-ink">
                   {formatCents(deal.valueCents)}
-                </p>
-              </div>
+                </span>
+              </button>
             ))}
           </div>
         ) : (
