@@ -5,6 +5,7 @@ import { TRPCError } from "@trpc/server";
 import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { dealStages, dealTypes, platforms, paymentTerms } from "@sponsee/shared";
+import { assertDealSlotAvailable } from "../billing/gate.js";
 
 export const dealsRouter = createTRPCRouter({
   list: creatorScopedProcedure.query(async ({ ctx }) => {
@@ -87,6 +88,9 @@ export const dealsRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Plan gate (SPO-24): enforce the tier's active-deal slot limit.
+      await assertDealSlotAvailable(ctx.db, ctx.creatorId);
+
       // Verify brand ownership
       const [brand] = await db
         .select()

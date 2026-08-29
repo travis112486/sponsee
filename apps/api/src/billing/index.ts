@@ -3,3 +3,4 @@ export { billingRouter } from "./router.js";
 export { registerStripeWebhook } from "./webhook.js";
 export * from "./plans.js";
 export * from "./entitlements.js";
+export * from "./gate.js";
