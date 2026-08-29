@@ -322,6 +322,7 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
   const { data: brands } = trpc.brand.list.useQuery();
   const createBrand = trpc.brand.create.useMutation({
     onSuccess: () => utils.brand.list.invalidate(),
+    onError: (err) => toast.error(err.message || "Failed to create brand"),
   });
   const createDeal = trpc.deals.create.useMutation({
     onSuccess: () => {
@@ -329,6 +330,7 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
       toast("Deal created");
       onClose();
     },
+    onError: (err) => toast.error(err.message || "Failed to create deal"),
   });
 
   const [brandMode, setBrandMode] = useState<"select" | "create">("select");
@@ -359,11 +361,15 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
         toast("Brand name is required");
         return;
       }
-      const brand = await createBrand.mutateAsync({
-        name: newBrandName.trim(),
-        category: newBrandCategory.trim() || undefined,
-      });
-      brandId = brand.id;
+      try {
+        const brand = await createBrand.mutateAsync({
+          name: newBrandName.trim(),
+          category: newBrandCategory.trim() || undefined,
+        });
+        brandId = brand.id;
+      } catch {
+        return;
+      }
     }
 
     if (!brandId) {
