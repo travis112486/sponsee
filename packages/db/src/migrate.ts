@@ -17,8 +17,7 @@
  * so `assertJournalFullyApplied` re-reads the ledger afterwards and fails if
  * any journal entry is missing from it. Skipping is not a success here.
  */
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,6 +25,12 @@ import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Client } from "pg";
+
+import { readJournal, type PlannedMigration } from "./journal.js";
+
+// Re-exported so this file stays the whole contract for the deploy entrypoint;
+// `doctor.ts` imports the same function from `./journal.js` (SPO-81).
+export { readJournal, type PlannedMigration };
 
 /**
  * Serializes concurrent migrators (two deploys triggered close together).
@@ -38,19 +43,6 @@ const LOCK_POLL_MS = 2_000;
 /** Mirrors drizzle's own defaults in `pg-core/dialect.ts`. */
 const MIGRATIONS_SCHEMA = "drizzle";
 const MIGRATIONS_TABLE = "__drizzle_migrations";
-
-type JournalEntry = {
-  idx: number;
-  when: number;
-  tag: string;
-};
-
-type Journal = {
-  entries: JournalEntry[];
-};
-
-/** A journal entry paired with the sha256 drizzle records for it. */
-type PlannedMigration = JournalEntry & { hash: string };
 
 type AppliedMigration = { hash: string; created_at: string | number | null };
 
@@ -78,25 +70,6 @@ export function resolveMigrationsFolder(fromDir: string): string {
       `Looked for meta/_journal.json in: ${candidates.join(", ")}. ` +
       `If this is a deployed image, the 'drizzle' directory was pruned out of @sponsee/db.`,
   );
-}
-
-/**
- * Same hash drizzle stores in the ledger: sha256 of the whole .sql file,
- * before it is split on statement breakpoints. Kept in sync with
- * `drizzle-orm/migrator.js#readMigrationFiles`.
- */
-export function readJournal(migrationsFolder: string): PlannedMigration[] {
-  const journalPath = join(migrationsFolder, "meta", "_journal.json");
-  const journal = JSON.parse(readFileSync(journalPath, "utf8")) as Journal;
-
-  return journal.entries.map((entry) => {
-    const sqlPath = join(migrationsFolder, `${entry.tag}.sql`);
-    const contents = readFileSync(sqlPath, "utf8");
-    return {
-      ...entry,
-      hash: createHash("sha256").update(contents).digest("hex"),
-    };
-  });
 }
 
 /**
