@@ -60,7 +60,15 @@ app.post("/api/webhooks/email/:provider", handleEmailWebhook);
 // Stripe webhooks (signature-verified inside handler)
 registerStripeWebhook(app);
 
-// Health check (raw)
-app.get("/health", (c) => c.json({ status: "ok", version: "0.1.0" }));
+// Health check (raw). `commit` identifies which build is live — Render injects
+// RENDER_GIT_COMMIT automatically; GIT_COMMIT is the fallback for other hosts.
+// Without it there is no way to tell a deployed host apart from a stale one.
+app.get("/health", (c) =>
+  c.json({
+    status: "ok",
+    version: "0.1.0",
+    commit: process.env.RENDER_GIT_COMMIT ?? process.env.GIT_COMMIT ?? "unknown",
+  }),
+);
 
 export default app;

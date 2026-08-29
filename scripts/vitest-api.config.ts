@@ -5,7 +5,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["apps/api/src/**/*.{test,spec}.{ts,tsx}"],
+    include: [
+      "apps/api/src/**/*.{test,spec}.{ts,tsx}",
+      "packages/db/src/**/*.{test,spec}.{ts,tsx}",
+    ],
     exclude: ["**/node_modules/**", "**/dist/**", "**/.turbo/**"],
     setupFiles: ["scripts/vitest-setup.ts"],
     fileParallelism: false,
