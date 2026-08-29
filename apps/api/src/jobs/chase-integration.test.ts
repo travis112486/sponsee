@@ -18,6 +18,19 @@ vi.mock("./boss.js", () => ({
   stopBoss: vi.fn(() => Promise.resolve()),
 }));
 
+// Lets a test hold a mocked boss.send() call open so it can force a genuine
+// interleaving window between two overlapping approve() calls, instead of
+// awaiting each call to completion before starting the next.
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 // ── Mailpit lifecycle helpers (real instance for acceptance test) ─────────────
 
 async function getFreePort(): Promise<number> {
@@ -44,6 +57,32 @@ async function waitForMailpit(apiUrl: string, timeoutMs = 5000): Promise<void> {
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error("Mailpit did not become ready in time");
+}
+
+// SMTP acceptance does not imply the message is queryable via Mailpit's HTTP
+// API yet — persistence is asynchronous. Poll for it instead of reading once;
+// throw (never silently pass) if it never shows up within the deadline.
+async function waitForMailpitMatches<T extends { To?: Array<{ Address: string }> }>(
+  apiUrl: string,
+  filterFn: (m: T) => boolean,
+  { timeoutMs = 5000, minCount = 1 }: { timeoutMs?: number; minCount?: number } = {}
+): Promise<T[]> {
+  const start = Date.now();
+  let lastCount = 0;
+  while (Date.now() - start < timeoutMs) {
+    const res = await fetch(`${apiUrl}/api/v1/messages?limit=100`);
+    if (!res.ok) {
+      throw new Error(`Mailpit API returned ${res.status} while polling for messages`);
+    }
+    const data = (await res.json()) as { messages?: T[] };
+    const matches = (data.messages || []).filter(filterFn);
+    lastCount = matches.length;
+    if (matches.length >= minCount) return matches;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(
+    `Mailpit did not persist ${minCount} matching message(s) within ${timeoutMs}ms (found ${lastCount})`
+  );
 }
 
 function findMailpitBinary(): string {
@@ -589,6 +628,105 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
       .from(schema.chaseEvents)
       .where(eq(schema.chaseEvents.invoiceId, invoice.id));
     expect(after.status).toBe("approved");
+  });
+
+  // The tests above only ever await one approve() call before starting the
+  // next, so they never exercise real overlap between two in-flight requests.
+  // These use a deferred boss.send() to hold request A open inside its
+  // enqueue call while request B runs concurrently against the same event.
+  it("concurrent approve: overlapping requests share one durable enqueue", async () => {
+    const { creator, invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    const deferred = createDeferred<void>();
+    mockBossSend.mockImplementationOnce(() => deferred.promise);
+
+    const caller = chaseRouter.createCaller(mockCtx(creator.id));
+
+    // Request A: claims the event (awaiting_review -> approved), then blocks
+    // inside boss.send() until we resolve the deferred below.
+    const requestA = caller.approve({ chaseEventId: event.id });
+
+    // Wait for A's atomic claim to land WITHOUT waiting for A's enqueue to
+    // finish — this is the overlap window request B runs in.
+    await vi.waitFor(async () => {
+      const [current] = await db
+        .select()
+        .from(schema.chaseEvents)
+        .where(eq(schema.chaseEvents.id, event.id));
+      expect(current.status).toBe("approved");
+    });
+
+    // Request B overlaps A: it sees the event already approved and must
+    // report alreadyQueued rather than attempting a second enqueue.
+    const requestB = await caller.approve({ chaseEventId: event.id });
+    expect(requestB).toEqual({ success: true, queued: true, alreadyQueued: true });
+
+    // Only request A ever attempted to enqueue — exactly one durable job.
+    expect(mockBossSend).toHaveBeenCalledTimes(1);
+
+    // Let A's enqueue succeed.
+    deferred.resolve();
+    const resultA = await requestA;
+    expect(resultA).toEqual({ success: true, queued: true });
+
+    const [after] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(after.status).toBe("approved");
+  });
+
+  it("concurrent approve: enqueue failure during an overlapping request reverts to awaiting_review", async () => {
+    const { creator, invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    const deferred = createDeferred<void>();
+    mockBossSend.mockImplementationOnce(() => deferred.promise);
+
+    const caller = chaseRouter.createCaller(mockCtx(creator.id));
+
+    const requestA = caller.approve({ chaseEventId: event.id });
+
+    await vi.waitFor(async () => {
+      const [current] = await db
+        .select()
+        .from(schema.chaseEvents)
+        .where(eq(schema.chaseEvents.id, event.id));
+      expect(current.status).toBe("approved");
+    });
+
+    // Request B overlaps while A's enqueue is still pending: the event is
+    // already claimed, so B reports alreadyQueued — a response that will
+    // turn out to be stale once A's enqueue below fails.
+    const requestB = await caller.approve({ chaseEventId: event.id });
+    expect(requestB).toEqual({ success: true, queued: true, alreadyQueued: true });
+
+    // Now A's enqueue fails.
+    deferred.reject(new Error("pg-boss send failed"));
+    await expect(requestA).rejects.toThrow("Failed to queue chase email");
+
+    // The event reverts to awaiting_review: request B's "alreadyQueued" was
+    // stale, since no durable job actually exists for this event. A future
+    // approve (or a UI retry) is required to actually queue a send.
+    const [after] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, event.id));
+    expect(after.status).toBe("awaiting_review");
+
+    // Only one enqueue attempt was ever made.
+    expect(mockBossSend).toHaveBeenCalledTimes(1);
   });
 
   it("sendChaseEmail sends via provider and records sent status + timeline", async () => {
@@ -1277,16 +1415,13 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
 
       expect(result.providerMessageId).toBeTruthy();
 
-      // Verify message landed in the real Mailpit inbox
-      const inboxRes = await fetch(`${apiUrl}/api/v1/messages?limit=20`);
-      const inboxData = (await inboxRes.json()) as {
-        messages?: Array<{ Subject: string; ID: string; To: Array<{ Address: string }> }>;
-      };
-      const match = inboxData.messages?.find(
-        (m) => m.To?.some((t) => t.Address === "brand@example.com")
+      // Verify message landed in the real Mailpit inbox. SMTP acceptance
+      // (above) does not imply the HTTP API can already see it — poll.
+      const matches = await waitForMailpitMatches<{ Subject: string; To: Array<{ Address: string }> }>(
+        apiUrl,
+        (m) => m.To?.some((t) => t.Address === "brand@example.com") ?? false
       );
-      expect(match).toBeDefined();
-      expect(match!.Subject).toContain("INV-0001");
+      expect(matches[0].Subject).toContain("INV-0001");
 
       // Timeline shows sent event
       const timeline = await caller.events({ invoiceId: invoice.id });
@@ -1331,7 +1466,8 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
  *      error on the identical request).
  *
  * Mailpit (local capture at localhost:8025 / SMTP 1025) is the "real provider".
- * Test 2 is skipped if Mailpit is not reachable so CI green is never faked.
+ * Test 2 requires Mailpit to be reachable and fails explicitly if it is not —
+ * it never skips, so CI green cannot be faked by an absent dependency.
  */
 describe("SPO-64 delivery-truth audit (against Mailpit + current implementation)", () => {
   // Seed a single past-due open invoice with a UNIQUE recipient so an
@@ -1428,17 +1564,19 @@ describe("SPO-64 delivery-truth audit (against Mailpit + current implementation)
       .from(schema.chaseEvents)
       .where(eq(schema.chaseEvents.invoiceId, invoice.id));
 
-    // Probe Mailpit; skip (do not fake a green) when it is not available.
-    let mailpitAvailable = false;
+    // This test's entire purpose is asserting against a real Mailpit inbox —
+    // a silent skip here would let CI go green without ever exercising the
+    // acceptance path. Fail explicitly instead if Mailpit is unreachable.
     try {
-      const probe = await fetch("http://localhost:8025/api/v1/messages", { method: "GET" });
-      mailpitAvailable = probe.ok;
-    } catch {
-      mailpitAvailable = false;
-    }
-    if (!mailpitAvailable) {
-      console.log("SPO-64 audit test 2 skipped: no Mailpit at localhost:8025");
-      return;
+      const probe = await fetch("http://localhost:8025/api/v1/messages");
+      if (!probe.ok) {
+        throw new Error(`Mailpit health check returned HTTP ${probe.status}`);
+      }
+    } catch (err) {
+      throw new Error(
+        `Mailpit is required for this acceptance test but is not reachable at ` +
+          `http://localhost:8025/api/v1/messages: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
 
     // Isolate the inbox so "exactly one" counts only this send.
@@ -1473,12 +1611,10 @@ describe("SPO-64 delivery-truth audit (against Mailpit + current implementation)
     expect(sent.sentAt).not.toBeNull();
 
     // Exactly ONE real message landed in Mailpit for this unique recipient.
-    const inboxRes = await fetch("http://localhost:8025/api/v1/messages?limit=100");
-    const inbox = (await inboxRes.json()) as {
-      messages: Array<{ Subject: string; To: Array<{ Address: string }> }>;
-    };
-    const matches = (inbox.messages || []).filter((m) =>
-      m.To?.some((t) => t.Address === recipient)
+    // SMTP acceptance does not imply the HTTP API can see it yet — poll.
+    const matches = await waitForMailpitMatches<{ Subject: string; To: Array<{ Address: string }> }>(
+      "http://localhost:8025",
+      (m) => m.To?.some((t) => t.Address === recipient) ?? false
     );
     expect(matches).toHaveLength(1);
     expect(matches[0].Subject).toContain("INV-0001");
