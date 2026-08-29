@@ -206,7 +206,7 @@ export default function Pipeline() {
               {byStage[stage]?.map((deal) => (
                 <div
                   key={deal.id}
-                  className="group relative rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-all hover:border-pine/30 hover:shadow-warm-md"
+                  className="group relative min-h-[118px] rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-all hover:border-pine/30 hover:shadow-warm-md"
                 >
                   {/* Primary open action — stretched under the card; nested controls sit above it */}
                   <button
@@ -223,7 +223,7 @@ export default function Pipeline() {
                         <p className="truncate text-[12px] font-semibold text-ink-2">
                           {deal.brand?.name ?? "Unknown brand"}
                         </p>
-                        <p className="mt-0.5 truncate text-[13px] font-medium text-ink">
+                        <p className="mt-0.5 line-clamp-2 text-[13px] font-medium leading-[18px] text-ink">
                           {deal.title}
                         </p>
                       </div>

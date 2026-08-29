@@ -229,7 +229,7 @@ export default function CalendarPage() {
     return (
       <div className="mx-auto max-w-[1200px]">
         <div className="mb-6">
-          <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">Calendar</h2>
+          <h2 className="font-serif text-[19px] text-ink">Calendar</h2>
           <p className="mt-0.5 text-[13px] text-ink-3">Deliverable deadlines</p>
         </div>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
@@ -248,7 +248,7 @@ export default function CalendarPage() {
     return (
       <div className="mx-auto max-w-[1200px]">
         <div className="mb-6">
-          <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">Calendar</h2>
+          <h2 className="font-serif text-[19px] text-ink">Calendar</h2>
           <p className="mt-0.5 text-[13px] text-ink-3">Deliverable deadlines</p>
         </div>
         <QueryError onRetry={refetch} />
@@ -260,7 +260,7 @@ export default function CalendarPage() {
     return (
       <div className="mx-auto max-w-[1200px]">
         <div className="mb-6">
-          <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">Calendar</h2>
+          <h2 className="font-serif text-[19px] text-ink">Calendar</h2>
           <p className="mt-0.5 text-[13px] text-ink-3">Deliverable deadlines</p>
         </div>
         <EmptyState />
@@ -272,7 +272,7 @@ export default function CalendarPage() {
     <div className="mx-auto max-w-[1200px]">
       {/* Header */}
       <div className="mb-6">
-        <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">Calendar</h2>
+        <h2 className="font-serif text-[19px] text-ink">Calendar</h2>
         <p className="mt-0.5 text-[13px] text-ink-3">
           Deliverable deadlines — {formatMonthYear(currentMonth)}
         </p>
