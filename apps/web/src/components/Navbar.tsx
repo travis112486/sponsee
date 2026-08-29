@@ -13,6 +13,7 @@ import {
   Plus,
   Radio,
   Menu,
+  Calendar,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -20,12 +21,11 @@ import { useAuth } from "@/lib/auth";
 import { trpc } from "@/trpc";
 import { planLabels, planPricesCents } from "@sponsee/shared";
 
-// Calendar and the full Rate Calculator screen are approved post-beta scope
-// (SPO-5 mvp-tech-spec §10) — kept out of primary nav until built (D-005).
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { to: "/payments", label: "Payments", icon: Wallet },
+  { to: "/calendar", label: "Calendar", icon: Calendar },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -33,6 +33,7 @@ const pageTitles: Record<string, { title: string; crumb?: string }> = {
   "/": { title: "Dashboard" },
   "/pipeline": { title: "Pipeline" },
   "/payments": { title: "Payments" },
+  "/calendar": { title: "Calendar" },
   "/settings": { title: "Settings" },
 };
 
