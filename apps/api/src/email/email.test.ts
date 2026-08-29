@@ -138,6 +138,37 @@ describe("PostmarkProvider", () => {
     expect(event!.detail).toBe("Mailbox full");
   });
 
+  it("ingests SoftBounce as failed, not bounced", () => {
+    const event = provider.ingestWebhook({
+      Type: "Bounce",
+      MessageID: "msg-123",
+      BounceType: "SoftBounce",
+      Description: "Mailbox full",
+    });
+    expect(event).not.toBeNull();
+    expect(event!.type).toBe("failed");
+  });
+
+  it("ingests Transient bounce as failed, not bounced", () => {
+    const event = provider.ingestWebhook({
+      Type: "Bounce",
+      MessageID: "msg-123",
+      BounceType: "Transient",
+    });
+    expect(event).not.toBeNull();
+    expect(event!.type).toBe("failed");
+  });
+
+  it("ingests unknown bounce type as failed, not bounced", () => {
+    const event = provider.ingestWebhook({
+      Type: "Bounce",
+      MessageID: "msg-123",
+      BounceType: "",
+    });
+    expect(event).not.toBeNull();
+    expect(event!.type).toBe("failed");
+  });
+
   it("returns null for unsupported webhook type", () => {
     expect(provider.ingestWebhook({ Type: "Click", MessageID: "msg-123" })).toBeNull();
   });

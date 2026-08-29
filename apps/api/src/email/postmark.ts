@@ -120,7 +120,7 @@ export class PostmarkProvider implements EmailProvider {
         return { ...base, type: "opened" };
       case "Bounce": {
         const bounceType = (p.BounceType as string) || "";
-        const isHard = bounceType === "HardBounce" || bounceType === "Transient" === false;
+        const isHard = bounceType === "HardBounce";
         return { ...base, type: isHard ? "bounced" : "failed", detail: String(p.Description || bounceType) };
       }
       case "SpamComplaint":
