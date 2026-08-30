@@ -10,6 +10,25 @@ export function isPaidSubscription(status: SubscriptionStatus | null): boolean {
 }
 
 /**
+ * Statuses where a subscription object still exists on the Stripe customer.
+ *
+ * A different question from `isPaidSubscription`, which asks whether to grant
+ * paid entitlements. A `past_due` or `unpaid` subscription grants nothing, but
+ * it is still live and still billable — opening a second Checkout against it
+ * double-charges exactly as it would against an `active` one, so the guard on
+ * checkout has to ask this question and not the entitlement one (SPO-87 HIGH-1).
+ *
+ * `incomplete` is deliberately excluded: its first payment never succeeded and
+ * Stripe voids it within 23 hours, so a fresh Checkout is the recovery path
+ * rather than a double charge.
+ */
+const liveStatuses: SubscriptionStatus[] = ["active", "trialing", "past_due", "unpaid"];
+
+export function hasLiveSubscription(status: SubscriptionStatus | null): boolean {
+  return status != null && liveStatuses.includes(status);
+}
+
+/**
  * Coerce a raw Stripe subscription status into our enum.
  *
  * Stripe can send statuses our `subscription_status` enum doesn't carry (e.g.

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { db, pgliteClient } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
-import { count, eq } from "drizzle-orm";
+import { and, count, eq } from "drizzle-orm";
 
 // Set required env vars BEFORE billing modules load.
 process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
@@ -277,6 +277,10 @@ beforeEach(async () => {
   await cleanTables();
   sentEmails.length = 0;
   vi.clearAllMocks();
+  // The handler reads STRIPE_WEBHOOK_SECRET per request now (SPO-87 HIGH-2), so
+  // the "missing secret" test's `delete` is no longer invisible to the tests
+  // that follow it — restore it here rather than leaving the suite order-dependent.
+  process.env.STRIPE_WEBHOOK_SECRET = "whsec_dummy";
 });
 
 // ── Entitlements ─────────────────────────────────────────────────────────────
@@ -388,6 +392,43 @@ describe("billing.getSubscription", () => {
     };
     expect(body.result?.data?.json?.activeDealCount).toBe(1);
   });
+
+  // Stripe identifiers are server-side plumbing. The panel never reads them —
+  // plan changes go through `createPortalSession`, which resolves the customer
+  // itself — so shipping them to the browser only widens what a stolen session
+  // or an XSS payload can walk off with (SPO-87 LOW).
+  it("does not expose Stripe customer or subscription ids to the browser", async () => {
+    const { creator, cookie } = await createUserAndCreator("test@example.com", "pro");
+    await db
+      .update(schema.creators)
+      .set({
+        stripeCustomerId: "cus_secret",
+        stripeSubscriptionId: "sub_secret",
+        subscriptionStatus: "active",
+      })
+      .where(eq(schema.creators.id, creator.id));
+
+    const res = await app.request("/api/trpc/billing.getSubscription", {
+      method: "GET",
+      headers: { cookie, Origin: "http://localhost:3000" },
+    });
+
+    expect(res.status).toBe(200);
+    const raw = await res.text();
+    expect(raw).not.toContain("cus_secret");
+    expect(raw).not.toContain("sub_secret");
+
+    // Everything the panel actually renders is still there.
+    const body = JSON.parse(raw) as {
+      result?: { data?: { json?: Record<string, unknown> } };
+    };
+    const payload = body.result?.data?.json ?? {};
+    expect(payload).toMatchObject({ plan: "pro", status: "active" });
+    expect(payload).toHaveProperty("dealSlotLimit");
+    expect(payload).toHaveProperty("activeDealCount");
+    expect(payload).not.toHaveProperty("stripeCustomerId");
+    expect(payload).not.toHaveProperty("stripeSubscriptionId");
+  });
 });
 
 describe("billing.createCheckoutSession", () => {
@@ -483,6 +524,102 @@ describe("billing.createCheckoutSession", () => {
       expect.objectContaining({ customer: "cus_existing" })
     );
   });
+
+  // ── Double-billing guard (SPO-87 HIGH-1) ───────────────────────────────────
+  //
+  // `mode: "subscription"` Checkout creates an *additional* subscription on the
+  // customer; Stripe never cancels the one already there. Without this guard a
+  // Pro creator who clicked "Switch to Creator" was billed $39 and $29 every
+  // month, and `plan` settled on whichever webhook happened to land last.
+
+  async function attemptCheckout(cookie: string, tier: string) {
+    return app.request("/api/trpc/billing.createCheckoutSession", {
+      method: "POST",
+      headers: { cookie, Origin: "http://localhost:3000", "Content-Type": "application/json" },
+      body: JSON.stringify({ json: { tier } }),
+    });
+  }
+
+  for (const status of ["active", "trialing", "past_due", "unpaid"] as const) {
+    it(`refuses a second checkout while a subscription is ${status}`, async () => {
+      const { creator, cookie } = await createUserAndCreator("test@example.com", "pro");
+      await db
+        .update(schema.creators)
+        .set({
+          stripeCustomerId: "cus_live",
+          stripeSubscriptionId: "sub_live",
+          subscriptionStatus: status,
+        })
+        .where(eq(schema.creators.id, creator.id));
+
+      mockStripeCheckoutSessions.create.mockResolvedValue({
+        url: "https://checkout.stripe.com/test",
+      });
+
+      const res = await attemptCheckout(cookie, "creator");
+
+      expect(res.status).toBe(409);
+      // The assertion that matters: no second subscription was ever opened.
+      expect(mockStripeCheckoutSessions.create).not.toHaveBeenCalled();
+
+      // And the creator's billing state is untouched by the rejected attempt.
+      const [after] = await db
+        .select()
+        .from(schema.creators)
+        .where(eq(schema.creators.id, creator.id));
+      expect(after?.stripeSubscriptionId).toBe("sub_live");
+      expect(after?.plan).toBe("pro");
+    });
+  }
+
+  it("refuses even a checkout for the tier the creator is already on", async () => {
+    const { creator, cookie } = await createUserAndCreator("test@example.com", "creator");
+    await db
+      .update(schema.creators)
+      .set({ stripeCustomerId: "cus_live", subscriptionStatus: "active" })
+      .where(eq(schema.creators.id, creator.id));
+
+    const res = await attemptCheckout(cookie, "creator");
+
+    expect(res.status).toBe(409);
+    expect(mockStripeCheckoutSessions.create).not.toHaveBeenCalled();
+  });
+
+  // The mirror image: a subscription that is genuinely dead must not strand the
+  // creator outside the funnel. These are the statuses where a fresh Checkout is
+  // the correct — and only — way back to paying us.
+  for (const status of ["canceled", "incomplete_expired", "incomplete"] as const) {
+    it(`still allows checkout after a ${status} subscription`, async () => {
+      const { creator, cookie } = await createUserAndCreator("test@example.com");
+      await db
+        .update(schema.creators)
+        .set({ stripeCustomerId: "cus_dead", subscriptionStatus: status })
+        .where(eq(schema.creators.id, creator.id));
+
+      mockStripeCheckoutSessions.create.mockResolvedValue({
+        url: "https://checkout.stripe.com/test",
+      });
+
+      const res = await attemptCheckout(cookie, "pro");
+
+      expect(res.status).toBe(200);
+      expect(mockStripeCheckoutSessions.create).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it("allows a first checkout when no subscription has ever existed", async () => {
+    const { cookie } = await createUserAndCreator("test@example.com");
+
+    mockStripeCustomers.create.mockResolvedValue({ id: "cus_first" });
+    mockStripeCheckoutSessions.create.mockResolvedValue({
+      url: "https://checkout.stripe.com/test",
+    });
+
+    const res = await attemptCheckout(cookie, "pro");
+
+    expect(res.status).toBe(200);
+    expect(mockStripeCheckoutSessions.create).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("billing.createPortalSession", () => {
@@ -532,6 +669,33 @@ describe("billing.createPortalSession", () => {
 });
 
 // ── Stripe webhook ───────────────────────────────────────────────────────────
+
+/**
+ * Deliver a `customer.subscription.*` webhook.
+ *
+ * The handler re-fetches the subscription from Stripe instead of trusting the
+ * delivered payload (SPO-87 MEDIUM-1), so the fake has to answer `retrieve` as
+ * well. By default it echoes the event's own object — the ordinary case where
+ * the delivery and Stripe's current state agree. Pass `currentState` to make
+ * them disagree, which is exactly what a delayed or replayed delivery looks
+ * like on the wire.
+ */
+function mockSubscriptionEvent(
+  type: string,
+  object: Record<string, unknown>,
+  currentState?: Record<string, unknown>
+) {
+  mockStripeWebhooks.constructEvent.mockReturnValue({ type, data: { object } });
+  mockStripeSubscriptions.retrieve.mockResolvedValue(currentState ?? object);
+}
+
+async function postWebhook() {
+  return app.request("/api/webhooks/stripe", {
+    method: "POST",
+    headers: { "stripe-signature": "sig" },
+    body: "payload",
+  });
+}
 
 describe("stripe webhook", () => {
   it("rejects when webhook secret is missing", async () => {
@@ -605,16 +769,11 @@ describe("stripe webhook", () => {
       .set({ stripeSubscriptionId: "sub_456" })
       .where(eq(schema.creators.id, creator.id));
 
-    mockStripeWebhooks.constructEvent.mockReturnValue({
-      type: "customer.subscription.updated",
-      data: {
-        object: {
-          id: "sub_456",
-          status: "past_due",
-          metadata: { creatorId: creator.id },
-          current_period_end: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
-        },
-      },
+    mockSubscriptionEvent("customer.subscription.updated", {
+      id: "sub_456",
+      status: "past_due",
+      metadata: { creatorId: creator.id },
+      current_period_end: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
     });
 
     const res = await app.request("/api/webhooks/stripe", {
@@ -657,18 +816,13 @@ describe("stripe webhook", () => {
       .set({ stripeSubscriptionId: "sub_portal", subscriptionStatus: "active", plan: "starter" })
       .where(eq(schema.creators.id, creator.id));
 
-    mockStripeWebhooks.constructEvent.mockReturnValue({
-      type: "customer.subscription.updated",
-      data: {
-        object: {
-          id: "sub_portal",
-          status: "active",
-          // No `tier` in metadata — exactly what a portal-initiated upgrade sends.
-          metadata: { creatorId: creator.id },
-          items: { data: [{ price: { id: "price_test_pro" } }] },
-          current_period_end: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
-        },
-      },
+    mockSubscriptionEvent("customer.subscription.updated", {
+      id: "sub_portal",
+      status: "active",
+      // No `tier` in metadata — exactly what a portal-initiated upgrade sends.
+      metadata: { creatorId: creator.id },
+      items: { data: [{ price: { id: "price_test_pro" } }] },
+      current_period_end: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
     });
 
     const res = await app.request("/api/webhooks/stripe", {
@@ -692,17 +846,12 @@ describe("stripe webhook", () => {
       .set({ stripeSubscriptionId: "sub_stale", subscriptionStatus: "active" })
       .where(eq(schema.creators.id, creator.id));
 
-    mockStripeWebhooks.constructEvent.mockReturnValue({
-      type: "customer.subscription.updated",
-      data: {
-        object: {
-          id: "sub_stale",
-          status: "active",
-          // Creator signed up on pro, then downgraded to creator in the portal.
-          metadata: { creatorId: creator.id, tier: "pro" },
-          items: { data: [{ price: { id: "price_test_creator" } }] },
-        },
-      },
+    mockSubscriptionEvent("customer.subscription.updated", {
+      id: "sub_stale",
+      status: "active",
+      // Creator signed up on pro, then downgraded to creator in the portal.
+      metadata: { creatorId: creator.id, tier: "pro" },
+      items: { data: [{ price: { id: "price_test_creator" } }] },
     });
 
     await app.request("/api/webhooks/stripe", {
@@ -725,16 +874,11 @@ describe("stripe webhook", () => {
       .set({ stripeSubscriptionId: "sub_nometa" })
       .where(eq(schema.creators.id, creator.id));
 
-    mockStripeWebhooks.constructEvent.mockReturnValue({
-      type: "customer.subscription.updated",
-      data: {
-        object: {
-          id: "sub_nometa",
-          status: "past_due",
-          metadata: {},
-          items: { data: [] },
-        },
-      },
+    mockSubscriptionEvent("customer.subscription.updated", {
+      id: "sub_nometa",
+      status: "past_due",
+      metadata: {},
+      items: { data: [] },
     });
 
     const res = await app.request("/api/webhooks/stripe", {
@@ -758,17 +902,12 @@ describe("stripe webhook", () => {
       .set({ stripeCustomerId: "cus_only" })
       .where(eq(schema.creators.id, creator.id));
 
-    mockStripeWebhooks.constructEvent.mockReturnValue({
-      type: "customer.subscription.created",
-      data: {
-        object: {
-          id: "sub_brand_new",
-          status: "active",
-          customer: "cus_only",
-          metadata: {},
-          items: { data: [{ price: { id: "price_test_creator" } }] },
-        },
-      },
+    mockSubscriptionEvent("customer.subscription.created", {
+      id: "sub_brand_new",
+      status: "active",
+      customer: "cus_only",
+      metadata: {},
+      items: { data: [{ price: { id: "price_test_creator" } }] },
     });
 
     const res = await app.request("/api/webhooks/stripe", {
@@ -795,16 +934,11 @@ describe("stripe webhook", () => {
       .set({ stripeSubscriptionId: "sub_paused", subscriptionStatus: "active", plan: "pro" })
       .where(eq(schema.creators.id, creator.id));
 
-    mockStripeWebhooks.constructEvent.mockReturnValue({
-      type: "customer.subscription.updated",
-      data: {
-        object: {
-          id: "sub_paused",
-          status: "paused",
-          metadata: { creatorId: creator.id },
-          items: { data: [{ price: { id: "price_test_pro" } }] },
-        },
-      },
+    mockSubscriptionEvent("customer.subscription.updated", {
+      id: "sub_paused",
+      status: "paused",
+      metadata: { creatorId: creator.id },
+      items: { data: [{ price: { id: "price_test_pro" } }] },
     });
 
     const res = await app.request("/api/webhooks/stripe", {
@@ -826,17 +960,12 @@ describe("stripe webhook", () => {
   it("ignores a subscription whose creator cannot be resolved", async () => {
     const { creator } = await createUserAndCreator("test@example.com");
 
-    mockStripeWebhooks.constructEvent.mockReturnValue({
-      type: "customer.subscription.updated",
-      data: {
-        object: {
-          id: "sub_orphan",
-          status: "active",
-          metadata: { creatorId: crypto.randomUUID() },
-          customer: "cus_unknown",
-          items: { data: [{ price: { id: "price_test_pro" } }] },
-        },
-      },
+    mockSubscriptionEvent("customer.subscription.updated", {
+      id: "sub_orphan",
+      status: "active",
+      metadata: { creatorId: crypto.randomUUID() },
+      customer: "cus_unknown",
+      items: { data: [{ price: { id: "price_test_pro" } }] },
     });
 
     const res = await app.request("/api/webhooks/stripe", {
@@ -852,6 +981,256 @@ describe("stripe webhook", () => {
       .where(eq(schema.creators.id, creator.id));
     expect(untouched?.subscriptionStatus).toBeNull();
     expect(untouched?.plan).toBe("starter");
+  });
+
+  // ── Signing secret is read per request (SPO-87 HIGH-2) ─────────────────────
+
+  it("reads the signing secret per request, not once at module load", async () => {
+    // `apps/api/src/index.ts` imports the app statically and ESM hoists that
+    // above the `dotenv.config()` below it, so under `pnpm dev` the secret only
+    // exists in the environment *after* this module was evaluated. A secret that
+    // appears late still has to be honoured, or every webhook 500s and the
+    // Stripe CLI loop documented in .env.example never works.
+    delete process.env.STRIPE_WEBHOOK_SECRET;
+    expect((await postWebhook()).status).toBe(500);
+
+    process.env.STRIPE_WEBHOOK_SECRET = "whsec_loaded_after_import";
+    mockStripeWebhooks.constructEvent.mockReturnValue({
+      type: "customer.discount.created",
+      data: { object: {} },
+    });
+
+    expect((await postWebhook()).status).toBe(200);
+    expect(mockStripeWebhooks.constructEvent).toHaveBeenLastCalledWith(
+      "payload",
+      "sig",
+      "whsec_loaded_after_import"
+    );
+  });
+
+  // ── Cancellation and dunning (SPO-24 coverage gap) ─────────────────────────
+
+  it("drops entitlements to starter on customer.subscription.deleted", async () => {
+    const { creator } = await createUserAndCreator("test@example.com", "pro");
+    await db
+      .update(schema.creators)
+      .set({ stripeSubscriptionId: "sub_gone", subscriptionStatus: "active" })
+      .where(eq(schema.creators.id, creator.id));
+
+    mockSubscriptionEvent("customer.subscription.deleted", {
+      id: "sub_gone",
+      status: "canceled",
+      metadata: { creatorId: creator.id },
+      items: { data: [{ price: { id: "price_test_pro" } }] },
+    });
+
+    expect((await postWebhook()).status).toBe(200);
+
+    const [updated] = await db
+      .select()
+      .from(schema.creators)
+      .where(eq(schema.creators.id, creator.id));
+
+    expect(updated?.subscriptionStatus).toBe("canceled");
+    // The `plan` column deliberately still reads pro — it records what they
+    // bought. What they may *do* is decided by status, and that is now starter.
+    expect(getDealSlotLimit(updated!.plan, updated!.subscriptionStatus)).toBe(planDealSlots.starter);
+  });
+
+  it("marks the subscription past_due on invoice.payment_failed", async () => {
+    const { creator } = await createUserAndCreator("test@example.com", "pro");
+    await db
+      .update(schema.creators)
+      .set({ stripeSubscriptionId: "sub_dunning", subscriptionStatus: "active" })
+      .where(eq(schema.creators.id, creator.id));
+
+    mockStripeWebhooks.constructEvent.mockReturnValue({
+      type: "invoice.payment_failed",
+      data: { object: { id: "in_1", subscription: "sub_dunning" } },
+    });
+    mockStripeSubscriptions.retrieve.mockResolvedValue({
+      id: "sub_dunning",
+      status: "past_due",
+      metadata: { creatorId: creator.id },
+      items: { data: [{ price: { id: "price_test_pro" } }] },
+    });
+
+    expect((await postWebhook()).status).toBe(200);
+
+    const [updated] = await db
+      .select()
+      .from(schema.creators)
+      .where(eq(schema.creators.id, creator.id));
+
+    expect(updated?.subscriptionStatus).toBe("past_due");
+    expect(getDealSlotLimit(updated!.plan, updated!.subscriptionStatus)).toBe(planDealSlots.starter);
+  });
+
+  it("restores entitlements on invoice.payment_succeeded after dunning", async () => {
+    const { creator } = await createUserAndCreator("test@example.com", "pro");
+    await db
+      .update(schema.creators)
+      .set({ stripeSubscriptionId: "sub_recovered", subscriptionStatus: "past_due" })
+      .where(eq(schema.creators.id, creator.id));
+
+    mockStripeWebhooks.constructEvent.mockReturnValue({
+      type: "invoice.payment_succeeded",
+      data: { object: { id: "in_2", subscription: "sub_recovered" } },
+    });
+    mockStripeSubscriptions.retrieve.mockResolvedValue({
+      id: "sub_recovered",
+      status: "active",
+      metadata: { creatorId: creator.id },
+      items: { data: [{ price: { id: "price_test_pro" } }] },
+    });
+
+    expect((await postWebhook()).status).toBe(200);
+
+    const [updated] = await db
+      .select()
+      .from(schema.creators)
+      .where(eq(schema.creators.id, creator.id));
+
+    expect(updated?.subscriptionStatus).toBe("active");
+    expect(getDealSlotLimit(updated!.plan, updated!.subscriptionStatus)).toBe(planDealSlots.pro);
+  });
+
+  // ── Out-of-order / replayed delivery (SPO-87 MEDIUM-1) ─────────────────────
+
+  it("does not resurrect a canceled subscription when a stale active update lands late", async () => {
+    const { creator } = await createUserAndCreator("test@example.com", "pro");
+    await db
+      .update(schema.creators)
+      .set({ stripeSubscriptionId: "sub_zombie", subscriptionStatus: "canceled" })
+      .where(eq(schema.creators.id, creator.id));
+
+    // Stripe retries failed deliveries for days and does not order them. This is
+    // a `subscription.updated (active)` arriving *after* the cancellation it
+    // predates — written straight through it would hand back Pro limits to a
+    // creator who is no longer paying, permanently and silently.
+    mockSubscriptionEvent(
+      "customer.subscription.updated",
+      {
+        id: "sub_zombie",
+        status: "active",
+        metadata: { creatorId: creator.id },
+        items: { data: [{ price: { id: "price_test_pro" } }] },
+      },
+      {
+        id: "sub_zombie",
+        status: "canceled",
+        metadata: { creatorId: creator.id },
+        items: { data: [{ price: { id: "price_test_pro" } }] },
+      }
+    );
+
+    expect((await postWebhook()).status).toBe(200);
+
+    const [updated] = await db
+      .select()
+      .from(schema.creators)
+      .where(eq(schema.creators.id, creator.id));
+
+    expect(updated?.subscriptionStatus).toBe("canceled");
+    expect(getDealSlotLimit(updated!.plan, updated!.subscriptionStatus)).toBe(planDealSlots.starter);
+  });
+
+  it("re-reads the subscription rather than trusting a replayed payload's tier", async () => {
+    const { creator } = await createUserAndCreator("test@example.com", "pro");
+    await db
+      .update(schema.creators)
+      .set({ stripeSubscriptionId: "sub_replay", subscriptionStatus: "active" })
+      .where(eq(schema.creators.id, creator.id));
+
+    // A duplicate of the original pro-tier delivery, replayed after the creator
+    // downgraded to creator in the portal.
+    mockSubscriptionEvent(
+      "customer.subscription.updated",
+      {
+        id: "sub_replay",
+        status: "active",
+        metadata: { creatorId: creator.id },
+        items: { data: [{ price: { id: "price_test_pro" } }] },
+      },
+      {
+        id: "sub_replay",
+        status: "active",
+        metadata: { creatorId: creator.id },
+        items: { data: [{ price: { id: "price_test_creator" } }] },
+      }
+    );
+
+    expect((await postWebhook()).status).toBe(200);
+
+    const [updated] = await db
+      .select()
+      .from(schema.creators)
+      .where(eq(schema.creators.id, creator.id));
+    expect(updated?.plan).toBe("creator");
+    expect(mockStripeSubscriptions.retrieve).toHaveBeenCalledWith("sub_replay");
+  });
+
+  it("retries (500) rather than trust an unverified active update", async () => {
+    const { creator } = await createUserAndCreator("test@example.com");
+    await db
+      .update(schema.creators)
+      .set({ stripeSubscriptionId: "sub_unverifiable", subscriptionStatus: "canceled" })
+      .where(eq(schema.creators.id, creator.id));
+
+    mockStripeWebhooks.constructEvent.mockReturnValue({
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_unverifiable",
+          status: "active",
+          metadata: { creatorId: creator.id },
+          items: { data: [{ price: { id: "price_test_pro" } }] },
+        },
+      },
+    });
+    mockStripeSubscriptions.retrieve.mockRejectedValue(new Error("Stripe API unavailable"));
+
+    // 500 puts the event back in Stripe's retry queue, which is the right
+    // outcome: better a delayed upgrade than an upgrade granted on the strength
+    // of a payload we could not confirm.
+    expect((await postWebhook()).status).toBe(500);
+
+    const [updated] = await db
+      .select()
+      .from(schema.creators)
+      .where(eq(schema.creators.id, creator.id));
+    expect(updated?.subscriptionStatus).toBe("canceled");
+  });
+
+  it("still records a cancellation when the subscription cannot be re-fetched", async () => {
+    const { creator } = await createUserAndCreator("test@example.com", "pro");
+    await db
+      .update(schema.creators)
+      .set({ stripeSubscriptionId: "sub_vanished", subscriptionStatus: "active" })
+      .where(eq(schema.creators.id, creator.id));
+
+    mockStripeWebhooks.constructEvent.mockReturnValue({
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: "sub_vanished",
+          status: "canceled",
+          metadata: { creatorId: creator.id },
+          items: { data: [{ price: { id: "price_test_pro" } }] },
+        },
+      },
+    });
+    mockStripeSubscriptions.retrieve.mockRejectedValue(new Error("No such subscription"));
+
+    // The payload can only move a creator *down* to canceled here, so falling
+    // back to it is the safe direction — unlike the updated case above.
+    expect((await postWebhook()).status).toBe(200);
+
+    const [updated] = await db
+      .select()
+      .from(schema.creators)
+      .where(eq(schema.creators.id, creator.id));
+    expect(updated?.subscriptionStatus).toBe("canceled");
   });
 });
 
@@ -971,5 +1350,119 @@ describe("plan gate on deals.create", () => {
       .where(eq(schema.deals.id, oldest.id));
 
     expect((await attemptCreate(cookie, brand.id, "Now allowed")).status).toBe(200);
+  });
+});
+
+// ── Reopening a paid deal (SPO-87 MEDIUM-2) ──────────────────────────────────
+//
+// `countActiveDeals` excludes `paid`, so marking a deal paid releases its slot.
+// Moving it back takes one again — and every write path that can do that has to
+// be gated, or a creator sitting at their limit parks deals in `paid` and
+// reopens them for free, which is the tier limit bypassed just as surely as an
+// ungated create would.
+
+describe("plan gate on reopening a paid deal", () => {
+  async function seedAtLimit(email: string) {
+    const { creator, cookie } = await createUserAndCreator(email);
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ creatorId: creator.id, name: "Acme" })
+      .returning();
+
+    // One paid deal (holding no slot) plus a full complement of active ones.
+    const [paidDeal] = await db
+      .insert(schema.deals)
+      .values({ creatorId: creator.id, brandId: brand.id, title: "Settled", stage: "paid" })
+      .returning();
+    await db.insert(schema.deals).values(
+      Array.from({ length: planDealSlots.starter }, (_, i) => ({
+        creatorId: creator.id,
+        brandId: brand.id,
+        title: `Active ${i}`,
+        stage: "inbound" as const,
+      }))
+    );
+
+    return { creator, cookie, brand, paidDeal };
+  }
+
+  async function callDeals(cookie: string, procedure: string, input: Record<string, unknown>) {
+    return app.request(`/api/trpc/deals.${procedure}`, {
+      method: "POST",
+      headers: { cookie, Origin: "http://localhost:3000", "Content-Type": "application/json" },
+      body: JSON.stringify({ json: input }),
+    });
+  }
+
+  async function stageOf(dealId: string) {
+    const [deal] = await db.select().from(schema.deals).where(eq(schema.deals.id, dealId));
+    return deal?.stage;
+  }
+
+  it("blocks deals.update from moving a paid deal back to an active stage at the limit", async () => {
+    const { cookie, paidDeal } = await seedAtLimit("test@example.com");
+
+    const res = await callDeals(cookie, "update", { id: paidDeal.id, stage: "negotiating" });
+
+    expect(res.status).toBe(403);
+    expect(await stageOf(paidDeal.id)).toBe("paid");
+  });
+
+  it("blocks deals.updateStage from moving a paid deal back to an active stage at the limit", async () => {
+    const { cookie, paidDeal } = await seedAtLimit("test@example.com");
+
+    const res = await callDeals(cookie, "updateStage", { id: paidDeal.id, stage: "inbound" });
+
+    expect(res.status).toBe(403);
+    expect(await stageOf(paidDeal.id)).toBe("paid");
+  });
+
+  it("allows the reopen once a slot is free", async () => {
+    const { creator, cookie, paidDeal } = await seedAtLimit("test@example.com");
+
+    // Settle one of the active deals, freeing exactly one slot.
+    const [active] = await db
+      .select()
+      .from(schema.deals)
+      .where(and(eq(schema.deals.creatorId, creator.id), eq(schema.deals.stage, "inbound")));
+    await db.update(schema.deals).set({ stage: "paid" }).where(eq(schema.deals.id, active.id));
+
+    const res = await callDeals(cookie, "updateStage", { id: paidDeal.id, stage: "negotiating" });
+
+    expect(res.status).toBe(200);
+    expect(await stageOf(paidDeal.id)).toBe("negotiating");
+  });
+
+  it("never blocks the paid direction — settling a deal always frees its slot", async () => {
+    const { creator, cookie } = await seedAtLimit("test@example.com");
+
+    const [active] = await db
+      .select()
+      .from(schema.deals)
+      .where(and(eq(schema.deals.creatorId, creator.id), eq(schema.deals.stage, "inbound")));
+
+    const res = await callDeals(cookie, "updateStage", { id: active.id, stage: "paid" });
+
+    expect(res.status).toBe(200);
+    expect(await stageOf(active.id)).toBe("paid");
+  });
+
+  it("leaves non-stage edits to a paid deal ungated", async () => {
+    const { cookie, paidDeal } = await seedAtLimit("test@example.com");
+
+    const res = await callDeals(cookie, "update", { id: paidDeal.id, title: "Settled (renamed)" });
+
+    expect(res.status).toBe(200);
+    expect(await stageOf(paidDeal.id)).toBe("paid");
+  });
+
+  it("does not let one creator reopen another creator's paid deal", async () => {
+    const { paidDeal } = await seedAtLimit("a@example.com");
+    const { cookie: cookieB } = await createUserAndCreator("b@example.com");
+
+    const res = await callDeals(cookieB, "updateStage", { id: paidDeal.id, stage: "inbound" });
+
+    expect(res.status).toBe(404);
+    expect(await stageOf(paidDeal.id)).toBe("paid");
   });
 });

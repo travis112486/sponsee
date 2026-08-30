@@ -21,3 +21,4 @@ screenshots/
 
 # Neon CLI context (SPO-14 DB hookup)
 .neon
+PAPERCLIP_SCRATCH_DIR/

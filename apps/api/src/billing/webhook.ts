@@ -8,7 +8,19 @@ import { getTierFromPriceId, toPlanTier } from "./plans.js";
 import { toSubscriptionStatus } from "./entitlements.js";
 import type { PlanTier } from "@sponsee/shared";
 
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+/**
+ * Read the signing secret per request, never at module scope.
+ *
+ * `apps/api/src/index.ts` imports the app statically, and ESM hoists that
+ * import above the `dotenv.config()` call underneath it. A module-scope read
+ * therefore lands before `.env` is loaded and every webhook 500s under
+ * `pnpm dev` — exactly the loop the Stripe CLI instructions in `.env.example`
+ * ask developers to run. `stripe.ts` and `plans.ts` already read env lazily for
+ * the same reason (SPO-87 HIGH-2).
+ */
+function getWebhookSecret(): string | undefined {
+  return process.env.STRIPE_WEBHOOK_SECRET;
+}
 
 /**
  * Work out which tier a subscription represents.
@@ -63,7 +75,22 @@ async function resolveCreatorId(subscription: Stripe.Subscription): Promise<stri
 async function updateCreatorFromSubscription(subscription: Stripe.Subscription) {
   const creatorId = await resolveCreatorId(subscription);
   if (!creatorId) {
-    console.warn("[stripe webhook] Could not resolve creator for subscription", subscription.id);
+    // Still a 200 upstream — a retry cannot resolve a creator that isn't there,
+    // and a permanent 500 would only park the event in Stripe's retry queue for
+    // days. Log at error level with the identifiers needed to reconcile by hand:
+    // a paying customer with no creator row is a billing discrepancy, not noise.
+    const customerId =
+      typeof subscription.customer === "string"
+        ? subscription.customer
+        : subscription.customer?.id;
+    console.error(
+      "[stripe webhook] Dropping event — no creator matches subscription",
+      subscription.id,
+      "customer",
+      customerId ?? "(none)",
+      "status",
+      subscription.status
+    );
     return;
   }
 
@@ -109,10 +136,54 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
   await updateCreatorFromSubscription(subscription);
 }
 
+/**
+ * Handle a `customer.subscription.*` event by re-reading the subscription from
+ * Stripe instead of trusting the payload that arrived.
+ *
+ * Stripe does not guarantee delivery order and retries failed deliveries for
+ * days. Written straight through, a delayed `customer.subscription.updated`
+ * carrying `active` that lands after `customer.subscription.deleted` would
+ * permanently resurrect a canceled subscription's entitlements. Re-fetching
+ * makes every event in this family converge on Stripe's current truth, so a
+ * late or duplicated arrival is a harmless no-op rather than a downgrade that
+ * silently reverses itself (SPO-87 MEDIUM-1). The invoice branch below has
+ * always worked this way; this brings the subscription branch in line.
+ */
+async function handleSubscriptionEvent(event: Stripe.Event) {
+  const fromEvent = event.data.object as Stripe.Subscription;
+
+  let subscription: Stripe.Subscription;
+  try {
+    subscription = await stripe.subscriptions.retrieve(fromEvent.id);
+  } catch (err) {
+    // A cancellation we cannot confirm still has to land: the event payload can
+    // only move a creator *down* to canceled here, which is the safe direction.
+    // For created/updated we rethrow so Stripe retries, rather than let an
+    // unverified "active" through on the strength of a payload we could not
+    // check.
+    if (event.type !== "customer.subscription.deleted") throw err;
+    console.warn(
+      "[stripe webhook] Could not re-fetch canceled subscription, using event payload:",
+      fromEvent.id
+    );
+    subscription = fromEvent;
+  }
+
+  // Metadata is our primary creator pointer. A subscription created outside our
+  // checkout flow (or one whose metadata was never set) still has to resolve,
+  // so carry the event's copy across when the fresh one lacks it.
+  if (!subscription.metadata?.creatorId && fromEvent.metadata?.creatorId) {
+    subscription.metadata = { ...subscription.metadata, ...fromEvent.metadata };
+  }
+
+  await updateCreatorFromSubscription(subscription);
+}
+
 export function registerStripeWebhook(app: Hono) {
   app.post("/api/webhooks/stripe", async (c) => {
     const payload = await c.req.text();
     const signature = c.req.header("stripe-signature") || "";
+    const webhookSecret = getWebhookSecret();
 
     if (!webhookSecret) {
       console.warn("[stripe webhook] STRIPE_WEBHOOK_SECRET not configured — rejecting");
@@ -137,7 +208,7 @@ export function registerStripeWebhook(app: Hono) {
         case "customer.subscription.created":
         case "customer.subscription.updated":
         case "customer.subscription.deleted": {
-          await updateCreatorFromSubscription(event.data.object as Stripe.Subscription);
+          await handleSubscriptionEvent(event);
           break;
         }
         case "invoice.payment_failed":

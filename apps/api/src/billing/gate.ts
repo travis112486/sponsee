@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, count, eq, isNull, ne } from "drizzle-orm";
+import { and, count, eq, isNull, ne, sql } from "drizzle-orm";
 import type { DB } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import type { PlanTier } from "@sponsee/shared";
@@ -71,4 +71,66 @@ export async function assertDealSlotAvailable(db: DB, creatorId: string): Promis
       message: `You've used all ${dealSlotLimit} active deal slots on your current plan. Upgrade in Settings → Billing, or mark a deal as paid to free a slot.`,
     });
   }
+}
+
+/**
+ * Gate the `paid` → active transition.
+ *
+ * `countActiveDeals` excludes `paid`, so marking a deal paid frees a slot.
+ * Moving it back to an active stage takes one again — and without this check a
+ * creator sitting at their limit can park deals in `paid` and reopen them for
+ * free, which bypasses the tier limit exactly as an ungated create would.
+ *
+ * Run this inside `withCreatorSlotLock` so a re-open and a concurrent create
+ * contend for the same lock rather than each seeing a pre-write count.
+ */
+export async function assertSlotForReopen(
+  db: DB,
+  creatorId: string,
+  dealId: string
+): Promise<void> {
+  const [current] = await db
+    .select({ stage: schema.deals.stage })
+    .from(schema.deals)
+    .where(and(eq(schema.deals.id, dealId), eq(schema.deals.creatorId, creatorId)));
+
+  // Already active — it holds a slot now and will still hold one after. A row
+  // that isn't ours falls through here too; the caller's own scoped write is
+  // what turns that into a 404.
+  if (current?.stage !== "paid") return;
+
+  await assertDealSlotAvailable(db, creatorId);
+}
+
+/**
+ * Run a slot-consuming write with the creator's slot accounting serialized.
+ *
+ * `assertDealSlotAvailable` counts, and the caller writes afterwards. Read
+ * Committed gives those two statements no relationship whatsoever: two requests
+ * that arrive together at limit−1 both count limit−1, both pass, and both
+ * insert — the tier's limit is exceeded by exactly the number of racers. This
+ * is the race class SPO-68 closed in the chase lane, here solved by taking a row
+ * lock on the creator instead of an atomic claim, because the guard is over a
+ * COUNT across many rows rather than one row's status column.
+ *
+ * `SELECT ... FOR UPDATE` on the creator row makes the second transaction block
+ * until the first commits, so its count observes the deal the first one just
+ * inserted. The creator row is the natural lock subject: it is also where `plan`
+ * and `subscription_status` live, so nothing else can move the limit underneath
+ * a caller mid-check either.
+ *
+ * Callers must do their gate check and their write against the `tx` handed to
+ * `run` — work done against the outer `db` escapes the lock.
+ */
+export async function withCreatorSlotLock<T>(
+  database: DB,
+  creatorId: string,
+  run: (tx: DB) => Promise<T>
+): Promise<T> {
+  return (database as DB).transaction(async (tx) => {
+    await tx.execute(
+      sql`select ${schema.creators.id} from ${schema.creators} where ${schema.creators.id} = ${creatorId} for update`
+    );
+    return run(tx as unknown as DB);
+  });
 }

@@ -5,7 +5,7 @@ import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import * as schema from "@sponsee/db/schema";
 import { stripe } from "./stripe.js";
 import { getPriceId } from "./plans.js";
-import { getDealSlotLimit } from "./entitlements.js";
+import { getDealSlotLimit, hasLiveSubscription } from "./entitlements.js";
 import { countActiveDeals } from "./gate.js";
 import type { PlanTier } from "@sponsee/shared";
 
@@ -18,8 +18,6 @@ export const billingRouter = createTRPCRouter({
     const [creator] = await ctx.db
       .select({
         plan: schema.creators.plan,
-        stripeCustomerId: schema.creators.stripeCustomerId,
-        stripeSubscriptionId: schema.creators.stripeSubscriptionId,
         subscriptionStatus: schema.creators.subscriptionStatus,
         currentPeriodEnd: schema.creators.currentPeriodEnd,
       })
@@ -31,12 +29,14 @@ export const billingRouter = createTRPCRouter({
 
     const activeDealCount = await countActiveDeals(ctx.db, ctx.creatorId);
 
+    // Deliberately no `stripeCustomerId` / `stripeSubscriptionId`: the browser
+    // has no use for them (plan changes go through `createPortalSession`, which
+    // resolves the customer server-side) and shipping them to the client only
+    // widens what a stolen session or an XSS payload can read.
     return {
       plan,
       status,
       currentPeriodEnd: creator?.currentPeriodEnd ?? null,
-      stripeCustomerId: creator?.stripeCustomerId ?? null,
-      stripeSubscriptionId: creator?.stripeSubscriptionId ?? null,
       dealSlotLimit: getDealSlotLimit(plan as PlanTier, status),
       activeDealCount,
     };
@@ -55,9 +55,25 @@ export const billingRouter = createTRPCRouter({
       const [creator] = await ctx.db
         .select({
           stripeCustomerId: schema.creators.stripeCustomerId,
+          subscriptionStatus: schema.creators.subscriptionStatus,
         })
         .from(schema.creators)
         .where(eq(schema.creators.id, ctx.creatorId));
+
+      // A subscription-mode Checkout session bills a *new* subscription; Stripe
+      // never cancels the old one. Letting an existing subscriber through here
+      // is how a Pro creator "switching" to Creator ends up paying $39 + $29 at
+      // the same time, with `plan` tracking whichever webhook happened to land
+      // last. Plan changes belong in the customer portal, which swaps the price
+      // on the one subscription and prorates it; a lapsed card is fixed there
+      // too (SPO-87 HIGH-1).
+      if (hasLiveSubscription(creator?.subscriptionStatus ?? null)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "You already have a subscription. Use Manage subscription to change plans or update your payment method — starting a new checkout would bill you for both.",
+        });
+      }
 
       let customerId = creator?.stripeCustomerId;
 
