@@ -697,7 +697,7 @@ describe("settings router tenant isolation", () => {
       expect(result?.scheduleLabel).toBe("Mon/Wed/Fri");
     });
 
-    it("no-ops on the no-id path when ccv, followers, and scheduleLabel are unchanged", async () => {
+    it("leaves ccv, followers, and scheduleLabel intact on the no-id path when resent unchanged", async () => {
       await db
         .update(schema.creatorPlatforms)
         .set({ followers: 5000, scheduleLabel: "Mon/Wed/Fri" })
