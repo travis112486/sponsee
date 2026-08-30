@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import superjson from "superjson";
 import {
+  DEFAULT_MESSAGE_BY_CODE,
   INTERNAL_ERROR_MESSAGE,
   formatTRPCError,
   humanizeFieldName,
@@ -40,6 +41,24 @@ function badRequestFrom(cause: ZodError): TRPCError {
 function internalErrorFrom(cause: ZodError): TRPCError {
   return new TRPCError({ code: "INTERNAL_SERVER_ERROR", cause });
 }
+
+/**
+ * The realistic non-500 cause. A unique violation is the one a `CONFLICT` gets
+ * built from, and Postgres puts the constraint name, the columns *and* the
+ * conflicting values in the message — creator ids and brand names included.
+ * Every assertion below searches for those raw substrings rather than for a
+ * humanized label; a label is what SPO-117's assertion checked while the raw
+ * text sailed past it.
+ */
+const PG_UNIQUE_VIOLATION = new Error(
+  'duplicate key value violates unique constraint "deals_creator_id_brand_id_uq" — ' +
+    "Key (creator_id, brand_id)=(cr_8fa21c, br_nordvpn) already exists."
+);
+
+/** A rethrown SDK failure: a `BAD_REQUEST` whose cause is not a ZodError. */
+const STRIPE_SDK_FAILURE = new Error(
+  "No such price: 'price_1QhSecretInternalId'; a similar object exists in test mode"
+);
 
 /**
  * The shape tRPC's own `getErrorShape` hands the formatter, built from the error
@@ -242,27 +261,37 @@ describe("formatTRPCError", () => {
     // `TRPCError({ code, cause })` resolves `opts.message ?? cause?.message ??
     // opts.code` for every code, so a driver's sentence — constraint name,
     // column, sometimes the conflicting value — rides out on a CONFLICT.
-    const error = new TRPCError({
-      code: "CONFLICT",
-      cause: new Error(
-        'duplicate key value violates unique constraint "deals_creator_id_brand_id_uq"'
-      ),
-    });
+    const error = new TRPCError({ code: "CONFLICT", cause: PG_UNIQUE_VIOLATION });
 
     const formatted = formatTRPCError({ shape: shapeFor(error), error });
 
     expect(formatted.message).not.toContain("deals_creator_id_brand_id_uq");
     expect(formatted.message).not.toContain("unique constraint");
-    expect(formatted.message).toBe(INTERNAL_ERROR_MESSAGE);
+    expect(formatted.message).not.toContain("duplicate key");
+    // Postgres names the conflicting values, not just the constraint.
+    expect(formatted.message).not.toContain("cr_8fa21c");
+    expect(formatted.message).not.toContain("br_nordvpn");
+    // A 409 is usually something the creator can act on, so it gets a sentence
+    // of its own rather than the 500's "went wrong on our end".
+    expect(formatted.message).toBe(
+      "That conflicts with something that already exists. Refresh and try again."
+    );
+    expect(formatted.message).not.toBe(INTERNAL_ERROR_MESSAGE);
   });
 
   it.each([
-    ["PRECONDITION_FAILED", "No Stripe customer found"],
-    ["UNPROCESSABLE_CONTENT", "Deal is already paid"],
-    ["TIMEOUT", "That took too long — try again"],
-  ] as const)("scrubs a cause-inherited message on a %s as well", (code) => {
+    ["PRECONDITION_FAILED", "This changed somewhere else. Refresh and try again."],
+    [
+      "UNPROCESSABLE_CONTENT",
+      "We could not process that. Please check what you entered and try again.",
+    ],
+    ["TIMEOUT", "That took too long to finish. Please try again."],
+  ] as const)("scrubs a cause-inherited message on a %s as well", (code, expected) => {
     // Pinned literals, not a derived list: the point is that the guard is not
     // keyed on the code at all, so it must hold for codes nobody has used yet.
+    // The expected sentence is pinned here too rather than read back out of
+    // DEFAULT_MESSAGE_BY_CODE — a test that indexes the table it is checking
+    // passes for any value the table happens to hold.
     const error = new TRPCError({
       code,
       cause: new Error("connect ECONNREFUSED 10.0.0.5:6379"),
@@ -271,7 +300,42 @@ describe("formatTRPCError", () => {
     const formatted = formatTRPCError({ shape: shapeFor(error), error });
 
     expect(formatted.message).not.toContain("ECONNREFUSED");
-    expect(formatted.message).toBe(INTERNAL_ERROR_MESSAGE);
+    expect(formatted.message).not.toContain("10.0.0.5");
+    expect(formatted.message).toBe(expected);
+  });
+
+  it("scrubs a BAD_REQUEST whose cause is not a ZodError", () => {
+    // Misses the zod branch — which gates on `cause instanceof ZodError` — and
+    // misses the 500 branch, so before SPO-131 it fell straight through with
+    // the SDK's text on `message`. Wider than the case SPO-129 covered.
+    const error = new TRPCError({ code: "BAD_REQUEST", cause: STRIPE_SDK_FAILURE });
+
+    const formatted = formatTRPCError({ shape: shapeFor(error), error });
+
+    expect(formatted.message).not.toContain("price_1QhSecretInternalId");
+    expect(formatted.message).not.toContain("No such price");
+    expect(formatted.message).toBe(
+      "That request was not valid. Please check what you entered and try again."
+    );
+    expect(formatted.data.zodError).toBeNull();
+  });
+
+  it("scrubs a 5xx-family code the same way it scrubs a 500", () => {
+    // NOT_IMPLEMENTED, BAD_GATEWAY, SERVICE_UNAVAILABLE and GATEWAY_TIMEOUT
+    // share INTERNAL_SERVER_ERROR's JSON-RPC number (-32603) and HTTP class, so
+    // a branch keyed on the string "INTERNAL_SERVER_ERROR" misses all four.
+    const error = new TRPCError({
+      code: "SERVICE_UNAVAILABLE",
+      cause: new Error("connect ECONNREFUSED 10.0.0.5:5432"),
+    });
+
+    const formatted = formatTRPCError({ shape: shapeFor(error), error });
+
+    expect(formatted.message).not.toContain("ECONNREFUSED");
+    expect(formatted.message).not.toContain("10.0.0.5");
+    expect(formatted.message).toBe(
+      "That service is temporarily unavailable. Please try again in a moment."
+    );
   });
 
   it.each([
@@ -306,42 +370,51 @@ describe("formatTRPCError", () => {
     }
   });
 
-  it("keeps tRPC's bare code fallback on a non-500", () => {
+  it("answers tRPC's bare code fallback with a sentence, not the code", () => {
     // trpc.ts:18 throws `TRPCError({ code: "UNAUTHORIZED" })` with no message,
-    // so its wire message is the code string. That carries nothing internal —
-    // it is already on `data.code` — and a 401 is not our bug, so replacing it
-    // with "something went wrong on our end" would be a lie, not a scrub.
+    // so its wire message was the code string. `apps/web/src/trpc.tsx` has no
+    // 401 interceptor and the panels do `toast.error(err.message)`, so a
+    // creator whose session lapsed read the enum name "UNAUTHORIZED" in a
+    // toast. The code itself is not lost — it stays on `data.code`, which is
+    // where a client should branch on it anyway.
     const error = new TRPCError({ code: "UNAUTHORIZED" });
 
     const formatted = formatTRPCError({ shape: shapeFor(error), error });
 
-    expect(formatted.message).toBe("UNAUTHORIZED");
+    expect(formatted.message).toBe("Please sign in and try again.");
+    expect(formatted.message).not.toBe("UNAUTHORIZED");
     expect(formatted.message).not.toBe(INTERNAL_ERROR_MESSAGE);
+    expect(formatted.data.code).toBe("UNAUTHORIZED");
   });
 
   it("drops the dev-only stack when it scrubs a non-500", () => {
     // A V8 stack opens with `${name}: ${message}`, so the inherited text the
     // scrub just removed from `message` is still on the trace's first line.
-    const error = new TRPCError({
-      code: "CONFLICT",
-      cause: new Error('duplicate key value violates unique constraint "deals_uq"'),
-    });
+    const error = new TRPCError({ code: "CONFLICT", cause: PG_UNIQUE_VIOLATION });
+    // Fixture sanity: if the stack did not carry it, the guard below would pass
+    // without proving anything.
+    expect(error.stack).toContain("deals_creator_id_brand_id_uq");
 
     const formatted = formatTRPCError({ shape: shapeFor(error, { stack: error.stack }), error });
 
-    expect(error.stack).toContain("deals_uq");
     expect(formatted.data.stack).toBeUndefined();
   });
 
-  it("leaves the dev-only stack alone on an authored non-500", () => {
+  it("drops the dev-only stack even on an authored non-500", () => {
+    // Widened from "keep it when the message was ours" (SPO-129's rule). A
+    // trace is never publishable whoever wrote the sentence in front of it: it
+    // carries absolute paths and our internal call structure, and the creator
+    // can do nothing with either. tRPC's own unknown-procedure NOT_FOUND is the
+    // live example — authored by the library, full trace attached.
     const error = new TRPCError({ code: "NOT_FOUND", message: "Platform not found" });
 
     const formatted = formatTRPCError({
-      shape: shapeFor(error, { stack: "Error: at settings.sync" }),
+      shape: shapeFor(error, { stack: "Error: at /srv/app/apps/api/src/settings.ts:41" }),
       error,
     });
 
-    expect(formatted.data.stack).toBe("Error: at settings.sync");
+    expect(formatted.message).toBe("Platform not found");
+    expect(formatted.data.stack).toBeUndefined();
   });
 
   it("drops the dev-only stack from a 500", () => {
@@ -354,13 +427,22 @@ describe("formatTRPCError", () => {
     expect(formatted.data.stack).toBeUndefined();
   });
 
-  it("leaves the dev-only stack alone on a validation failure", () => {
+  it("drops the dev-only stack from a validation failure too", () => {
+    // The last branch that still published a trace. The creator's own bad form
+    // data is fully described by `message` and `data.zodError`; the trace adds
+    // only our file layout, so it goes with the rest.
     const error = badRequestFrom(zodErrorFor(profileSchema, {}));
-    const shape = { ...baseShape, data: { ...baseShape.data, stack: "Error: at handler" } };
+    const shape = {
+      ...baseShape,
+      data: { ...baseShape.data, stack: "Error: at /srv/app/apps/api/src/settings.ts:41" },
+    };
 
     const formatted = formatTRPCError({ shape, error });
 
-    expect(formatted.data.stack).toBe("Error: at handler");
+    // The expanded sentence is untouched — only the trace goes.
+    expect(formatted.message).toBe("Display name: Required; Avatar URL: Required");
+    expect(formatted.data.zodError).not.toBeNull();
+    expect(formatted.data.stack).toBeUndefined();
   });
 
   it("still formats a BAD_REQUEST a procedure body raises deliberately", () => {
@@ -381,6 +463,66 @@ describe("formatTRPCError", () => {
     expect(formatted.code).toBe(baseShape.code);
     expect(formatted.data.httpStatus).toBe(400);
     expect(formatted.data.path).toBe("settings.updateProfile");
+  });
+
+  it("preserves an authored 4xx sentence, cause and all", () => {
+    // The blast-radius guard for the widened scrub, and the reason a 4xx cannot
+    // just reuse INTERNAL_ERROR_MESSAGE: this sentence is the creator's way out.
+    const error = new TRPCError({
+      code: "CONFLICT",
+      message: "That brand already has an open deal. Close it first.",
+      cause: PG_UNIQUE_VIOLATION,
+    });
+
+    const formatted = formatTRPCError({ shape: shapeFor(error), error });
+
+    expect(formatted.message).toBe("That brand already has an open deal. Close it first.");
+    expect(formatted.message).not.toContain("deals_creator_id_brand_id_uq");
+  });
+});
+
+// ── DEFAULT_MESSAGE_BY_CODE ────────────────────────────────────────────────
+
+describe("DEFAULT_MESSAGE_BY_CODE", () => {
+  it("gives every code a sentence rather than an identifier", () => {
+    const entries = Object.entries(DEFAULT_MESSAGE_BY_CODE);
+    // Iterating the map only proves what the map happens to contain, so the
+    // count is pinned too: deleting a code to make this pass is a visible edit,
+    // not a silent one. The `Record<TRPCError["code"], string>` type is the
+    // guard against a tRPC upgrade *adding* one.
+    expect(entries).toHaveLength(21);
+
+    for (const [code, message] of entries) {
+      expect(message).not.toBe(code);
+      expect(message).not.toMatch(/_/);
+      expect(message).toMatch(/^[A-Z].*[.!]$/);
+    }
+  });
+
+  it("pins the copy for the codes procedures actually throw today", () => {
+    expect(DEFAULT_MESSAGE_BY_CODE.UNAUTHORIZED).toBe("Please sign in and try again.");
+    expect(DEFAULT_MESSAGE_BY_CODE.FORBIDDEN).toBe("You do not have access to that.");
+    expect(DEFAULT_MESSAGE_BY_CODE.NOT_FOUND).toBe("We could not find that.");
+    expect(DEFAULT_MESSAGE_BY_CODE.INTERNAL_SERVER_ERROR).toBe(INTERNAL_ERROR_MESSAGE);
+  });
+
+  it("does not answer a 4xx with the 500's sentence", () => {
+    // A CONFLICT or a FORBIDDEN is usually something the creator can act on.
+    // "Something went wrong on our end" would make a fixable error look like
+    // our outage and strand them.
+    const actionable = [
+      "BAD_REQUEST",
+      "UNAUTHORIZED",
+      "PAYMENT_REQUIRED",
+      "FORBIDDEN",
+      "NOT_FOUND",
+      "CONFLICT",
+      "TOO_MANY_REQUESTS",
+    ] as const;
+
+    for (const code of actionable) {
+      expect(DEFAULT_MESSAGE_BY_CODE[code]).not.toBe(INTERNAL_ERROR_MESSAGE);
+    }
   });
 });
 
@@ -447,6 +589,43 @@ describe("logTRPCError", () => {
     expect(logged).toContain("deals_creator_id_brand_id_uq");
     expect(spy.mock.calls.flat()).toContain(cause);
   });
+
+  it("logs a BAD_REQUEST whose cause is not a ZodError", () => {
+    // Now scrubbed by the formatter, so this is the only surviving copy. The
+    // zod-caused BAD_REQUEST above stays quiet because its message is expanded
+    // onto the wire rather than withheld from it.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = new TRPCError({ code: "BAD_REQUEST", cause: STRIPE_SDK_FAILURE });
+
+    logTRPCError({ error, path: "billing.createCheckoutSession" });
+
+    expect(spy.mock.calls.flat().join(" ")).toContain("price_1QhSecretInternalId");
+  });
+
+  it("logs the whole 5xx family, not only INTERNAL_SERVER_ERROR", () => {
+    // A server fault is an incident whatever it says, so it is logged even when
+    // the sentence on the wire is one we wrote. Keyed on the string
+    // "INTERNAL_SERVER_ERROR", these four went unlogged.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    for (const code of [
+      "NOT_IMPLEMENTED",
+      "BAD_GATEWAY",
+      "SERVICE_UNAVAILABLE",
+      "GATEWAY_TIMEOUT",
+    ] as const) {
+      logTRPCError({
+        error: new TRPCError({ code, message: `Upstream refused (${code})` }),
+        path: "platforms.sync",
+      });
+    }
+
+    const logged = spy.mock.calls.flat().join(" ");
+    expect(logged).toContain("Upstream refused (NOT_IMPLEMENTED)");
+    expect(logged).toContain("Upstream refused (BAD_GATEWAY)");
+    expect(logged).toContain("Upstream refused (SERVICE_UNAVAILABLE)");
+    expect(logged).toContain("Upstream refused (GATEWAY_TIMEOUT)");
+  });
 });
 
 // ── Wired into the real root ───────────────────────────────────────────────
@@ -482,12 +661,12 @@ describe("tRPC root wiring", () => {
     // its own. tRPC inherits `cause.message`, so the constraint name is the
     // wire message unless the formatter scrubs codes other than 500.
     conflicts: publicProcedure.mutation(() => {
-      throw new TRPCError({
-        code: "CONFLICT",
-        cause: new Error(
-          'duplicate key value violates unique constraint "deals_creator_id_brand_id_uq"'
-        ),
-      });
+      throw new TRPCError({ code: "CONFLICT", cause: PG_UNIQUE_VIOLATION });
+    }),
+    // SPO-131's wider case: a BAD_REQUEST whose cause is not a ZodError misses
+    // the zod branch and the 500 branch both.
+    rejectedBySdk: publicProcedure.mutation(() => {
+      throw new TRPCError({ code: "BAD_REQUEST", cause: STRIPE_SDK_FAILURE });
     }),
     // The same code, worded by the procedure — billing/router.ts:71's shape.
     // The creator-facing sentence must survive the widened scrub.
@@ -498,8 +677,9 @@ describe("tRPC root wiring", () => {
         cause: new Error('duplicate key value violates unique constraint "subs_uq"'),
       });
     }),
-    // trpc.ts:18's bare guard: no message, no cause. Its wire message is the
-    // code string, and it has to stay that way.
+    // trpc.ts:18's bare guard: no message, no cause. tRPC falls back to the code
+    // string, which a creator would read as "UNAUTHORIZED" in a toast; the
+    // per-code table replaces it with a sentence. The only live copy change here.
     guarded: publicProcedure.mutation(() => {
       throw new TRPCError({ code: "UNAUTHORIZED" });
     }),
@@ -607,8 +787,27 @@ describe("tRPC root wiring", () => {
     expect(raw).not.toContain("deals_creator_id_brand_id_uq");
     expect(raw).not.toContain("unique constraint");
     expect(raw).not.toContain("duplicate key");
-    expect(error!.message).toBe(INTERNAL_ERROR_MESSAGE);
+    // Postgres names the conflicting rows, so the creator id and the brand
+    // handle are in that message too.
+    expect(raw).not.toContain("cr_8fa21c");
+    expect(raw).not.toContain("br_nordvpn");
     // The stack carries the same sentence on its first line.
+    expect(error!.data.stack).toBeUndefined();
+    // Still actionable: a 409 tells the creator what to do, so it must not be
+    // answered with the 500's "something went wrong on our end".
+    expect(error!.message).not.toBe(INTERNAL_ERROR_MESSAGE);
+    expect(error!.message).toBe(
+      "That conflicts with something that already exists. Refresh and try again."
+    );
+  });
+
+  it("publishes no part of a non-Zod BAD_REQUEST's cause", async () => {
+    const { status, error, raw } = await call("rejectedBySdk", {});
+
+    expect(status).toBe(400);
+    expect(raw).not.toContain("price_1QhSecretInternalId");
+    expect(raw).not.toContain("No such price");
+    expect(error!.data.zodError).toBeNull();
     expect(error!.data.stack).toBeUndefined();
   });
 
@@ -620,12 +819,38 @@ describe("tRPC root wiring", () => {
     expect(raw).not.toContain("subs_uq");
   });
 
-  it("still sends tRPC's code fallback for a bare guard", async () => {
+  it("sends a sentence, not the bare code, when a session has lapsed", async () => {
     const { status, error } = await call("guarded", {});
 
     expect(status).toBe(401);
+    // The code a client branches on is untouched; only the human sentence moved.
     expect(error!.data.code).toBe("UNAUTHORIZED");
-    expect(error!.message).toBe("UNAUTHORIZED");
+    expect(error!.message).toBe("Please sign in and try again.");
+  });
+
+  it("publishes no trace on an authored 4xx either", async () => {
+    // `boom` throws a FORBIDDEN it worded itself, so nothing is scrubbed from
+    // `message` — but tRPC still attaches `data.stack` outside production, and
+    // that trace names our source paths.
+    const { status, error, raw } = await call("boom", {});
+
+    expect(status).toBe(403);
+    expect(error!.message).toBe("No creator workspace");
+    expect(error!.data.stack).toBeUndefined();
+    expect(raw).not.toContain("error-formatter");
+  });
+
+  it("publishes no trace on tRPC's own unknown-procedure NOT_FOUND", async () => {
+    // The live instance of the case above: tRPC authors this message itself and
+    // attaches a full absolute-path trace through node_modules. Nothing in our
+    // code throws it, so only a rule that covers authored messages catches it.
+    const { status, error, raw } = await call("noSuchProcedure", {});
+
+    expect(status).toBe(404);
+    expect(error!.data.code).toBe("NOT_FOUND");
+    expect(error!.data.stack).toBeUndefined();
+    expect(raw).not.toContain("node_modules");
+    expect(raw).not.toContain("/apps/api/");
   });
 
   it("hands a scrubbed non-500 cause to onError instead of the client", async () => {
@@ -634,7 +859,9 @@ describe("tRPC root wiring", () => {
     const { raw } = await call("conflicts", {}, logTRPCError);
 
     expect(raw).not.toContain("deals_creator_id_brand_id_uq");
-    expect(spy.mock.calls.flat().join(" ")).toContain("deals_creator_id_brand_id_uq");
+    const logged = spy.mock.calls.flat().join(" ");
+    expect(logged).toContain("deals_creator_id_brand_id_uq");
+    expect(logged).toContain("conflicts");
 
     spy.mockRestore();
   });
