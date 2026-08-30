@@ -34,35 +34,7 @@ const { default: app } = await import("./app.js");
 const { resolvesAuthClientIp } = await import("./client-ip.js");
 
 import { initPgliteSchema } from "./test-utils/pglite-setup.js";
-
-const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS "user" (
-  id TEXT PRIMARY KEY NOT NULL,
-  name TEXT NOT NULL,
-  email TEXT NOT NULL UNIQUE,
-  email_verified BOOLEAN NOT NULL DEFAULT false,
-  image TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS verification (
-  id TEXT PRIMARY KEY NOT NULL,
-  identifier TEXT NOT NULL,
-  value TEXT NOT NULL,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS rate_limit (
-  id TEXT PRIMARY KEY NOT NULL,
-  key TEXT NOT NULL,
-  count INTEGER NOT NULL DEFAULT 0,
-  last_request BIGINT NOT NULL,
-  CONSTRAINT rate_limit_key_unique UNIQUE(key)
-);
-`;
+import { SCHEMA_SQL } from "./test-utils/schema-sql.js";
 
 /** The magic-link plugin's own rule, which applies once a caller is identified. */
 const PER_CALLER_MAX = 5;

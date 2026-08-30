@@ -3,27 +3,11 @@ import { db } from "@sponsee/db";
 import { waitlistSignups } from "@sponsee/db/schema";
 import waitlistApp, { WAITLIST_MAX_PER_WINDOW, waitlistLimiter } from "./waitlist.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
+import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
 
 // SPO-88 LOW-2. The insert is unauthenticated and writes to Neon on every call;
 // the honeypot stops naive bots but nothing scripted, leaving unbounded writes
 // and — via the duplicate response — email enumeration.
-
-const SCHEMA_SQL = `
-DROP TABLE IF EXISTS waitlist_signups CASCADE;
-
-CREATE TABLE waitlist_signups (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email VARCHAR(255) NOT NULL UNIQUE,
-  platforms VARCHAR(64)[],
-  ccv_band VARCHAR(32),
-  source VARCHAR(128) NOT NULL DEFAULT 'landing',
-  confirmed BOOLEAN NOT NULL DEFAULT false,
-  confirm_token VARCHAR(255) UNIQUE,
-  confirmed_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-`;
 
 function signup(email: string, ip?: string) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };

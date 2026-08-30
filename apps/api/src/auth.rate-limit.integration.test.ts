@@ -29,43 +29,8 @@ const { default: app } = await import("./app.js");
 delete process.env.AUTH_RATE_LIMIT_ENABLED;
 
 import { initPgliteSchema } from "./test-utils/pglite-setup.js";
+import { SCHEMA_SQL } from "./test-utils/schema-sql.js";
 import { pgliteClient } from "@sponsee/db";
-
-const SCHEMA_SQL = `
-DROP TABLE IF EXISTS rate_limit CASCADE;
-DROP TABLE IF EXISTS verification CASCADE;
-DROP TABLE IF EXISTS session CASCADE;
-DROP TABLE IF EXISTS account CASCADE;
-DROP TABLE IF EXISTS "user" CASCADE;
-
-CREATE TABLE "user" (
-  id TEXT PRIMARY KEY NOT NULL,
-  name TEXT NOT NULL,
-  email TEXT NOT NULL UNIQUE,
-  email_verified BOOLEAN NOT NULL DEFAULT false,
-  image TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE verification (
-  id TEXT PRIMARY KEY NOT NULL,
-  identifier TEXT NOT NULL,
-  value TEXT NOT NULL,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Mirrors packages/db/drizzle/0005_rate_limit.sql.
-CREATE TABLE rate_limit (
-  id TEXT PRIMARY KEY NOT NULL,
-  key TEXT NOT NULL,
-  count INTEGER NOT NULL DEFAULT 0,
-  last_request BIGINT NOT NULL,
-  CONSTRAINT rate_limit_key_unique UNIQUE(key)
-);
-`;
 
 // Better Auth's magic-link plugin allows 5 requests per 60s per IP+path.
 const MAGIC_LINK_MAX = 5;
