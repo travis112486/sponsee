@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, desc, ne, sql } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import * as schema from "@sponsee/db/schema";
 import { platforms } from "@sponsee/shared";
@@ -160,7 +160,7 @@ export const settingsRouter = createTRPCRouter({
       if (!row) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Platform not found" });
       }
-      if (!row.handle) {
+      if (!row.handle && !row.connectedAccountId) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Add a channel handle first" });
       }
       // Checked after the ownership/handle guards so only requests that would
@@ -178,6 +178,134 @@ export const settingsRouter = createTRPCRouter({
       return syncPlatformRow(row);
     }),
 
+  /**
+   * Which OAuth connect providers have credentials provisioned (SPO-109). The
+   * panel hides Connect buttons for the rest — clicking one could only end in
+   * Better Auth's opaque PROVIDER_NOT_FOUND. Read per-request (not at module
+   * load) so tests and env changes behave predictably.
+   */
+  getConnectProviders: creatorScopedProcedure.query(() => ({
+    twitch: Boolean(process.env.TWITCH_CLIENT_ID && process.env.TWITCH_CLIENT_SECRET),
+    kick: Boolean(process.env.KICK_CLIENT_ID && process.env.KICK_CLIENT_SECRET),
+  })),
+
+  /**
+   * Finish an OAuth connect (SPO-109). The browser returns from Better Auth's
+   * linkSocial redirect with a fresh row in the `account` table; this stitches
+   * it into creator_platforms.connectedAccountId and syncs immediately so the
+   * true subscriber count appears without waiting for the daily job.
+   */
+  completePlatformConnect: creatorScopedProcedure
+    .input(z.object({ platform: z.enum(["twitch", "kick"]) }))
+    .mutation(async ({ ctx, input }) => {
+      // Scoped to the session user, so one tenant can never claim an OAuth
+      // account another user linked.
+      const [linked] = await ctx.db
+        .select()
+        .from(schema.account)
+        .where(
+          and(
+            eq(schema.account.userId, ctx.user.id),
+            eq(schema.account.providerId, input.platform)
+          )
+        )
+        .orderBy(desc(schema.account.updatedAt))
+        .limit(1);
+      if (!linked) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `No linked ${input.platform} account — the Connect flow didn't finish`,
+        });
+      }
+
+      // Connecting account B after account A strands A's `account` row —
+      // unreachable from the UI (Disconnect only knows the current link) but
+      // still holding a live refresh token. Same standard as disconnect:
+      // tokens we no longer use must not sit in the DB.
+      await ctx.db
+        .delete(schema.account)
+        .where(
+          and(
+            eq(schema.account.userId, ctx.user.id),
+            eq(schema.account.providerId, input.platform),
+            ne(schema.account.id, linked.id)
+          )
+        );
+
+      // Caveat: `account` is user-scoped while this link is creator-scoped. A
+      // user in two workspaces who connects the same channel to both shares
+      // one account row, so disconnecting in one workspace breaks the other's
+      // sync. v1 is effectively one creator per user; revisit with multi-seat.
+      const [row] = await ctx.db
+        .insert(schema.creatorPlatforms)
+        .values({
+          creatorId: ctx.creatorId,
+          platform: input.platform,
+          connectedAccountId: linked.id,
+        })
+        .onConflictDoUpdate({
+          target: [schema.creatorPlatforms.creatorId, schema.creatorPlatforms.platform],
+          set: { connectedAccountId: linked.id, updatedAt: new Date() },
+        })
+        .returning();
+
+      // Same upstream budget as "Sync now". When exhausted, the link itself
+      // still succeeded — the daily job picks the row up, so report "skipped"
+      // rather than failing the connect.
+      if (!syncNowLimiter.check(ctx.creatorId).allowed) {
+        return { row, outcome: "skipped" as const };
+      }
+      return syncPlatformRow(row);
+    }),
+
+  /**
+   * Sever an OAuth connect: clears the link and deletes the stored tokens.
+   * Synced values stay as last-known (manual entry remains the fallback);
+   * future daily syncs fall back to the public no-OAuth path if a handle is set.
+   */
+  disconnectPlatform: creatorScopedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [row] = await ctx.db
+        .select()
+        .from(schema.creatorPlatforms)
+        .where(
+          and(
+            eq(schema.creatorPlatforms.id, input.id),
+            eq(schema.creatorPlatforms.creatorId, ctx.creatorId)
+          )
+        );
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Platform not found" });
+      }
+      if (!row.connectedAccountId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Platform is not connected" });
+      }
+
+      const [updated] = await ctx.db
+        .update(schema.creatorPlatforms)
+        .set({ connectedAccountId: null, updatedAt: new Date() })
+        .where(eq(schema.creatorPlatforms.id, row.id))
+        .returning();
+
+      // Drop the tokens too — a disconnect that leaves a live refresh token
+      // behind isn't one. userId guard mirrors the connect path; the
+      // providerId guard means a future write to connectedAccountId can never
+      // make this delete a login account (e.g. Google). Magic link remains as
+      // a sign-in method, so this can't lock the user out.
+      await ctx.db
+        .delete(schema.account)
+        .where(
+          and(
+            eq(schema.account.id, row.connectedAccountId),
+            eq(schema.account.userId, ctx.user.id),
+            eq(schema.account.providerId, row.platform)
+          )
+        );
+
+      return updated;
+    }),
+
   deletePlatform: creatorScopedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -192,6 +320,20 @@ export const settingsRouter = createTRPCRouter({
         .returning();
       if (!result.length) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Platform not found" });
+      }
+      // Removing a connected platform removes its stored OAuth tokens too —
+      // same reasoning (and same guards) as disconnectPlatform.
+      const connectedAccountId = result[0].connectedAccountId;
+      if (connectedAccountId) {
+        await ctx.db
+          .delete(schema.account)
+          .where(
+            and(
+              eq(schema.account.id, connectedAccountId),
+              eq(schema.account.userId, ctx.user.id),
+              eq(schema.account.providerId, result[0].platform)
+            )
+          );
       }
       return { success: true };
     }),

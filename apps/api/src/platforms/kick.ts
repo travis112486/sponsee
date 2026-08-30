@@ -1,5 +1,5 @@
-import type { PlatformStats, PlatformStatsClient } from "./types.js";
-import { fetchJson } from "./http.js";
+import type { ConnectedAuth, PlatformStats, PlatformStatsClient } from "./types.js";
+import { fetchJson, isAuthError } from "./http.js";
 
 /**
  * Kick public API adapter (no-OAuth v1).
@@ -83,6 +83,60 @@ export class KickClient implements PlatformStatsClient {
     return {
       handle: channel.slug || slug,
       channelUrl: `https://kick.com/${channel.slug || slug}`,
+      avatarUrl,
+      subscriberCount:
+        typeof channel.active_subscribers_count === "number"
+          ? channel.active_subscribers_count
+          : null,
+      subscriberCountIsEstimate: false,
+      followers: null, // not in Kick's official API
+    };
+  }
+
+  async fetchConnectedStats(auth: ConnectedAuth): Promise<PlatformStats> {
+    // With the broadcaster's token (channel:read), the parameterless Channels
+    // endpoint returns their own channel — including active_subscribers_count
+    // even where the app-token path gates it.
+    const headers = { Authorization: `Bearer ${auth.accessToken}` };
+
+    // A 401/403 with the broadcaster token means it's dead on Kick's side —
+    // map to the reconnect message rather than a raw status line on the row.
+    let channels: {
+      data: Array<{
+        broadcaster_user_id: number;
+        slug: string;
+        active_subscribers_count?: number;
+      }>;
+    };
+    try {
+      channels = await fetchJson("https://api.kick.com/public/v1/channels", { headers });
+    } catch (err) {
+      if (isAuthError(err)) {
+        throw new Error("Kick connection is no longer valid — reconnect in Settings → Platforms");
+      }
+      throw err;
+    }
+
+    const channel = channels.data?.[0];
+    if (!channel) {
+      throw new Error("Kick connection is no longer valid — reconnect in Settings → Platforms");
+    }
+
+    // Parameterless Users endpoint is likewise the token's own user
+    let avatarUrl: string | null = null;
+    try {
+      const users = await fetchJson<{ data: Array<{ user_id: number; profile_picture?: string }> }>(
+        "https://api.kick.com/public/v1/users",
+        { headers }
+      );
+      avatarUrl = users.data?.[0]?.profile_picture || null;
+    } catch {
+      // Avatar is best-effort; subscriber count is the payload that matters
+    }
+
+    return {
+      handle: channel.slug,
+      channelUrl: channel.slug ? `https://kick.com/${channel.slug}` : null,
       avatarUrl,
       subscriberCount:
         typeof channel.active_subscribers_count === "number"

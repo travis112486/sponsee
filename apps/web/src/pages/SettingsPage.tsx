@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router";
 import { User, Radio, CreditCard, Mail, Receipt } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ProfilePanel from "@/components/settings/ProfilePanel";
@@ -18,7 +19,12 @@ const tabs: { key: TabKey; label: string; icon: typeof User }[] = [
 ];
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<TabKey>("profile");
+  // The OAuth connect flow (PlatformsPanel) redirects back to /settings with
+  // ?connected= or ?connect_error= — land the user on the tab they left from.
+  const [searchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<TabKey>(
+    searchParams.has("connected") || searchParams.has("connect_error") ? "platforms" : "profile"
+  );
 
   return (
     <div className="mx-auto max-w-[720px]">

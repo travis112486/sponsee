@@ -150,6 +150,36 @@ const googleClientId = process.env.GOOGLE_CLIENT_ID;
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const googleEnabled = !!(googleClientId && googleClientSecret);
 
+// Twitch/Kick reuse the SPO-107 stats-sync app credentials. They exist for
+// account *linking* (Settings → Platforms → Connect), which unlocks
+// broadcaster-gated data — true Twitch subscriber counts need the streamer's
+// own token with channel:read:subscriptions; Kick's channel:read is the
+// fallback if app-token sub counts prove gated. `disableSignUp` keeps them
+// from becoming a sign-up path: magic link (+ Google) stays the only way in.
+const twitchClientId = process.env.TWITCH_CLIENT_ID;
+const twitchClientSecret = process.env.TWITCH_CLIENT_SECRET;
+const twitchEnabled = !!(twitchClientId && twitchClientSecret);
+const kickClientId = process.env.KICK_CLIENT_ID;
+const kickClientSecret = process.env.KICK_CLIENT_SECRET;
+const kickEnabled = !!(kickClientId && kickClientSecret);
+
+/**
+ * Providers that exist solely to link a channel, never to sign in. Enforced at
+ * two points that must move together, which is why both read this constant:
+ *
+ * - `accountLinking.trustedProviders` below. Better Auth's link callback
+ *   rejects a provider that is untrusted AND reports an unverified email —
+ *   and Kick's provider hardcodes `emailVerified: false` (its API has no
+ *   verified flag), so an untrusted Kick can never link; Twitch fails the
+ *   same way whenever the streamer's Twitch email is unverified.
+ * - The sign-in guard in app.ts. `trustedProviders` is also consulted for
+ *   *implicit* linking during social sign-in, which attaches a social account
+ *   to an existing user matched by email — `disableSignUp` only blocks new
+ *   user creation, not that path. Trusting these providers is therefore only
+ *   safe because sign-in/social is refused for them outright.
+ */
+export const LINK_ONLY_PROVIDERS: readonly string[] = ["twitch", "kick"];
+
 /**
  * Create a creator workspace + owner membership + default chase templates
  * for a newly-registered user.
@@ -200,6 +230,14 @@ interface AuthInstance {
       user: { id: string; name?: string | null; email: string };
       session: { id: string };
     } | null>;
+    /**
+     * Returns a valid access token for a linked OAuth account, refreshing via
+     * the stored refresh token when expired. Called headerless from the sync
+     * job, where `userId` (not a session) selects the account owner.
+     */
+    getAccessToken: (opts: {
+      body: { accountId: string; userId?: string };
+    }) => Promise<{ accessToken?: string; accessTokenExpiresAt?: Date }>;
   };
 }
 
@@ -223,14 +261,51 @@ export const auth: AuthInstance = betterAuth({
   emailAndPassword: {
     enabled: false, // magic link only in v1
   },
-  socialProviders: googleEnabled
-    ? {
-        google: {
-          clientId: googleClientId,
-          clientSecret: googleClientSecret,
-        },
-      }
-    : undefined,
+  socialProviders: {
+    ...(googleEnabled
+      ? {
+          google: {
+            clientId: googleClientId,
+            clientSecret: googleClientSecret,
+          },
+        }
+      : {}),
+    ...(twitchEnabled
+      ? {
+          twitch: {
+            clientId: twitchClientId,
+            clientSecret: twitchClientSecret,
+            scope: ["channel:read:subscriptions"],
+            disableSignUp: true,
+          },
+        }
+      : {}),
+    ...(kickEnabled
+      ? {
+          kick: {
+            clientId: kickClientId,
+            clientSecret: kickClientSecret,
+            scope: ["channel:read"],
+            disableSignUp: true,
+          },
+        }
+      : {}),
+  },
+  account: {
+    accountLinking: {
+      enabled: true,
+      // Required for the link callback to accept Kick at all (and Twitch for
+      // unverified emails) — see LINK_ONLY_PROVIDERS. Safe only together with
+      // the app.ts guard that refuses sign-in/social for these providers.
+      trustedProviders: [...LINK_ONLY_PROVIDERS],
+      // A streamer's Twitch/Kick email routinely differs from the email they
+      // sign in to Sponsee with. Linking is only reachable from an
+      // authenticated session (linkSocial), and the app.ts guard keeps these
+      // providers out of sign-in entirely, so the takeover vector this flag
+      // warns about (implicit linking on sign-IN) stays closed.
+      allowDifferentEmails: true,
+    },
+  },
   // Storage is the database, not per-instance memory: the serverless adapter in
   // apps/api/api/index.ts gives every cold start a fresh empty limiter, which
   // makes an in-memory counter no limit at all.

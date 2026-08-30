@@ -4,7 +4,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./routers/index.js";
 import { createContext } from "./context.js";
 import { logTRPCError } from "./error-formatter.js";
-import { auth } from "./auth.js";
+import { auth, LINK_ONLY_PROVIDERS } from "./auth.js";
 import waitlistApp from "./routers/waitlist.js";
 import { handleEmailWebhook } from "./routers/webhooks.js";
 import { registerStripeWebhook } from "./billing/webhook.js";
@@ -40,8 +40,31 @@ app.use(
   })
 );
 
-// Better Auth routes
-app.on(["POST", "GET"], "/api/auth/**", (c) => auth.handler(c.req.raw));
+// Better Auth routes. Guarded inline (not as a separate route — an extra
+// registration under /api/auth flips Hono to a router where the `**` pattern
+// stops matching nested paths): Twitch/Kick are trusted for account *linking*
+// (see LINK_ONLY_PROVIDERS in auth.ts), and that same trust would let a social
+// sign-in implicitly attach itself to an existing user matched by email, so
+// the sign-in door is closed before Better Auth sees the request. The clone
+// keeps the raw body readable on the pass-through path.
+app.on(["POST", "GET"], "/api/auth/**", async (c) => {
+  if (c.req.method === "POST" && c.req.path === "/api/auth/sign-in/social") {
+    const body = (await c.req.raw
+      .clone()
+      .json()
+      .catch(() => null)) as { provider?: string } | null;
+    if (body?.provider && LINK_ONLY_PROVIDERS.includes(body.provider)) {
+      return c.json(
+        {
+          code: "PROVIDER_NOT_ALLOWED",
+          message: "This provider can only be connected from Settings → Platforms, not used to sign in",
+        },
+        403,
+      );
+    }
+  }
+  return auth.handler(c.req.raw);
+});
 
 // tRPC routes
 app.use(

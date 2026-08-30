@@ -186,7 +186,12 @@ describe("SPO-71 visual parity safeguards", () => {
   });
 
   it("keeps Settings grouped in a bounded surface with responsive tabs", () => {
-    render(<SettingsPage />);
+    // Router context needed since SettingsPage reads the OAuth-return params
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>
+    );
 
     const heading = screen.getByRole("heading", { level: 2, name: "Settings" });
     expect(heading).toHaveClass("font-serif");
