@@ -343,9 +343,12 @@ export async function sendChaseEmail(args: {
     );
   }
 
-  const provider = createEmailProvider();
-
   try {
+    // Resolve the provider inside the try: a provider-config error (e.g. the
+    // SPO-145 production guard throwing on a missing credential) must mark this
+    // event failed like any other send failure, not strand it in `sending`
+    // until the 30-minute rescue.
+    const provider = createEmailProvider();
     const info = await provider.send({
       to: args.toEmail,
       from: args.fromEmail,
