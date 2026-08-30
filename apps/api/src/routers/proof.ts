@@ -4,6 +4,7 @@ import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import { eq, and, desc } from "drizzle-orm";
 import { proofs, deliverables, deals, activityEvents } from "@sponsee/db/schema";
 import { proofKinds } from "@sponsee/shared";
+import { httpUrl } from "./validators.js";
 
 export const proofRouter = createTRPCRouter({
   listByDeal: creatorScopedProcedure
@@ -32,7 +33,7 @@ export const proofRouter = createTRPCRouter({
           dealId: z.string().uuid(),
           deliverableId: z.string().uuid().optional(),
           kind: z.enum(proofKinds),
-          url: z.string().url().max(2048).optional(),
+          url: httpUrl.optional(),
           note: z.string().max(4096).optional(),
         })
         .refine((v) => v.url || v.note?.trim(), {

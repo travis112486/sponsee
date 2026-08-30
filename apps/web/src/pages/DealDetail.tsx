@@ -109,6 +109,11 @@ export default function DealDetail() {
     onSuccess: () => {
       utils.proof.listByDeal.invalidate({ dealId: id! });
       toast("Evidence added");
+      // Only clear the form once the server accepts, so a rejected
+      // submission doesn't throw away what the user typed.
+      setProofUrl("");
+      setProofNote("");
+      setEvidenceFormId(null);
     },
     onError: (err) => toast(err.message),
   });
@@ -191,9 +196,6 @@ export default function DealDetail() {
       url: url || undefined,
       note: note || undefined,
     });
-    setProofUrl("");
-    setProofNote("");
-    setEvidenceFormId(null);
   }
 
   function handleAddDeliverable(e: React.FormEvent) {
@@ -542,6 +544,7 @@ export default function DealDetail() {
                       <button
                         onClick={() => {
                           setEvidenceFormId(d.id);
+                          setProofKind("clip");
                           setProofUrl("");
                           setProofNote("");
                         }}

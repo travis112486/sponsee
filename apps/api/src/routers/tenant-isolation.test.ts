@@ -833,6 +833,20 @@ describe("proof router tenant isolation", () => {
       ).rejects.toSatisfy((err: TRPCError) => err.code === "BAD_REQUEST");
     });
 
+    it("rejects non-http(s) links", async () => {
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      for (const url of [
+        "javascript:alert(document.cookie)",
+        "JaVaScRiPt:alert(1)",
+        "data:text/html;base64,PHNjcmlwdD4=",
+        "file:///etc/passwd",
+      ]) {
+        await expect(
+          caller.create({ dealId: dealAId, deliverableId: deliverableAId, kind: "link", url })
+        ).rejects.toSatisfy((err: TRPCError) => err.code === "BAD_REQUEST");
+      }
+    });
+
     it("throws NOT_FOUND for a cross-creator deal", async () => {
       const caller = proofRouter.createCaller(mockCtx(creatorAId));
       await expect(
