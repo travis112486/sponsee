@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { platforms, type Platform } from "@sponsee/shared";
 import QueryError from "@/components/QueryError";
+import { applyServerFieldErrors, serverErrorMessage } from "@/lib/trpc-error";
 
 const platformSchema = z.object({
   platform: z.enum(platforms),
@@ -16,6 +17,9 @@ const platformSchema = z.object({
 });
 
 type PlatformForm = z.infer<typeof platformSchema>;
+
+/** Fields whose errors this form renders inline; the rest fall back to a toast. */
+const INLINE_ERROR_FIELDS = ["platform"] as const;
 
 export default function PlatformsPanel() {
   const utils = trpc.useUtils();
@@ -27,7 +31,12 @@ export default function PlatformsPanel() {
       setEditingId(null);
       resetForm();
     },
-    onError: (err) => toast.error(err.message || "Failed to save platform"),
+    onError: (err) => {
+      const { applied, unmapped } = applyServerFieldErrors(err, setError, INLINE_ERROR_FIELDS);
+      if (applied === 0 || unmapped) {
+        toast.error(serverErrorMessage(err, "Failed to save platform"));
+      }
+    },
   });
   const remove = trpc.settings.deletePlatform.useMutation({
     onSuccess: () => {
@@ -43,6 +52,7 @@ export default function PlatformsPanel() {
     register,
     handleSubmit,
     reset,
+    setError,
     formState: { errors, isSubmitting },
   } = useForm<PlatformForm>({
     resolver: zodResolver(platformSchema),

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, act } from "@testing-library/react";
+import { toast } from "sonner";
 import ProfilePanel from "./ProfilePanel";
 
 const mockInvalidate = vi.fn();
@@ -22,6 +23,13 @@ let mockQueryReturn: {
 
 const mockUpdateReturn = { mutate: vi.fn(), isPending: false };
 
+/** Options the panel hands to useMutation, so tests can fire onError directly. */
+let updateOptions: { onError?: (err: unknown) => void } = {};
+
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
+
 vi.mock("@/trpc", () => ({
   trpc: {
     useUtils: () => ({
@@ -36,7 +44,10 @@ vi.mock("@/trpc", () => ({
         useQuery: () => mockQueryReturn,
       },
       updateProfile: {
-        useMutation: () => mockUpdateReturn,
+        useMutation: (opts: { onError?: (err: unknown) => void }) => {
+          updateOptions = opts;
+          return mockUpdateReturn;
+        },
       },
     },
   },
@@ -195,5 +206,77 @@ describe("ProfilePanel", () => {
         expect.objectContaining({ avatarUrl: null })
       );
     });
+  });
+});
+
+// ── Server-side validation failures (SPO-112) ──────────────────────────────
+
+describe("ProfilePanel server validation errors", () => {
+  function renderLoaded() {
+    setQueryState({
+      isLoading: false,
+      isError: false,
+      data: {
+        displayName: "Alex Streams",
+        pronouns: null,
+        category: null,
+        avatarUrl: "http://example.com/a.png",
+        timezone: "America/New_York",
+        defaultCurrency: "USD",
+      },
+    });
+    render(<ProfilePanel />);
+  }
+
+  /** What the API's errorFormatter puts on the wire for a rejected input. */
+  function rejection(fieldErrors: Record<string, string[]>, formErrors: string[] = []) {
+    return {
+      message: "Avatar URL: Must be an https:// URL",
+      data: { zodError: { formErrors, fieldErrors } },
+    };
+  }
+
+  it("shows a server rejection under the offending field, not in a toast", () => {
+    renderLoaded();
+
+    act(() => {
+      updateOptions.onError?.(rejection({ avatarUrl: ["Must be an https:// URL"] }));
+    });
+
+    expect(screen.getByText("Must be an https:// URL")).toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a toast when the field has no inline slot", () => {
+    renderLoaded();
+
+    act(() => {
+      updateOptions.onError?.({
+        message: "Timezone: Unknown timezone",
+        data: { zodError: { formErrors: [], fieldErrors: { timezone: ["Unknown timezone"] } } },
+      });
+    });
+
+    expect(toast.error).toHaveBeenCalledWith("Timezone: Unknown timezone");
+  });
+
+  it("toasts non-validation errors with the server message", () => {
+    renderLoaded();
+
+    act(() => {
+      updateOptions.onError?.({ message: "No creator workspace", data: { zodError: null } });
+    });
+
+    expect(toast.error).toHaveBeenCalledWith("No creator workspace");
+  });
+
+  it("uses the fallback copy when the server sends no message", () => {
+    renderLoaded();
+
+    act(() => {
+      updateOptions.onError?.({ message: "" });
+    });
+
+    expect(toast.error).toHaveBeenCalledWith("Failed to save profile");
   });
 });

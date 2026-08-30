@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import QueryError from "@/components/QueryError";
 import { httpsUrlOrEmpty } from "@/lib/url-schema";
+import { applyServerFieldErrors, serverErrorMessage } from "@/lib/trpc-error";
 
 const profileSchema = z.object({
   displayName: z.string().min(1, "Display name is required").max(255),
@@ -19,6 +20,13 @@ const profileSchema = z.object({
 
 type ProfileForm = z.infer<typeof profileSchema>;
 
+/**
+ * Fields whose errors this form actually renders. A server complaint about any
+ * other field has nowhere to go inline, so it falls back to the toast rather
+ * than being set and never shown.
+ */
+const INLINE_ERROR_FIELDS = ["displayName", "avatarUrl"] as const;
+
 export default function ProfilePanel() {
   const utils = trpc.useUtils();
   const { data: profile, isLoading, isError, refetch } = trpc.settings.getProfile.useQuery();
@@ -27,13 +35,21 @@ export default function ProfilePanel() {
       toast.success("Profile saved");
       utils.settings.getProfile.invalidate();
     },
-    onError: (err) => toast.error(err.message || "Failed to save profile"),
+    onError: (err) => {
+      // Server-side validation the client schema let through lands under the
+      // offending input; anything the form can't show still needs a toast.
+      const { applied, unmapped } = applyServerFieldErrors(err, setError, INLINE_ERROR_FIELDS);
+      if (applied === 0 || unmapped) {
+        toast.error(serverErrorMessage(err, "Failed to save profile"));
+      }
+    },
   });
 
   const {
     register,
     handleSubmit,
     reset,
+    setError,
     formState: { errors, isDirty, isSubmitting },
   } = useForm<ProfileForm>({
     resolver: zodResolver(profileSchema),
