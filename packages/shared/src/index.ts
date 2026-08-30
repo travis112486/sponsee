@@ -110,6 +110,19 @@ export const defaultChaseTemplates: Array<{
   },
 ];
 
+// Proof kinds — v1 evidence is links + notes only; "file" exists in the DB
+// enum but stays out of this list until storage infra lands (Phase B).
+export const proofKinds = ["vod", "clip", "chat", "overlay", "link"] as const;
+export type ProofKind = (typeof proofKinds)[number];
+
+export const proofKindLabels: Record<ProofKind, string> = {
+  vod: "VOD",
+  clip: "Clip",
+  chat: "Chat log",
+  overlay: "Overlay",
+  link: "Link",
+};
+
 // Activity entity kinds
 export const activityKinds = [
   "invoice",

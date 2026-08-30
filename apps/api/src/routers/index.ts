@@ -4,6 +4,7 @@ import { dealsRouter } from "./deals.js";
 import { brandRouter } from "./brand.js";
 import { deliverableRouter } from "./deliverable.js";
 import { contractRouter } from "./contract.js";
+import { proofRouter } from "./proof.js";
 import { invoiceRouter } from "./invoice.js";
 import { chaseRouter } from "./chase.js";
 import { calculatorRouter } from "./calculator.js";
@@ -18,6 +19,7 @@ export const appRouter = createTRPCRouter({
   brand: brandRouter,
   deliverable: deliverableRouter,
   contract: contractRouter,
+  proof: proofRouter,
   invoice: invoiceRouter,
   chase: chaseRouter,
   calculator: calculatorRouter,

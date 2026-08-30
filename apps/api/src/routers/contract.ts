@@ -4,6 +4,7 @@ import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import { eq, and, isNull } from "drizzle-orm";
 import { contracts, deals, activityEvents } from "@sponsee/db/schema";
 import { contractStatuses } from "@sponsee/shared";
+import { httpUrl } from "./validators.js";
 
 import { type db as Db } from "@sponsee/db";
 
@@ -17,14 +18,6 @@ async function getOwnedDeal(ctx: { db: typeof Db; creatorId: string }, dealId: s
   }
   return deal;
 }
-
-// Rendered in <a href> and <object data> on the web, so only http(s) links are
-// accepted — z.url() alone would let javascript:/data: schemes through.
-const httpUrl = z
-  .string()
-  .url()
-  .max(2048)
-  .refine((u) => /^https?:\/\//i.test(u), { message: "Link must start with http:// or https://" });
 
 export const contractRouter = createTRPCRouter({
   // One contract per deal in v1 (Phase A) — get/upsert semantics.
