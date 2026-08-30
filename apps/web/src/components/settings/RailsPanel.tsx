@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import QueryError from "@/components/QueryError";
 import { httpsUrlOrEmpty } from "@/lib/url-schema";
+import { applyServerFieldErrors, serverErrorMessage } from "@/lib/trpc-error";
 
 const railsSchema = z.object({
   paypalLink: httpsUrlOrEmpty.optional(),
@@ -16,6 +17,9 @@ const railsSchema = z.object({
 
 type RailsForm = z.infer<typeof railsSchema>;
 
+/** Fields whose errors this form renders inline; the rest fall back to a toast. */
+const INLINE_ERROR_FIELDS = ["paypalLink"] as const;
+
 export default function RailsPanel() {
   const utils = trpc.useUtils();
   const { data: rails, isLoading, isError, refetch } = trpc.settings.getRails.useQuery();
@@ -24,13 +28,19 @@ export default function RailsPanel() {
       toast.success("Payout rails saved");
       utils.settings.getRails.invalidate();
     },
-    onError: (err) => toast.error(err.message || "Failed to save payout rails"),
+    onError: (err) => {
+      const { applied, unmapped } = applyServerFieldErrors(err, setError, INLINE_ERROR_FIELDS);
+      if (applied === 0 || unmapped) {
+        toast.error(serverErrorMessage(err, "Failed to save payout rails"));
+      }
+    },
   });
 
   const {
     register,
     handleSubmit,
     reset,
+    setError,
     formState: { errors, isDirty, isSubmitting },
   } = useForm<RailsForm>({
     resolver: zodResolver(railsSchema),
