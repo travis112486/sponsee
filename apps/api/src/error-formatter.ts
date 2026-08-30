@@ -63,7 +63,20 @@ type ErrorShapeLike = { message: string; data: Record<string, unknown> };
 
 /**
  * tRPC root `errorFormatter`. Applies to every router, so it deliberately does
- * nothing at all unless the error's cause is a ZodError.
+ * nothing at all unless the error is an *input-validation* failure.
+ *
+ * The phase matters as much as the cause. A ZodError raised while parsing the
+ * procedure's declared input is a creator's own bad form data: tRPC wraps it as
+ * `BAD_REQUEST`, and rewriting it into a readable sentence is the whole point of
+ * this formatter. A ZodError raised *inside* a procedure body — `.parse()` on a
+ * Stripe webhook payload, a platform-sync response — is an internal failure that
+ * tRPC surfaces as `INTERNAL_SERVER_ERROR`. Formatting that one would dress a
+ * server bug up as user-fixable input and publish our internal field names on
+ * `data.zodError`, so those fall through to `shape.message` untouched.
+ *
+ * (A body that deliberately throws `TRPCError({ code: "BAD_REQUEST", cause:
+ * zodError })` still gets formatted. That is an explicit "this is the caller's
+ * fault" signal from the procedure, not an escaped internal parse.)
  */
 export function formatTRPCError<TShape extends ErrorShapeLike>({
   shape,
@@ -72,8 +85,12 @@ export function formatTRPCError<TShape extends ErrorShapeLike>({
   shape: TShape;
   error: TRPCError;
 }) {
-  const zodError: FlattenedZodError | null =
-    error.cause instanceof ZodError ? (error.cause.flatten() as FlattenedZodError) : null;
+  const isInputValidationFailure =
+    error.code === "BAD_REQUEST" && error.cause instanceof ZodError;
+
+  const zodError: FlattenedZodError | null = isInputValidationFailure
+    ? ((error.cause as ZodError).flatten() as FlattenedZodError)
+    : null;
 
   return {
     ...shape,
