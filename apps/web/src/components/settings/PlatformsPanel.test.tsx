@@ -26,6 +26,11 @@ let mockQueryReturn: {
   refetch: typeof mockRefetch;
 } = { data: undefined, isLoading: false, isError: false, refetch: mockRefetch };
 
+// Both providers configured by default; tests override to prove buttons hide.
+let mockConnectProvidersReturn: { data?: { twitch: boolean; kick: boolean } } = {
+  data: { twitch: true, kick: true },
+};
+
 const mockUpsertReturn = { mutate: vi.fn(), isPending: false };
 let mockDeleteReturn = { mutate: vi.fn(), isPending: false };
 const mockSyncReturn = { mutate: vi.fn(), isPending: false };
@@ -77,6 +82,9 @@ vi.mock("@/trpc", () => ({
       getPlatforms: {
         useQuery: () => mockQueryReturn,
       },
+      getConnectProviders: {
+        useQuery: () => mockConnectProvidersReturn,
+      },
       upsertPlatform: {
         useMutation: () => mockUpsertReturn,
       },
@@ -103,6 +111,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   mockSearchParams = new URLSearchParams();
+  mockConnectProvidersReturn = { data: { twitch: true, kick: true } };
 });
 
 function setQueryState(state: Partial<typeof mockQueryReturn>) {
@@ -298,6 +307,32 @@ describe("PlatformsPanel", () => {
       render(<PlatformsPanel />);
       expect(screen.getByRole("button", { name: /Connect Twitch/ })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /Connect Kick/ })).toBeInTheDocument();
+    });
+
+    it("hides Connect buttons for providers without credentials, keeping existing connections visible", () => {
+      mockConnectProvidersReturn = { data: { twitch: false, kick: false } };
+      setQueryState({
+        isLoading: false,
+        isError: false,
+        data: [
+          {
+            id: "p1",
+            platform: "twitch",
+            ccv: null,
+            followers: null,
+            scheduleLabel: null,
+            handle: "somestreamer",
+            connectedAccountId: "acct-1",
+          },
+        ],
+      });
+      render(<PlatformsPanel />);
+      // No credentials → no dead-end buttons (Kick), but the already-connected
+      // Twitch chip and its Disconnect stay reachable.
+      expect(screen.queryByRole("button", { name: /Connect Kick/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Connect Twitch/ })).not.toBeInTheDocument();
+      expect(screen.getByText(/Twitch connected/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Disconnect/ })).toBeInTheDocument();
     });
 
     it("starts the link flow with per-platform callback URLs", async () => {

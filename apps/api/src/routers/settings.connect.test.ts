@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { settingsRouter } from "./settings.js";
@@ -192,6 +192,31 @@ describe("completePlatformConnect", () => {
 
     const result = await caller().completePlatformConnect({ platform: "twitch" });
     expect(result.row.connectedAccountId).toBe("acct-twitch-1");
+  });
+
+  it("deletes superseded links for the provider so stale refresh tokens don't linger", async () => {
+    // Connect account A, then account B: A's row must not survive with a
+    // live refresh token unreachable from the UI.
+    await insertAccount({ id: "acct-kick-old", providerId: "kick", userId: otherUserId });
+    await db
+      .update(schema.account)
+      .set({ updatedAt: new Date(Date.now() - 60_000) })
+      .where(eq(schema.account.id, "acct-kick-old"));
+    await insertAccount({ id: "acct-kick-new", providerId: "kick", userId: otherUserId });
+
+    const result = await caller({
+      userId: otherUserId,
+      creatorId: otherCreatorId,
+    }).completePlatformConnect({ platform: "kick" });
+
+    expect(result.row.connectedAccountId).toBe("acct-kick-new");
+    const remaining = await db
+      .select()
+      .from(schema.account)
+      .where(
+        and(eq(schema.account.userId, otherUserId), eq(schema.account.providerId, "kick"))
+      );
+    expect(remaining.map((r) => r.id)).toEqual(["acct-kick-new"]);
   });
 
   it("never links another user's account", async () => {

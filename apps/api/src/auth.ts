@@ -164,6 +164,23 @@ const kickClientSecret = process.env.KICK_CLIENT_SECRET;
 const kickEnabled = !!(kickClientId && kickClientSecret);
 
 /**
+ * Providers that exist solely to link a channel, never to sign in. Enforced at
+ * two points that must move together, which is why both read this constant:
+ *
+ * - `accountLinking.trustedProviders` below. Better Auth's link callback
+ *   rejects a provider that is untrusted AND reports an unverified email —
+ *   and Kick's provider hardcodes `emailVerified: false` (its API has no
+ *   verified flag), so an untrusted Kick can never link; Twitch fails the
+ *   same way whenever the streamer's Twitch email is unverified.
+ * - The sign-in guard in app.ts. `trustedProviders` is also consulted for
+ *   *implicit* linking during social sign-in, which attaches a social account
+ *   to an existing user matched by email — `disableSignUp` only blocks new
+ *   user creation, not that path. Trusting these providers is therefore only
+ *   safe because sign-in/social is refused for them outright.
+ */
+export const LINK_ONLY_PROVIDERS: readonly string[] = ["twitch", "kick"];
+
+/**
  * Create a creator workspace + owner membership + default chase templates
  * for a newly-registered user.
  */
@@ -277,11 +294,15 @@ export const auth: AuthInstance = betterAuth({
   account: {
     accountLinking: {
       enabled: true,
+      // Required for the link callback to accept Kick at all (and Twitch for
+      // unverified emails) — see LINK_ONLY_PROVIDERS. Safe only together with
+      // the app.ts guard that refuses sign-in/social for these providers.
+      trustedProviders: [...LINK_ONLY_PROVIDERS],
       // A streamer's Twitch/Kick email routinely differs from the email they
       // sign in to Sponsee with. Linking is only reachable from an
-      // authenticated session (linkSocial), and disableSignUp above keeps
-      // these providers out of the sign-up path, so the takeover vector this
-      // flag warns about (implicit linking on sign-IN) stays closed.
+      // authenticated session (linkSocial), and the app.ts guard keeps these
+      // providers out of sign-in entirely, so the takeover vector this flag
+      // warns about (implicit linking on sign-IN) stays closed.
       allowDifferentEmails: true,
     },
   },

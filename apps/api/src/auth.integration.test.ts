@@ -25,6 +25,7 @@ vi.mock("nodemailer", () => ({
 
 // Import app AFTER the nodemailer mock is registered.
 const { default: app } = await import("./app.js");
+const { auth, LINK_ONLY_PROVIDERS } = await import("./auth.js");
 
 import { initPgliteSchema } from "./test-utils/pglite-setup.js";
 
@@ -555,5 +556,53 @@ describe("auth trusted origins", () => {
 
     expect(res.headers.get("access-control-allow-origin")).toBe("http://localhost:3000");
     expect(res.headers.get("access-control-allow-credentials")).toBe("true");
+  });
+});
+
+// SPO-109: Twitch/Kick sit in accountLinking.trustedProviders so the link
+// callback accepts them (Kick reports emailVerified: false unconditionally).
+// That trust also governs implicit account linking on social sign-IN, so the
+// app-level guard must refuse these providers as a sign-in path outright.
+describe("link-only providers refuse social sign-in", () => {
+  it("trusts every link-only provider, satisfying the link callback's untrusted-provider gate", () => {
+    const options = (
+      auth as unknown as {
+        options: { account?: { accountLinking?: { trustedProviders?: string[] } } };
+      }
+    ).options;
+    for (const provider of LINK_ONLY_PROVIDERS) {
+      expect(options.account?.accountLinking?.trustedProviders).toContain(provider);
+    }
+  });
+
+  it.each(["twitch", "kick"])("rejects POST /sign-in/social for %s", async (provider) => {
+    const res = await app.request("/api/auth/sign-in/social", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+      },
+      body: JSON.stringify({ provider, callbackURL: "/" }),
+    });
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { code?: string };
+    expect(body.code).toBe("PROVIDER_NOT_ALLOWED");
+  });
+
+  it("passes other providers through to Better Auth", async () => {
+    const res = await app.request("/api/auth/sign-in/social", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+      },
+      body: JSON.stringify({ provider: "google", callbackURL: "/" }),
+    });
+
+    // Google isn't configured under the test runner, so Better Auth answers
+    // with its own error — the point is the guard didn't intercept it.
+    const body = (await res.json()) as { code?: string };
+    expect(body.code).not.toBe("PROVIDER_NOT_ALLOWED");
   });
 });

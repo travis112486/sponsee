@@ -40,6 +40,9 @@ const INLINE_ERROR_FIELDS = ["platform"] as const;
 export default function PlatformsPanel() {
   const utils = trpc.useUtils();
   const { data, isLoading, isError, refetch } = trpc.settings.getPlatforms.useQuery();
+  // Hides Connect buttons for providers without credentials provisioned, where
+  // clicking could only fail with an opaque PROVIDER_NOT_FOUND.
+  const { data: connectProviders } = trpc.settings.getConnectProviders.useQuery();
   const upsert = trpc.settings.upsertPlatform.useMutation({
     onSuccess: () => {
       toast.success("Platform saved");
@@ -239,6 +242,9 @@ export default function PlatformsPanel() {
           {CONNECTABLE.map((platform) => {
             const row = data?.find((p) => p.platform === platform);
             const isConnected = Boolean(row?.connectedAccountId);
+            // An existing connection stays visible (so Disconnect still works)
+            // even if the provider's credentials disappear later.
+            if (!isConnected && !connectProviders?.[platform]) return null;
             const isPending =
               connecting === platform ||
               (completeConnect.isPending && completeConnect.variables?.platform === platform);
@@ -253,7 +259,7 @@ export default function PlatformsPanel() {
                     </span>
                     <button
                       onClick={() => disconnect.mutate({ id: row.id })}
-                      disabled={disconnect.isPending}
+                      disabled={disconnect.isPending && disconnect.variables?.id === row.id}
                       className="flex items-center gap-1 text-[12.5px] font-medium text-ink-3 transition-colors hover:text-brick disabled:opacity-50"
                     >
                       <Unplug className="h-3.5 w-3.5" />

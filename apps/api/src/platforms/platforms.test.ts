@@ -20,6 +20,7 @@ function mockFetchSequence(responses: Array<{ status?: number; json: unknown }>)
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("createPlatformClient", () => {
@@ -123,9 +124,11 @@ describe("TwitchClient", () => {
       { json: { total: 208, data: [], points: 250 } },
     ]);
 
+    // providerAccountId is deliberately NOT the Helix id: broadcaster_id must
+    // come from the /helix/users response, not Better Auth's stored subject.
     const stats = await client().fetchConnectedStats({
       accessToken: "user-token",
-      providerAccountId: "141981764",
+      providerAccountId: "oidc-sub-unrelated",
     });
 
     expect(stats).toEqual({
@@ -159,6 +162,44 @@ describe("TwitchClient", () => {
     await expect(
       client().fetchConnectedStats({ accessToken: "stale", providerAccountId: "1" })
     ).rejects.toThrow("no longer valid");
+  });
+
+  it("fetchConnectedStats maps a 401 on the users call to the reconnect message", async () => {
+    mockFetchSequence([{ status: 401, json: { error: "Unauthorized" } }]);
+    await expect(
+      client().fetchConnectedStats({ accessToken: "revoked", providerAccountId: "1" })
+    ).rejects.toThrow("reconnect in Settings → Platforms");
+  });
+
+  it("fetchConnectedStats keeps the row alive when only the subscriptions call fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockFetchSequence([
+      {
+        json: {
+          data: [
+            {
+              id: "141981764",
+              login: "somestreamer",
+              display_name: "SomeStreamer",
+              profile_image_url: "https://static-cdn.jtvnw.net/avatar.png",
+            },
+          ],
+        },
+      },
+      { json: { total: 5421 } },
+      // Token predates channel:read:subscriptions, scope revoked, or
+      // non-affiliate — must not lose the avatar/follower refresh
+      { status: 401, json: { error: "Unauthorized" } },
+    ]);
+
+    const stats = await client().fetchConnectedStats({
+      accessToken: "user-token",
+      providerAccountId: "141981764",
+    });
+
+    expect(stats.subscriberCount).toBeNull();
+    expect(stats.followers).toBe(5421);
+    expect(stats.avatarUrl).toBe("https://static-cdn.jtvnw.net/avatar.png");
   });
 });
 
@@ -246,6 +287,13 @@ describe("KickClient", () => {
     await expect(
       client().fetchConnectedStats({ accessToken: "stale", providerAccountId: "777" })
     ).rejects.toThrow("no longer valid");
+  });
+
+  it("fetchConnectedStats maps a 401 on the channels call to the reconnect message", async () => {
+    mockFetchSequence([{ status: 401, json: { error: "Unauthorized" } }]);
+    await expect(
+      client().fetchConnectedStats({ accessToken: "revoked", providerAccountId: "777" })
+    ).rejects.toThrow("reconnect in Settings → Platforms");
   });
 });
 

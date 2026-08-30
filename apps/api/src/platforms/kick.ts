@@ -1,5 +1,5 @@
 import type { ConnectedAuth, PlatformStats, PlatformStatsClient } from "./types.js";
-import { fetchJson } from "./http.js";
+import { fetchJson, isAuthError } from "./http.js";
 
 /**
  * Kick public API adapter (no-OAuth v1).
@@ -99,13 +99,23 @@ export class KickClient implements PlatformStatsClient {
     // even where the app-token path gates it.
     const headers = { Authorization: `Bearer ${auth.accessToken}` };
 
-    const channels = await fetchJson<{
+    // A 401/403 with the broadcaster token means it's dead on Kick's side —
+    // map to the reconnect message rather than a raw status line on the row.
+    let channels: {
       data: Array<{
         broadcaster_user_id: number;
         slug: string;
         active_subscribers_count?: number;
       }>;
-    }>("https://api.kick.com/public/v1/channels", { headers });
+    };
+    try {
+      channels = await fetchJson("https://api.kick.com/public/v1/channels", { headers });
+    } catch (err) {
+      if (isAuthError(err)) {
+        throw new Error("Kick connection is no longer valid — reconnect in Settings → Platforms");
+      }
+      throw err;
+    }
 
     const channel = channels.data?.[0];
     if (!channel) {

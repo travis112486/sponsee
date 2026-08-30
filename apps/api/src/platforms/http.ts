@@ -39,3 +39,12 @@ export async function fetchJson<T>(
 
   throw lastError ?? new Error("fetchJson failed");
 }
+
+/**
+ * True for auth-shaped upstream failures (401/403). Keys off the status prefix
+ * fetchJson puts on its errors; on the connected sync path these mean the
+ * broadcaster token no longer works and the fix is a reconnect, not a retry.
+ */
+export function isAuthError(err: unknown): boolean {
+  return err instanceof Error && /^40[13] /.test(err.message);
+}

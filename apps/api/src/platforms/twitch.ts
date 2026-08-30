@@ -1,5 +1,5 @@
 import type { ConnectedAuth, PlatformStats, PlatformStatsClient } from "./types.js";
-import { fetchJson } from "./http.js";
+import { fetchJson, isAuthError } from "./http.js";
 
 /**
  * Twitch Helix adapter.
@@ -89,33 +89,52 @@ export class TwitchClient implements PlatformStatsClient {
     // Helix requires the app's Client-Id header even with a user token, and
     // Get Broadcaster Subscriptions only answers for the token's own channel.
     const headers = { "Client-Id": this.clientId, Authorization: `Bearer ${auth.accessToken}` };
-    const broadcasterId = auth.providerAccountId;
 
-    // No login param: returns the user the token belongs to
-    const users = await fetchJson<{
+    // No login param: returns the user the token belongs to. A 401/403 here
+    // means the token itself is dead (revoked on Twitch's side), so it maps
+    // to the reconnect message rather than a raw status line on the row.
+    let users: {
       data: Array<{ id: string; login: string; display_name: string; profile_image_url: string }>;
-    }>("https://api.twitch.tv/helix/users", { headers });
+    };
+    try {
+      users = await fetchJson("https://api.twitch.tv/helix/users", { headers });
+    } catch (err) {
+      if (isAuthError(err)) {
+        throw new Error("Twitch connection is no longer valid — reconnect in Settings → Platforms");
+      }
+      throw err;
+    }
     const user = users.data[0];
     if (!user) {
       throw new Error("Twitch connection is no longer valid — reconnect in Settings → Platforms");
     }
+    // The authoritative Helix user id, rather than assuming Better Auth's
+    // stored accountId (the OIDC `sub`) always equals it.
+    const broadcasterId = user.id;
 
     const [followersRes, subsRes] = await Promise.all([
       fetchJson<{ total: number }>(
         `https://api.twitch.tv/helix/channels/followers?broadcaster_id=${broadcasterId}&first=1`,
         { headers }
       ),
+      // Best-effort, like Kick's avatar: subscriptions can 401 on their own
+      // (token predates channel:read:subscriptions, scope revoked, and
+      // non-affiliate behaviour is unconfirmed) and that must not lose the
+      // avatar/follower refresh the rest of the row still gets.
       fetchJson<{ total: number }>(
         `https://api.twitch.tv/helix/subscriptions?broadcaster_id=${broadcasterId}&first=1`,
         { headers }
-      ),
+      ).catch((err) => {
+        console.warn(`[platform-sync] twitch subscriptions unavailable: ${(err as Error).message}`);
+        return null;
+      }),
     ]);
 
     return {
       handle: user.login,
       channelUrl: `https://www.twitch.tv/${user.login}`,
       avatarUrl: user.profile_image_url || null,
-      subscriberCount: typeof subsRes.total === "number" ? subsRes.total : null,
+      subscriberCount: typeof subsRes?.total === "number" ? subsRes.total : null,
       subscriberCountIsEstimate: false,
       followers: typeof followersRes.total === "number" ? followersRes.total : null,
     };

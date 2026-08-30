@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, ne, sql } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import * as schema from "@sponsee/db/schema";
 import { platforms } from "@sponsee/shared";
@@ -179,6 +179,17 @@ export const settingsRouter = createTRPCRouter({
     }),
 
   /**
+   * Which OAuth connect providers have credentials provisioned (SPO-109). The
+   * panel hides Connect buttons for the rest — clicking one could only end in
+   * Better Auth's opaque PROVIDER_NOT_FOUND. Read per-request (not at module
+   * load) so tests and env changes behave predictably.
+   */
+  getConnectProviders: creatorScopedProcedure.query(() => ({
+    twitch: Boolean(process.env.TWITCH_CLIENT_ID && process.env.TWITCH_CLIENT_SECRET),
+    kick: Boolean(process.env.KICK_CLIENT_ID && process.env.KICK_CLIENT_SECRET),
+  })),
+
+  /**
    * Finish an OAuth connect (SPO-109). The browser returns from Better Auth's
    * linkSocial redirect with a fresh row in the `account` table; this stitches
    * it into creator_platforms.connectedAccountId and syncs immediately so the
@@ -207,6 +218,24 @@ export const settingsRouter = createTRPCRouter({
         });
       }
 
+      // Connecting account B after account A strands A's `account` row —
+      // unreachable from the UI (Disconnect only knows the current link) but
+      // still holding a live refresh token. Same standard as disconnect:
+      // tokens we no longer use must not sit in the DB.
+      await ctx.db
+        .delete(schema.account)
+        .where(
+          and(
+            eq(schema.account.userId, ctx.user.id),
+            eq(schema.account.providerId, input.platform),
+            ne(schema.account.id, linked.id)
+          )
+        );
+
+      // Caveat: `account` is user-scoped while this link is creator-scoped. A
+      // user in two workspaces who connects the same channel to both shares
+      // one account row, so disconnecting in one workspace breaks the other's
+      // sync. v1 is effectively one creator per user; revisit with multi-seat.
       const [row] = await ctx.db
         .insert(schema.creatorPlatforms)
         .values({
@@ -260,14 +289,17 @@ export const settingsRouter = createTRPCRouter({
         .returning();
 
       // Drop the tokens too — a disconnect that leaves a live refresh token
-      // behind isn't one. userId guard mirrors the connect path. Magic link
-      // remains as a sign-in method, so this can't lock the user out.
+      // behind isn't one. userId guard mirrors the connect path; the
+      // providerId guard means a future write to connectedAccountId can never
+      // make this delete a login account (e.g. Google). Magic link remains as
+      // a sign-in method, so this can't lock the user out.
       await ctx.db
         .delete(schema.account)
         .where(
           and(
             eq(schema.account.id, row.connectedAccountId),
-            eq(schema.account.userId, ctx.user.id)
+            eq(schema.account.userId, ctx.user.id),
+            eq(schema.account.providerId, row.platform)
           )
         );
 
@@ -290,7 +322,7 @@ export const settingsRouter = createTRPCRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Platform not found" });
       }
       // Removing a connected platform removes its stored OAuth tokens too —
-      // same reasoning as disconnectPlatform.
+      // same reasoning (and same guards) as disconnectPlatform.
       const connectedAccountId = result[0].connectedAccountId;
       if (connectedAccountId) {
         await ctx.db
@@ -298,7 +330,8 @@ export const settingsRouter = createTRPCRouter({
           .where(
             and(
               eq(schema.account.id, connectedAccountId),
-              eq(schema.account.userId, ctx.user.id)
+              eq(schema.account.userId, ctx.user.id),
+              eq(schema.account.providerId, result[0].platform)
             )
           );
       }
