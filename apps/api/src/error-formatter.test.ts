@@ -30,6 +30,15 @@ function badRequestFrom(cause: ZodError): TRPCError {
   return new TRPCError({ code: "BAD_REQUEST", cause });
 }
 
+/**
+ * What tRPC does when a ZodError escapes a *procedure body* rather than input
+ * parsing: the same `cause`, but the code is INTERNAL_SERVER_ERROR. Verified
+ * against the installed tRPC 11.18 in the wire tests at the bottom of this file.
+ */
+function internalErrorFrom(cause: ZodError): TRPCError {
+  return new TRPCError({ code: "INTERNAL_SERVER_ERROR", cause });
+}
+
 // ── humanizeFieldName ──────────────────────────────────────────────────────
 
 describe("humanizeFieldName", () => {
@@ -149,6 +158,31 @@ describe("formatTRPCError", () => {
     expect(formatted.code).toBe(baseShape.code);
   });
 
+  it("leaves an internal ZodError alone — same cause, different phase", () => {
+    // A procedure body parsing an untrusted payload (webhook, platform sync).
+    const webhookSchema = z.object({ secretInternalField: z.string() });
+    const error = internalErrorFrom(zodErrorFor(webhookSchema, { secretInternalField: 42 }));
+    const shape = { ...baseShape, message: "internal server error" };
+
+    const formatted = formatTRPCError({ shape, error });
+
+    // Not reformatted into a friendly, creator-fixable sentence...
+    expect(formatted.message).toBe("internal server error");
+    // ...and our internal field names stay off the wire.
+    expect(formatted.data.zodError).toBeNull();
+  });
+
+  it("still formats a BAD_REQUEST a procedure body raises deliberately", () => {
+    // An explicit "the caller sent this" signal is a validation failure even
+    // though it did not come from the input parser.
+    const error = badRequestFrom(zodErrorFor(profileSchema, { displayName: "Alex" }));
+
+    const formatted = formatTRPCError({ shape: baseShape, error });
+
+    expect(formatted.message).toBe("Avatar URL: Required");
+    expect(formatted.data.zodError).not.toBeNull();
+  });
+
   it("preserves every other key on the default shape", () => {
     const error = badRequestFrom(zodErrorFor(profileSchema, {}));
     const formatted = formatTRPCError({ shape: baseShape, error });
@@ -174,6 +208,12 @@ describe("tRPC root wiring", () => {
       .mutation(({ input }) => input),
     boom: publicProcedure.mutation(() => {
       throw new TRPCError({ code: "FORBIDDEN", message: "No creator workspace" });
+    }),
+    // Stands in for the first webhook / platform-sync handler: the *body*
+    // parses a payload the creator never typed and never sees.
+    parseUntrusted: publicProcedure.mutation(() => {
+      const payloadFromThirdParty = { secretInternalField: 42 };
+      return z.object({ secretInternalField: z.string() }).parse(payloadFromThirdParty);
     }),
   });
 
@@ -211,6 +251,21 @@ describe("tRPC root wiring", () => {
     expect(error!.message).toBe("No creator workspace");
     expect(error!.data.code).toBe("FORBIDDEN");
     expect(error!.data.zodError).toBeNull();
+  });
+
+  /**
+   * The SPO-117 regression. Both phases produce a TRPCError whose `cause` is a
+   * ZodError; only the code tells them apart. Before the fix this call came back
+   * 500 but with `message: "Secret internal field: Expected string, received
+   * number"` and `data.zodError.fieldErrors.secretInternalField` on the wire.
+   */
+  it("does not reformat a ZodError thrown inside a procedure body", async () => {
+    const { status, error } = await call("parseUntrusted", {});
+
+    expect(status).toBe(500);
+    expect(error!.data.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(error!.data.zodError).toBeNull();
+    expect(error!.message).not.toContain("Secret internal field");
   });
 
   it("does not disturb successful calls", async () => {
