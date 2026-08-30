@@ -56,6 +56,16 @@ export const deliverableStatuses = [
 ] as const;
 export type DeliverableStatus = (typeof deliverableStatuses)[number];
 
+export const contractStatuses = ["draft", "sent", "viewed", "signed"] as const;
+export type ContractStatus = (typeof contractStatuses)[number];
+
+export const contractStatusLabels: Record<ContractStatus, string> = {
+  draft: "Draft",
+  sent: "Sent",
+  viewed: "Viewed",
+  signed: "Signed",
+};
+
 export const paymentTerms = ["net_15", "net_30", "net_45"] as const;
 export type PaymentTerms = (typeof paymentTerms)[number];
 
