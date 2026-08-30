@@ -677,8 +677,9 @@ describe("tRPC root wiring", () => {
         cause: new Error('duplicate key value violates unique constraint "subs_uq"'),
       });
     }),
-    // trpc.ts:18's bare guard: no message, no cause. Its wire message is the
-    // code string, and it has to stay that way.
+    // trpc.ts:18's bare guard: no message, no cause. tRPC falls back to the code
+    // string, which a creator would read as "UNAUTHORIZED" in a toast; the
+    // per-code table replaces it with a sentence. The only live copy change here.
     guarded: publicProcedure.mutation(() => {
       throw new TRPCError({ code: "UNAUTHORIZED" });
     }),
