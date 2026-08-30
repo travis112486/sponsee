@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { trpc } from "@/trpc";
 import { cn } from "@/lib/utils";
+import { serverErrorMessage } from "@/lib/trpc-error";
 import { toast } from "sonner";
 import {
   Plus,
@@ -57,6 +58,8 @@ export default function Payments() {
       utils.invoice.list.invalidate();
       toast("Chase email sent");
     },
+    onError: (err) =>
+      toast.error(serverErrorMessage(err, "Failed to send chase email. Please try again.")),
   });
   const editAndSendChase = trpc.chase.editAndSend.useMutation({
     onSuccess: () => {
@@ -64,6 +67,8 @@ export default function Payments() {
       utils.invoice.list.invalidate();
       toast("Chase email sent");
     },
+    onError: (err) =>
+      toast.error(serverErrorMessage(err, "Failed to send chase email. Please try again.")),
   });
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
