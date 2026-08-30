@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./routers/index.js";
 import { createContext } from "./context.js";
+import { logTRPCError } from "./error-formatter.js";
 import { auth } from "./auth.js";
 import waitlistApp from "./routers/waitlist.js";
 import { handleEmailWebhook } from "./routers/webhooks.js";
@@ -51,6 +52,9 @@ app.use(
       req: c.req.raw,
       router: appRouter,
       createContext,
+      // 500 bodies are scrubbed before they leave (see error-formatter.ts), so
+      // this is the only place the real failure is recorded.
+      onError: logTRPCError,
     })
 );
 

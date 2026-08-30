@@ -62,8 +62,41 @@ export function summarizeZodError(flattened: FlattenedZodError): string {
 type ErrorShapeLike = { message: string; data: Record<string, unknown> };
 
 /**
- * tRPC root `errorFormatter`. Applies to every router, so it deliberately does
- * nothing at all unless the error is an *input-validation* failure.
+ * What a creator sees when a procedure fails for a reason they cannot act on.
+ *
+ * A 500 is by definition our bug, not their input. There is nothing in the real
+ * error a creator could use, and plenty in it we do not want to publish.
+ */
+export const INTERNAL_ERROR_MESSAGE = "Something went wrong on our end. Please try again.";
+
+/**
+ * Did a procedure deliberately phrase this message, or did it fall out of
+ * whatever was thrown?
+ *
+ * `new TRPCError({ code, cause })` with no `message` inherits `cause.message`
+ * verbatim — tRPC 11 resolves `opts.message ?? cause?.message ?? opts.code` —
+ * and an uncaught throw is wrapped exactly the same way by
+ * `getTRPCErrorFromUnknown`. So for any 500 we did not word ourselves,
+ * `error.message` is some library's internal text: a ZodError's JSON dump of
+ * every failing field path, a driver's failed query, an SDK's provider detail.
+ * tRPC's default shape then passes it to `shape.message` in every environment.
+ *
+ * Comparing against `cause.message` is the only signal available here, and it
+ * fails closed: an authored message that happens to equal its cause's is
+ * scrubbed, never the reverse. It also needs no cooperation from call sites, so
+ * a procedure that writes a user-facing message keeps it without opting in.
+ */
+function isAuthoredMessage(error: TRPCError): boolean {
+  if (error.cause && error.message === error.cause.message) return false;
+  // Neither a message nor a cause: tRPC falls back to the code string itself.
+  // "INTERNAL_SERVER_ERROR" is not a sentence we chose to show anyone.
+  return error.message !== error.code;
+}
+
+/**
+ * tRPC root `errorFormatter`. Applies to every router, and sorts errors into
+ * three: expand a validation failure, strip an internal one, pass the rest
+ * through.
  *
  * The phase matters as much as the cause. A ZodError raised while parsing the
  * procedure's declared input is a creator's own bad form data: tRPC wraps it as
@@ -71,12 +104,18 @@ type ErrorShapeLike = { message: string; data: Record<string, unknown> };
  * this formatter. A ZodError raised *inside* a procedure body — `.parse()` on a
  * Stripe webhook payload, a platform-sync response — is an internal failure that
  * tRPC surfaces as `INTERNAL_SERVER_ERROR`. Formatting that one would dress a
- * server bug up as user-fixable input and publish our internal field names on
- * `data.zodError`, so those fall through to `shape.message` untouched.
+ * server bug up as user-fixable input and publish our internal field names.
  *
  * (A body that deliberately throws `TRPCError({ code: "BAD_REQUEST", cause:
  * zodError })` still gets formatted. That is an explicit "this is the caller's
  * fault" signal from the procedure, not an escaped internal parse.)
+ *
+ * Internal failures get the opposite treatment: `INTERNAL_SERVER_ERROR` bodies
+ * are stripped down rather than dressed up, because dropping the ZodError from
+ * `data.zodError` alone does not keep it off the wire — the same dump rides out
+ * on `message` and `data.stack`. Only a message the procedure *authored* is
+ * published; everything else becomes `INTERNAL_ERROR_MESSAGE`, and the real
+ * error goes to the server log via `logTRPCError`.
  */
 export function formatTRPCError<TShape extends ErrorShapeLike>({
   shape,
@@ -92,12 +131,46 @@ export function formatTRPCError<TShape extends ErrorShapeLike>({
     ? ((error.cause as ZodError).flatten() as FlattenedZodError)
     : null;
 
+  if (zodError) {
+    return {
+      ...shape,
+      message: summarizeZodError(zodError),
+      data: { ...shape.data, zodError },
+    };
+  }
+
+  if (error.code === "INTERNAL_SERVER_ERROR") {
+    // tRPC withholds `data.stack` only when NODE_ENV is exactly "production",
+    // so on staging — and anywhere else NODE_ENV is not that string — it ships
+    // the same text `message` was just scrubbed of, plus our file paths. If the
+    // message is not fit to publish, neither is the trace it came from.
+    const { stack: _stack, ...data } = shape.data;
+
+    return {
+      ...shape,
+      message: isAuthoredMessage(error) ? shape.message : INTERNAL_ERROR_MESSAGE,
+      data: { ...data, zodError: null },
+    };
+  }
+
   return {
     ...shape,
-    message: zodError ? summarizeZodError(zodError) : shape.message,
-    data: {
-      ...shape.data,
-      zodError,
-    },
+    data: { ...shape.data, zodError: null },
   };
+}
+
+/**
+ * tRPC `onError` handler, wired at the fetch adapter in app.ts.
+ *
+ * This is the other half of scrubbing the 500 body: the real message, cause and
+ * trace have to land somewhere, and now that is here rather than the client's
+ * network tab. Deliberately silent for every other code — a creator mistyping a
+ * URL or hitting an auth guard is not an incident, and logging those would bury
+ * the ones that are.
+ */
+export function logTRPCError({ error, path }: { error: TRPCError; path?: string }): void {
+  if (error.code !== "INTERNAL_SERVER_ERROR") return;
+
+  console.error(`[trpc] ${path ?? "<no path>"} failed:`, error.message);
+  if (error.cause) console.error("[trpc] cause:", error.cause);
 }

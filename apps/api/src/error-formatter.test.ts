@@ -1,11 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { z, ZodError } from "zod";
 import { TRPCError } from "@trpc/server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import superjson from "superjson";
 import {
+  INTERNAL_ERROR_MESSAGE,
   formatTRPCError,
   humanizeFieldName,
+  logTRPCError,
   summarizeZodError,
   type FlattenedZodError,
 } from "./error-formatter.js";
@@ -37,6 +39,25 @@ function badRequestFrom(cause: ZodError): TRPCError {
  */
 function internalErrorFrom(cause: ZodError): TRPCError {
   return new TRPCError({ code: "INTERNAL_SERVER_ERROR", cause });
+}
+
+/**
+ * The shape tRPC's own `getErrorShape` hands the formatter, built from the error
+ * rather than invented by the test. `message` is `error.message` *verbatim* —
+ * that identity is the whole subject of these tests, so a fixture that sets its
+ * own message would assert against a body no client ever receives.
+ */
+function shapeFor(error: TRPCError, data: Record<string, unknown> = {}) {
+  return {
+    message: error.message,
+    code: -32603,
+    data: {
+      code: error.code,
+      httpStatus: 500,
+      path: "platforms.sync",
+      ...data,
+    },
+  };
 }
 
 // ── humanizeFieldName ──────────────────────────────────────────────────────
@@ -158,18 +179,81 @@ describe("formatTRPCError", () => {
     expect(formatted.code).toBe(baseShape.code);
   });
 
-  it("leaves an internal ZodError alone — same cause, different phase", () => {
+  it("never dresses an internal ZodError up as creator-fixable input", () => {
     // A procedure body parsing an untrusted payload (webhook, platform sync).
-    const webhookSchema = z.object({ secretInternalField: z.string() });
-    const error = internalErrorFrom(zodErrorFor(webhookSchema, { secretInternalField: 42 }));
-    const shape = { ...baseShape, message: "internal server error" };
+    const webhookSchema = z.object({ secretInternalField: z.string(), apiToken: z.string() });
+    const error = internalErrorFrom(
+      zodErrorFor(webhookSchema, { secretInternalField: 42, apiToken: 7 })
+    );
+
+    const formatted = formatTRPCError({ shape: shapeFor(error), error });
+
+    expect(formatted.data.zodError).toBeNull();
+    // Assert the *raw* path names carried by the ZodError's JSON dump, not the
+    // humanized labels the formatter would have produced. SPO-117's assertion
+    // checked "Secret internal field" and passed while the dump — containing
+    // `secretInternalField` — was still going out on `message`.
+    expect(formatted.message).not.toContain("secretInternalField");
+    expect(formatted.message).not.toContain("apiToken");
+    expect(formatted.message).not.toContain("invalid_type");
+    expect(formatted.message).toBe(INTERNAL_ERROR_MESSAGE);
+  });
+
+  it("scrubs a 500 message inherited from any cause, not just a Zod one", () => {
+    // `TRPCError({ code, cause })` with no message inherits `cause.message`, so
+    // whatever a driver or SDK put in there becomes the wire message.
+    const error = new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      cause: new Error('column "stripe_customer_id" does not exist'),
+    });
+
+    const formatted = formatTRPCError({ shape: shapeFor(error), error });
+
+    expect(formatted.message).not.toContain("stripe_customer_id");
+    expect(formatted.message).toBe(INTERNAL_ERROR_MESSAGE);
+  });
+
+  it("preserves a 500 message the procedure authored, cause and all", () => {
+    // chase.ts's enqueue failure: a deliberate, creator-actionable sentence on a
+    // 500 with an internal cause attached. This is the blast-radius guard.
+    const error = new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Failed to queue chase email. Please retry.",
+      cause: new Error("connect ECONNREFUSED 10.0.0.5:6379"),
+    });
+
+    const formatted = formatTRPCError({ shape: shapeFor(error), error });
+
+    expect(formatted.message).toBe("Failed to queue chase email. Please retry.");
+    expect(formatted.message).not.toContain("ECONNREFUSED");
+  });
+
+  it("does not pass tRPC's bare code fallback off as a message", () => {
+    // No message and no cause: tRPC falls back to the code string itself.
+    const error = new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+    const formatted = formatTRPCError({ shape: shapeFor(error), error });
+
+    expect(formatted.message).toBe(INTERNAL_ERROR_MESSAGE);
+  });
+
+  it("drops the dev-only stack from a 500", () => {
+    // tRPC only withholds `data.stack` when NODE_ENV is exactly "production",
+    // and the stack of an escaped ZodError *is* the issue dump again.
+    const error = internalErrorFrom(zodErrorFor(z.object({ apiToken: z.string() }), {}));
+
+    const formatted = formatTRPCError({ shape: shapeFor(error, { stack: error.stack }), error });
+
+    expect(formatted.data.stack).toBeUndefined();
+  });
+
+  it("leaves the dev-only stack alone on a validation failure", () => {
+    const error = badRequestFrom(zodErrorFor(profileSchema, {}));
+    const shape = { ...baseShape, data: { ...baseShape.data, stack: "Error: at handler" } };
 
     const formatted = formatTRPCError({ shape, error });
 
-    // Not reformatted into a friendly, creator-fixable sentence...
-    expect(formatted.message).toBe("internal server error");
-    // ...and our internal field names stay off the wire.
-    expect(formatted.data.zodError).toBeNull();
+    expect(formatted.data.stack).toBe("Error: at handler");
   });
 
   it("still formats a BAD_REQUEST a procedure body raises deliberately", () => {
@@ -193,6 +277,49 @@ describe("formatTRPCError", () => {
   });
 });
 
+// ── logTRPCError ───────────────────────────────────────────────────────────
+
+describe("logTRPCError", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("logs the message the wire no longer carries", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cause = new Error('column "stripe_customer_id" does not exist');
+    const error = new TRPCError({ code: "INTERNAL_SERVER_ERROR", cause });
+
+    logTRPCError({ error, path: "billing.createCheckoutSession" });
+
+    const logged = spy.mock.calls.flat().join(" ");
+    expect(logged).toContain("billing.createCheckoutSession");
+    expect(logged).toContain("stripe_customer_id");
+  });
+
+  it("keeps the cause, which never reaches the shape at all", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cause = new Error("redis://internal-queue:6379 unreachable");
+    const error = new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Failed to queue chase email. Please retry.",
+      cause,
+    });
+
+    logTRPCError({ error, path: "chase.approve" });
+
+    expect(spy.mock.calls.flat()).toContain(cause);
+  });
+
+  it("stays quiet for errors that are not incidents", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    logTRPCError({ error: new TRPCError({ code: "UNAUTHORIZED" }), path: "deals.list" });
+    logTRPCError({ error: badRequestFrom(zodErrorFor(z.string(), 1)), path: "deals.create" });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
 // ── Wired into the real root ───────────────────────────────────────────────
 
 /**
@@ -212,12 +339,28 @@ describe("tRPC root wiring", () => {
     // Stands in for the first webhook / platform-sync handler: the *body*
     // parses a payload the creator never typed and never sees.
     parseUntrusted: publicProcedure.mutation(() => {
-      const payloadFromThirdParty = { secretInternalField: 42 };
-      return z.object({ secretInternalField: z.string() }).parse(payloadFromThirdParty);
+      const payloadFromThirdParty = { secretInternalField: 42, apiToken: 7 };
+      return z
+        .object({ secretInternalField: z.string(), apiToken: z.string() })
+        .parse(payloadFromThirdParty);
+    }),
+    // A plain throw escaping a body — the ordinary 500. tRPC wraps it via
+    // `getTRPCErrorFromUnknown`, which inherits the message the same way.
+    explodes: publicProcedure.mutation(() => {
+      throw new Error("connect ECONNREFUSED 10.0.0.5:5432");
+    }),
+    // A 500 we phrased ourselves, with an internal cause attached — the
+    // chase.ts:296 shape. The sentence must survive; the cause must not.
+    authoredFailure: publicProcedure.mutation(() => {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Failed to queue chase email. Please retry.",
+        cause: new Error("redis://internal-queue:6379 unreachable"),
+      });
     }),
   });
 
-  async function call(path: string, input: unknown) {
+  async function call(path: string, input: unknown, onError?: (opts: any) => void) {
     const res = await fetchRequestHandler({
       endpoint: "/api/trpc",
       req: new Request(`http://localhost/api/trpc/${path}`, {
@@ -227,13 +370,17 @@ describe("tRPC root wiring", () => {
       }),
       router,
       createContext: () => ({ session: null, creatorId: null, db: {} as never }),
+      onError,
     });
-    const body = (await res.json()) as {
+    // Keep the untouched bytes: `message` was not the only key leaking the dump,
+    // so the assertions below search the whole body rather than one field.
+    const raw = await res.text();
+    const body = JSON.parse(raw) as {
       error?: { json?: Record<string, any> } & Record<string, any>;
     };
     // superjson wraps the payload under `json`; unwrap if present.
     const error = body.error ? body.error.json ?? body.error : undefined;
-    return { status: res.status, error };
+    return { status: res.status, error, raw };
   }
 
   it("returns a readable message and structured zodError over the wire", async () => {
@@ -254,18 +401,56 @@ describe("tRPC root wiring", () => {
   });
 
   /**
-   * The SPO-117 regression. Both phases produce a TRPCError whose `cause` is a
-   * ZodError; only the code tells them apart. Before the fix this call came back
-   * 500 but with `message: "Secret internal field: Expected string, received
-   * number"` and `data.zodError.fieldErrors.secretInternalField` on the wire.
+   * The SPO-117 regression, re-cut against the raw body. SPO-117 stopped the
+   * dump reaching `data.zodError`, but `new TRPCError({ code, cause })` inherits
+   * `cause.message`, and a ZodError's message *is* the JSON dump of every issue
+   * with its field path — so it kept going out on `message`, and on `data.stack`
+   * in every environment where NODE_ENV is not exactly "production".
    */
-  it("does not reformat a ZodError thrown inside a procedure body", async () => {
-    const { status, error } = await call("parseUntrusted", {});
+  it("publishes no part of an internal ZodError anywhere in the body", async () => {
+    const { status, error, raw } = await call("parseUntrusted", {});
 
     expect(status).toBe(500);
     expect(error!.data.code).toBe("INTERNAL_SERVER_ERROR");
     expect(error!.data.zodError).toBeNull();
-    expect(error!.message).not.toContain("Secret internal field");
+    expect(raw).not.toContain("secretInternalField");
+    expect(raw).not.toContain("apiToken");
+    expect(raw).not.toContain("invalid_type");
+    expect(error!.message).toBe(INTERNAL_ERROR_MESSAGE);
+    // The dev-only stack is the same dump a second time. tRPC keeps it whenever
+    // NODE_ENV is not exactly "production" — including under vitest, right now.
+    expect(error!.data.stack).toBeUndefined();
+  });
+
+  it("publishes nothing about an ordinary uncaught throw", async () => {
+    const { status, error, raw } = await call("explodes", {});
+
+    expect(status).toBe(500);
+    expect(error!.data.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(raw).not.toContain("ECONNREFUSED");
+    expect(raw).not.toContain("10.0.0.5");
+    expect(error!.message).toBe(INTERNAL_ERROR_MESSAGE);
+  });
+
+  it("hands the scrubbed detail to onError instead of the client", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { raw } = await call("explodes", {}, logTRPCError);
+
+    // Gone from the response, present in the log: the exchange this fix makes.
+    expect(raw).not.toContain("ECONNREFUSED");
+    expect(spy.mock.calls.flat().join(" ")).toContain("ECONNREFUSED 10.0.0.5:5432");
+    expect(spy.mock.calls.flat().join(" ")).toContain("explodes");
+
+    spy.mockRestore();
+  });
+
+  it("still sends a 500 message the procedure authored", async () => {
+    const { status, error, raw } = await call("authoredFailure", {});
+
+    expect(status).toBe(500);
+    expect(error!.message).toBe("Failed to queue chase email. Please retry.");
+    expect(raw).not.toContain("internal-queue");
   });
 
   it("does not disturb successful calls", async () => {
