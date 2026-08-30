@@ -7,7 +7,19 @@ import PlatformsPanel from "./PlatformsPanel";
 const mockInvalidate = vi.fn();
 const mockRefetch = vi.fn();
 let mockQueryReturn: {
-  data?: Array<{ id: string; platform: string; ccv: number | null; followers: number | null; scheduleLabel: string | null }>;
+  data?: Array<{
+    id: string;
+    platform: string;
+    ccv: number | null;
+    followers: number | null;
+    scheduleLabel: string | null;
+    handle?: string | null;
+    avatarUrl?: string | null;
+    subscriberCount?: number | null;
+    subscriberCountIsEstimate?: boolean;
+    lastSyncedAt?: string | null;
+    syncStatus?: string;
+  }>;
   isLoading: boolean;
   isError: boolean;
   refetch: typeof mockRefetch;
@@ -15,6 +27,7 @@ let mockQueryReturn: {
 
 const mockUpsertReturn = { mutate: vi.fn(), isPending: false };
 let mockDeleteReturn = { mutate: vi.fn(), isPending: false };
+const mockSyncReturn = { mutate: vi.fn(), isPending: false };
 
 vi.mock("@/trpc", () => ({
   trpc: {
@@ -34,6 +47,9 @@ vi.mock("@/trpc", () => ({
       },
       deletePlatform: {
         useMutation: () => mockDeleteReturn,
+      },
+      syncPlatform: {
+        useMutation: () => mockSyncReturn,
       },
     },
   },
@@ -137,5 +153,47 @@ describe("PlatformsPanel", () => {
 
     fireEvent.click(removeBtn);
     expect(mockDeleteReturn.mutate).toHaveBeenCalledWith({ id: "p1" });
+  });
+
+  it("shows synced stats and a Sync now button for rows with a handle", () => {
+    setQueryState({
+      isLoading: false,
+      isError: false,
+      data: [
+        {
+          id: "p1",
+          platform: "youtube",
+          ccv: null,
+          followers: null,
+          scheduleLabel: null,
+          handle: "somecreator",
+          avatarUrl: "https://yt.example/avatar.jpg",
+          subscriberCount: 12300,
+          subscriberCountIsEstimate: true,
+          lastSyncedAt: "2026-08-29T06:30:00Z",
+          syncStatus: "ok",
+        },
+      ],
+    });
+    render(<PlatformsPanel />);
+    expect(screen.getByText("@somecreator")).toBeInTheDocument();
+    expect(screen.getByText("Subs: ~12,300")).toBeInTheDocument();
+    expect(screen.getByText(/Last synced/)).toBeInTheDocument();
+
+    const syncBtn = screen.getByRole("button", { name: /Sync now/ });
+    fireEvent.click(syncBtn);
+    expect(mockSyncReturn.mutate).toHaveBeenCalledWith({ id: "p1" });
+  });
+
+  it("hides the Sync now button when no handle is set", () => {
+    setQueryState({
+      isLoading: false,
+      isError: false,
+      data: [
+        { id: "p2", platform: "tiktok", ccv: 800, followers: null, scheduleLabel: null, handle: null },
+      ],
+    });
+    render(<PlatformsPanel />);
+    expect(screen.queryByRole("button", { name: /Sync now/ })).not.toBeInTheDocument();
   });
 });

@@ -57,7 +57,9 @@ export const activityKindEnum = pgEnum("activity_kind", [
   "stage_change",
   "chase_sent",
   "note",
+  "platform_sync",
 ]);
+export const platformSyncStatusEnum = pgEnum("platform_sync_status", ["never", "ok", "error"]);
 export const planTierEnum = pgEnum("plan_tier", ["starter", "creator", "pro"]);
 export const proofKindEnum = pgEnum("proof_kind", ["vod", "clip", "chat", "overlay", "link", "file"]);
 export const contractStatusEnum = pgEnum("contract_status", ["draft", "sent", "viewed", "signed"]);
@@ -137,6 +139,15 @@ export const creatorPlatforms = pgTable(
     followers: integer("followers"),
     scheduleLabel: varchar("schedule_label", { length: 255 }),
     connectedAccountId: text("connected_account_id"),
+    // Platform stats sync (no-OAuth v1): handle entered by creator, rest filled by daily job
+    handle: varchar("handle", { length: 255 }),
+    channelUrl: text("channel_url"),
+    avatarUrl: text("avatar_url"),
+    subscriberCount: integer("subscriber_count"),
+    subscriberCountIsEstimate: boolean("subscriber_count_is_estimate").notNull().default(false),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    syncStatus: platformSyncStatusEnum("sync_status").notNull().default("never"),
+    syncError: text("sync_error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

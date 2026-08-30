@@ -4,6 +4,7 @@ import { eq, and } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import * as schema from "@sponsee/db/schema";
 import { platforms } from "@sponsee/shared";
+import { syncPlatformRow } from "../jobs/platform-sync.js";
 
 /**
  * Creator-supplied URL that we store and may later render as an `href`/`src`.
@@ -73,14 +74,18 @@ export const settingsRouter = createTRPCRouter({
         ccv: z.number().int().min(0).optional().nullable(),
         followers: z.number().int().min(0).optional().nullable(),
         scheduleLabel: z.string().max(255).optional().nullable(),
+        handle: z.string().trim().max(255).optional().nullable(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      // A new handle means prior sync state no longer applies
+      const syncReset =
+        "handle" in input ? ({ syncStatus: "never", syncError: null } as const) : {};
       if (id) {
         const [platform] = await ctx.db
           .update(schema.creatorPlatforms)
-          .set({ ...data, updatedAt: new Date() })
+          .set({ ...data, ...syncReset, updatedAt: new Date() })
           .where(
             and(
               eq(schema.creatorPlatforms.id, id),
@@ -105,11 +110,35 @@ export const settingsRouter = createTRPCRouter({
             ccv: data.ccv ?? undefined,
             followers: data.followers ?? undefined,
             scheduleLabel: data.scheduleLabel ?? undefined,
+            handle: data.handle ?? undefined,
+            ...syncReset,
             updatedAt: new Date(),
           },
         })
         .returning();
       return platform;
+    }),
+
+  syncPlatform: creatorScopedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [row] = await ctx.db
+        .select()
+        .from(schema.creatorPlatforms)
+        .where(
+          and(
+            eq(schema.creatorPlatforms.id, input.id),
+            eq(schema.creatorPlatforms.creatorId, ctx.creatorId)
+          )
+        );
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Platform not found" });
+      }
+      if (!row.handle) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Add a channel handle first" });
+      }
+      // Records ok/error on the row rather than throwing on API failures
+      return syncPlatformRow(row);
     }),
 
   deletePlatform: creatorScopedProcedure
