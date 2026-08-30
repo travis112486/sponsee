@@ -45,6 +45,10 @@ CREATE TABLE "user" (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Redundant with the UNIQUE constraint above, but the real schema (SPO-150
+-- parity test) declares this as a separate uniqueIndex()-free index() too.
+CREATE INDEX user_email_idx ON "user"(email);
+
 CREATE TABLE session (
   id TEXT PRIMARY KEY NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
@@ -375,4 +379,7 @@ CREATE TABLE waitlist_signups (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX waitlist_signups_source_idx ON waitlist_signups(source);
+CREATE INDEX waitlist_signups_confirmed_idx ON waitlist_signups(confirmed);
 `;
