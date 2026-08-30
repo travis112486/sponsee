@@ -70,26 +70,52 @@ type ErrorShapeLike = { message: string; data: Record<string, unknown> };
 export const INTERNAL_ERROR_MESSAGE = "Something went wrong on our end. Please try again.";
 
 /**
- * Did a procedure deliberately phrase this message, or did it fall out of
- * whatever was thrown?
+ * Is this message the thrown value's own text, handed to the client verbatim?
  *
- * `new TRPCError({ code, cause })` with no `message` inherits `cause.message`
- * verbatim — tRPC 11 resolves `opts.message ?? cause?.message ?? opts.code` —
- * and an uncaught throw is wrapped exactly the same way by
- * `getTRPCErrorFromUnknown`. So for any 500 we did not word ourselves,
- * `error.message` is some library's internal text: a ZodError's JSON dump of
- * every failing field path, a driver's failed query, an SDK's provider detail.
- * tRPC's default shape then passes it to `shape.message` in every environment.
+ * `new TRPCError({ code, cause })` with no `message` inherits `cause.message` —
+ * tRPC 11 resolves `opts.message ?? cause?.message ?? opts.code` — and an
+ * uncaught throw is wrapped exactly the same way by `getTRPCErrorFromUnknown`.
+ * So whenever this returns true, `error.message` is some library's internal
+ * text: a ZodError's JSON dump of every failing field path, a driver's failed
+ * query naming a constraint and column, an SDK's provider detail. tRPC's
+ * default shape then passes it to `shape.message` in every environment.
+ *
+ * Nothing about that depends on the code. `TRPCError({ code: "CONFLICT", cause:
+ * pgUniqueViolation })` publishes the driver's sentence exactly as a 500 would,
+ * which is why this test is applied to every code rather than to 500s alone.
  *
  * Comparing against `cause.message` is the only signal available here, and it
  * fails closed: an authored message that happens to equal its cause's is
  * scrubbed, never the reverse. It also needs no cooperation from call sites, so
- * a procedure that writes a user-facing message keeps it without opting in.
+ * a procedure that words its own message keeps it without opting in.
+ */
+function isInheritedFromCause(error: TRPCError): boolean {
+  return Boolean(error.cause) && error.message === error.cause!.message;
+}
+
+/**
+ * A failure to parse the procedure's declared input — the creator's own form
+ * data, which {@link summarizeZodError} rewrites into a readable sentence.
+ *
+ * Its message is inherited from the ZodError like any other, but it is the one
+ * inherited message we publish (in expanded form) rather than scrub.
+ */
+function isInputValidationFailure(error: TRPCError): boolean {
+  return error.code === "BAD_REQUEST" && error.cause instanceof ZodError;
+}
+
+/**
+ * Did a procedure deliberately phrase this message, or did it fall out of
+ * whatever was thrown?
+ *
+ * Stricter than {@link isInheritedFromCause} by one case: no message and no
+ * cause at all, where tRPC falls back to the code string itself. On a 500 that
+ * fallback reads "INTERNAL_SERVER_ERROR", which is not a sentence we chose to
+ * show anyone. On the other codes it is the load-bearing default for the bare
+ * guards (`TRPCError({ code: "UNAUTHORIZED" })`), so only 500s use this test.
  */
 function isAuthoredMessage(error: TRPCError): boolean {
-  if (error.cause && error.message === error.cause.message) return false;
-  // Neither a message nor a cause: tRPC falls back to the code string itself.
-  // "INTERNAL_SERVER_ERROR" is not a sentence we chose to show anyone.
+  if (isInheritedFromCause(error)) return false;
   return error.message !== error.code;
 }
 
@@ -116,6 +142,12 @@ function isAuthoredMessage(error: TRPCError): boolean {
  * on `message` and `data.stack`. Only a message the procedure *authored* is
  * published; everything else becomes `INTERNAL_ERROR_MESSAGE`, and the real
  * error goes to the server log via `logTRPCError`.
+ *
+ * The pass-through branch is not a free pass either. A message inherited from a
+ * `cause` is a library's text whatever code carries it, so the same scrub runs
+ * on every code. The difference is only in what counts as inherited: a 500 also
+ * loses tRPC's bare code fallback, while the other codes keep theirs — an
+ * unauthenticated request answers "UNAUTHORIZED", not a sentence blaming us.
  */
 export function formatTRPCError<TShape extends ErrorShapeLike>({
   shape,
@@ -124,10 +156,7 @@ export function formatTRPCError<TShape extends ErrorShapeLike>({
   shape: TShape;
   error: TRPCError;
 }) {
-  const isInputValidationFailure =
-    error.code === "BAD_REQUEST" && error.cause instanceof ZodError;
-
-  const zodError: FlattenedZodError | null = isInputValidationFailure
+  const zodError: FlattenedZodError | null = isInputValidationFailure(error)
     ? ((error.cause as ZodError).flatten() as FlattenedZodError)
     : null;
 
@@ -139,37 +168,40 @@ export function formatTRPCError<TShape extends ErrorShapeLike>({
     };
   }
 
-  if (error.code === "INTERNAL_SERVER_ERROR") {
-    // tRPC withholds `data.stack` only when NODE_ENV is exactly "production",
-    // so on staging — and anywhere else NODE_ENV is not that string — it ships
-    // the same text `message` was just scrubbed of, plus our file paths. If the
-    // message is not fit to publish, neither is the trace it came from.
-    const { stack: _stack, ...data } = shape.data;
+  const isInternal = error.code === "INTERNAL_SERVER_ERROR";
+  const publishMessage = isInternal ? isAuthoredMessage(error) : !isInheritedFromCause(error);
 
-    return {
-      ...shape,
-      message: isAuthoredMessage(error) ? shape.message : INTERNAL_ERROR_MESSAGE,
-      data: { ...data, zodError: null },
-    };
-  }
+  // tRPC withholds `data.stack` only when NODE_ENV is exactly "production", so
+  // on staging — and anywhere else NODE_ENV is not that string — it ships the
+  // same text `message` was just scrubbed of (a V8 stack opens with `${name}:
+  // ${message}`), plus our file paths. If the message is not fit to publish,
+  // neither is the trace it came from; and a 500's trace never is.
+  const dropStack = isInternal || !publishMessage;
+  const { stack: _stack, ...dataWithoutStack } = shape.data;
 
   return {
     ...shape,
-    data: { ...shape.data, zodError: null },
+    message: publishMessage ? shape.message : INTERNAL_ERROR_MESSAGE,
+    data: { ...(dropStack ? dataWithoutStack : shape.data), zodError: null },
   };
 }
 
 /**
  * tRPC `onError` handler, wired at the fetch adapter in app.ts.
  *
- * This is the other half of scrubbing the 500 body: the real message, cause and
+ * This is the other half of scrubbing the body: the real message, cause and
  * trace have to land somewhere, and now that is here rather than the client's
- * network tab. Deliberately silent for every other code — a creator mistyping a
- * URL or hitting an auth guard is not an incident, and logging those would bury
- * the ones that are.
+ * network tab. So it logs exactly what the formatter withholds — every 500, plus
+ * any other code whose message was inherited from a cause, which is the one
+ * non-500 case that gets scrubbed and would otherwise vanish entirely.
+ *
+ * Silent for the rest — a creator mistyping a URL or hitting an auth guard is
+ * not an incident, and logging those would bury the ones that are.
  */
 export function logTRPCError({ error, path }: { error: TRPCError; path?: string }): void {
-  if (error.code !== "INTERNAL_SERVER_ERROR") return;
+  if (error.code !== "INTERNAL_SERVER_ERROR") {
+    if (!isInheritedFromCause(error) || isInputValidationFailure(error)) return;
+  }
 
   console.error(`[trpc] ${path ?? "<no path>"} failed:`, error.message);
   if (error.cause) console.error("[trpc] cause:", error.cause);
