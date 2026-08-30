@@ -37,6 +37,55 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
+  test:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      # apps/* import @sponsee/db and @sponsee/shared through their `dist`
+      # entrypoints and dist/ is gitignored, so without this the suite dies on
+      # "Cannot find package '@sponsee/db'". Only the libraries are built — the
+      # web bundle is the `build` job's business.
+      - run: pnpm --filter "./packages/*" build
+      # Two SPO-68 acceptance tests in chase-integration.test.ts deliberately
+      # refuse to skip when Mailpit is missing — they assert against a real
+      # inbox, and a silent skip would let CI go green without ever exercising
+      # the chase send path. They need Mailpit two different ways: one spawns
+      # its own instance on free ports (so the binary must be on PATH), the
+      # other talks to the conventional dev instance on 1025/8025 (so one must
+      # already be running).
+      - name: Install and start Mailpit
+        env:
+          MAILPIT_VERSION: v1.31.0
+        run: |
+          curl -fsSL "https://github.com/axllent/mailpit/releases/download/${MAILPIT_VERSION}/mailpit-linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin mailpit
+          mailpit version
+          nohup mailpit -d "$RUNNER_TEMP/mailpit-ci.db" -q >"$RUNNER_TEMP/mailpit.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:8025/api/v1/messages >/dev/null; then
+              echo "Mailpit ready on :8025"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Mailpit did not become ready on :8025 within 30s" >&2
+          cat "$RUNNER_TEMP/mailpit.log" >&2
+          exit 1
+      # Deliberately no DATABASE_URL: packages/db falls back to in-memory PGlite
+      # when it is unset, and that is what the integration tests are written
+      # against. Pointing them at a real Postgres would silently change what
+      # they exercise.
+      - run: pnpm test
+
   db-check:
     runs-on: ubuntu-latest
     needs: lint-and-typecheck
