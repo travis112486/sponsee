@@ -769,6 +769,27 @@ describe("deliverable router tenant isolation", () => {
       expect(rows).toHaveLength(1);
     });
   });
+
+  describe("soft-deleted deal", () => {
+    it("cannot be listed or written through", async () => {
+      await db
+        .update(schema.deals)
+        .set({ deletedAt: new Date() })
+        .where(eq(schema.deals.id, dealAId));
+      const caller = deliverableRouter.createCaller(mockCtx(creatorAId));
+
+      await expect(caller.listByDeal({ dealId: dealAId })).rejects.toSatisfy(
+        (err: TRPCError) => err.code === "NOT_FOUND"
+      );
+      await expect(caller.create({ dealId: dealAId, title: "Nope" })).rejects.toThrowError();
+      await expect(caller.update({ id: deliverableAId, title: "Nope" })).rejects.toSatisfy(
+        (err: TRPCError) => err.code === "NOT_FOUND"
+      );
+      await expect(caller.delete({ id: deliverableAId })).rejects.toSatisfy(
+        (err: TRPCError) => err.code === "NOT_FOUND"
+      );
+    });
+  });
 });
 
 // ── Proof router ─────────────────────────────────────────────────────────────
@@ -901,6 +922,26 @@ describe("proof router tenant isolation", () => {
 
       const rows = await db.select().from(schema.proofs).where(eq(schema.proofs.id, proofBId));
       expect(rows).toHaveLength(1);
+    });
+  });
+
+  describe("soft-deleted deal", () => {
+    it("cannot be listed or written through", async () => {
+      await db
+        .update(schema.deals)
+        .set({ deletedAt: new Date() })
+        .where(eq(schema.deals.id, dealAId));
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+
+      await expect(caller.listByDeal({ dealId: dealAId })).rejects.toSatisfy(
+        (err: TRPCError) => err.code === "NOT_FOUND"
+      );
+      await expect(
+        caller.create({ dealId: dealAId, kind: "clip", url: "https://example.com/x" })
+      ).rejects.toSatisfy((err: TRPCError) => err.code === "NOT_FOUND");
+      await expect(caller.delete({ id: proofAId })).rejects.toSatisfy(
+        (err: TRPCError) => err.code === "NOT_FOUND"
+      );
     });
   });
 });

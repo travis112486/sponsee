@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, isNull } from "drizzle-orm";
 import { proofs, deliverables, deals, activityEvents } from "@sponsee/db/schema";
 import { proofKinds } from "@sponsee/shared";
 import { httpUrl } from "./validators.js";
@@ -13,7 +13,13 @@ export const proofRouter = createTRPCRouter({
       const [deal] = await ctx.db
         .select({ id: deals.id })
         .from(deals)
-        .where(and(eq(deals.id, input.dealId), eq(deals.creatorId, ctx.creatorId)));
+        .where(
+          and(
+            eq(deals.id, input.dealId),
+            eq(deals.creatorId, ctx.creatorId),
+            isNull(deals.deletedAt)
+          )
+        );
 
       if (!deal) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
@@ -44,7 +50,13 @@ export const proofRouter = createTRPCRouter({
       const [deal] = await ctx.db
         .select({ id: deals.id })
         .from(deals)
-        .where(and(eq(deals.id, input.dealId), eq(deals.creatorId, ctx.creatorId)));
+        .where(
+          and(
+            eq(deals.id, input.dealId),
+            eq(deals.creatorId, ctx.creatorId),
+            isNull(deals.deletedAt)
+          )
+        );
 
       if (!deal) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
@@ -97,7 +109,13 @@ export const proofRouter = createTRPCRouter({
         .select({ id: proofs.id, kind: proofs.kind, dealId: proofs.dealId, deliverableId: proofs.deliverableId })
         .from(proofs)
         .innerJoin(deals, eq(proofs.dealId, deals.id))
-        .where(and(eq(proofs.id, input.id), eq(deals.creatorId, ctx.creatorId)));
+        .where(
+          and(
+            eq(proofs.id, input.id),
+            eq(deals.creatorId, ctx.creatorId),
+            isNull(deals.deletedAt)
+          )
+        );
 
       if (!owned) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Proof not found" });

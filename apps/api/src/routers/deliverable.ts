@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { deliverables, deals } from "@sponsee/db/schema";
 
 export const deliverableRouter = createTRPCRouter({
@@ -11,7 +11,13 @@ export const deliverableRouter = createTRPCRouter({
       const [deal] = await ctx.db
         .select()
         .from(deals)
-        .where(and(eq(deals.id, input.dealId), eq(deals.creatorId, ctx.creatorId)));
+        .where(
+          and(
+            eq(deals.id, input.dealId),
+            eq(deals.creatorId, ctx.creatorId),
+            isNull(deals.deletedAt)
+          )
+        );
 
       if (!deal) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
@@ -39,7 +45,13 @@ export const deliverableRouter = createTRPCRouter({
       const [deal] = await ctx.db
         .select()
         .from(deals)
-        .where(and(eq(deals.id, input.dealId), eq(deals.creatorId, ctx.creatorId)));
+        .where(
+          and(
+            eq(deals.id, input.dealId),
+            eq(deals.creatorId, ctx.creatorId),
+            isNull(deals.deletedAt)
+          )
+        );
       if (!deal) throw new Error("Deal not found");
 
       const [del] = await ctx.db.insert(deliverables).values(input).returning();
@@ -65,7 +77,13 @@ export const deliverableRouter = createTRPCRouter({
         .select({ id: deliverables.id })
         .from(deliverables)
         .innerJoin(deals, eq(deliverables.dealId, deals.id))
-        .where(and(eq(deliverables.id, id), eq(deals.creatorId, ctx.creatorId)));
+        .where(
+          and(
+            eq(deliverables.id, id),
+            eq(deals.creatorId, ctx.creatorId),
+            isNull(deals.deletedAt)
+          )
+        );
 
       if (!owned.length) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Deliverable not found" });
@@ -87,7 +105,13 @@ export const deliverableRouter = createTRPCRouter({
         .select({ id: deliverables.id })
         .from(deliverables)
         .innerJoin(deals, eq(deliverables.dealId, deals.id))
-        .where(and(eq(deliverables.id, input.id), eq(deals.creatorId, ctx.creatorId)));
+        .where(
+          and(
+            eq(deliverables.id, input.id),
+            eq(deals.creatorId, ctx.creatorId),
+            isNull(deals.deletedAt)
+          )
+        );
 
       if (!owned.length) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Deliverable not found" });

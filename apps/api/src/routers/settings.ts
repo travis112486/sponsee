@@ -4,25 +4,7 @@ import { eq, and } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import * as schema from "@sponsee/db/schema";
 import { platforms } from "@sponsee/shared";
-
-/**
- * Creator-supplied URL that we store and may later render as an `href`/`src`.
- *
- * Zod's `.url()` accepts any scheme, including `javascript:` and `data:`.
- * Nothing renders these fields today, so this is hardening rather than a live
- * XSS fix — but the allowlist has to be in place before a public profile page
- * ever links them, not after.
- */
-const httpsUrl = z
-  .string()
-  .url()
-  .refine((value) => {
-    try {
-      return new URL(value).protocol === "https:";
-    } catch {
-      return false;
-    }
-  }, "Must be an https:// URL");
+import { httpsUrl } from "./validators.js";
 
 export const settingsRouter = createTRPCRouter({
   // ── Profile ──
