@@ -131,14 +131,12 @@ export const settingsRouter = createTRPCRouter({
         .onConflictDoUpdate({
           target: [schema.creatorPlatforms.creatorId, schema.creatorPlatforms.platform],
           set: {
-            // Explicit null means "clear this field" — the panel sends nulls
-            // for blanked inputs, and the id-carrying update path applies
-            // them, so this path must too (SPO-126a, SPO-130). Absent stays
-            // absent — Drizzle omits undefined from the SET clause.
-            ccv: data.ccv,
-            followers: data.followers,
-            scheduleLabel: data.scheduleLabel,
-            handle: data.handle,
+            // Spread the same shape the id path applies so the two paths
+            // can't drift when fields are added (SPO-126a, SPO-130, SPO-134).
+            // Explicit null clears a field, absent stays absent (Drizzle
+            // omits undefined), and re-setting `platform` on a row matched
+            // by (creatorId, platform) is a no-op.
+            ...data,
             ...syncReset,
             updatedAt: new Date(),
           },
