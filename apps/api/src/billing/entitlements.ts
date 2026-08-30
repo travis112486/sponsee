@@ -1,44 +1,16 @@
 import type { PlanTier } from "@sponsee/shared";
-import { planDealSlots } from "@sponsee/shared";
+import { planDealSlots, isPaidSubscription } from "@sponsee/shared";
 import type { SubscriptionStatus } from "@sponsee/db/schema";
 import { subscriptionStatusEnum } from "@sponsee/db/schema";
 
-const paidStatuses: SubscriptionStatus[] = ["active", "trialing"];
-
-export function isPaidSubscription(status: SubscriptionStatus | null): boolean {
-  return status != null && paidStatuses.includes(status);
-}
-
 /**
- * Statuses where a subscription object still exists on the Stripe customer.
- *
- * A different question from `isPaidSubscription`, which asks whether to grant
- * paid entitlements. A `past_due` or `unpaid` subscription grants nothing, but
- * it is still live and still billable — opening a second Checkout against it
- * double-charges exactly as it would against an `active` one, so the guard on
- * checkout has to ask this question and not the entitlement one (SPO-87 HIGH-1).
- *
- * `incomplete` is deliberately excluded: its first payment never succeeded and
- * Stripe voids it within 23 hours, so a fresh Checkout is the recovery path
- * rather than a double charge.
- *
- * `paused` is included for the same reason as `past_due`: `pause_collection`
- * stops the invoices, not the subscription — it is still attached to the
- * customer and resumes on its own schedule, so a second Checkout stacks a real
- * charge on top of it (SPO-97). It grants no entitlements, hence live but not
- * paid.
+ * The status lists and their predicates live in `@sponsee/shared` so the billing
+ * UI reads the same answer instead of hand-copying it (SPO-120). Re-exported
+ * here because this module is the API's billing vocabulary and every existing
+ * caller imports from it; see `packages/shared/src/subscription.ts` for which
+ * source is authoritative for what.
  */
-const liveStatuses: SubscriptionStatus[] = [
-  "active",
-  "trialing",
-  "past_due",
-  "unpaid",
-  "paused",
-];
-
-export function hasLiveSubscription(status: SubscriptionStatus | null): boolean {
-  return status != null && liveStatuses.includes(status);
-}
+export { isPaidSubscription, hasLiveSubscription } from "@sponsee/shared";
 
 /**
  * Coerce a raw Stripe subscription status into our enum.
@@ -53,6 +25,12 @@ export function hasLiveSubscription(status: SubscriptionStatus | null): boolean 
  * for `paused` was to add it to the enum rather than special-case it here: the
  * enum has to stay an honest list of what Stripe can send, and anything still
  * missing from it keeps the double-bill exposure (SPO-97).
+ *
+ * This reads `subscriptionStatusEnum` and not `@sponsee/shared`'s list on
+ * purpose (SPO-120). The question here is "will this value survive the column?",
+ * which the DDL answers; the shared list answers "what does this status mean?".
+ * They are asserted equal by subscription-status.parity.test.ts, but if they
+ * ever drift, guarding a write with the DDL is the direction that fails safe.
  */
 export function toSubscriptionStatus(value: string | null | undefined): SubscriptionStatus | null {
   if (!value) return null;
