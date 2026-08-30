@@ -4,36 +4,13 @@ import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { settingsRouter } from "./settings.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
+import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
 
 // SPO-88 LOW-4. `z.string().url()` accepts any scheme, so avatarUrl and
 // paypalLink would store `javascript:` and `data:` payloads. Nothing renders
 // them today (QA verified: no dangerouslySetInnerHTML, never used as href/src),
 // so this is hardening — the allowlist has to exist before a profile page
 // links them, not after.
-
-const SCHEMA_SQL = `
-DROP TABLE IF EXISTS creators CASCADE;
-
-CREATE TABLE creators (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  display_name VARCHAR(255) NOT NULL,
-  pronouns VARCHAR(64),
-  category VARCHAR(128),
-  avatar_url TEXT,
-  timezone VARCHAR(64) NOT NULL DEFAULT 'America/New_York',
-  default_currency CHAR(3) NOT NULL DEFAULT 'USD',
-  plan VARCHAR(32) NOT NULL DEFAULT 'starter',
-  paypal_link TEXT,
-  wise_text TEXT,
-  bank_text TEXT,
-  stripe_customer_id TEXT,
-  stripe_subscription_id TEXT,
-  subscription_status VARCHAR(32),
-  current_period_end TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-`;
 
 let creatorId = "";
 

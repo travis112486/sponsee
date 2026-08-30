@@ -4,6 +4,7 @@ import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { settingsRouter } from "./settings.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
+import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
 
 // SPO-109: OAuth connect wiring. Better Auth's linkSocial writes the `account`
 // row; these prove the tRPC side — completePlatformConnect stitching that row
@@ -13,85 +14,6 @@ import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 // No Twitch/Kick credentials are configured under the test runner, so the
 // immediate sync inside completePlatformConnect resolves to outcome "skipped"
 // without touching the network.
-
-const SCHEMA_SQL = `
-DROP TABLE IF EXISTS creator_platforms CASCADE;
-DROP TABLE IF EXISTS creators CASCADE;
-DROP TABLE IF EXISTS account CASCADE;
-DROP TABLE IF EXISTS "user" CASCADE;
-
-CREATE TABLE creators (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  display_name VARCHAR(255) NOT NULL,
-  pronouns VARCHAR(64),
-  category VARCHAR(128),
-  avatar_url TEXT,
-  timezone VARCHAR(64) NOT NULL DEFAULT 'America/New_York',
-  default_currency CHAR(3) NOT NULL DEFAULT 'USD',
-  plan VARCHAR(32) NOT NULL DEFAULT 'starter',
-  paypal_link TEXT,
-  wise_text TEXT,
-  bank_text TEXT,
-  stripe_customer_id TEXT,
-  stripe_subscription_id TEXT,
-  subscription_status VARCHAR(32),
-  current_period_end TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE creator_platforms (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
-  platform VARCHAR(32) NOT NULL,
-  ccv INTEGER,
-  followers INTEGER,
-  schedule_label VARCHAR(255),
-  connected_account_id TEXT,
-  handle VARCHAR(255),
-  channel_url TEXT,
-  avatar_url TEXT,
-  subscriber_count INTEGER,
-  subscriber_count_is_estimate BOOLEAN NOT NULL DEFAULT FALSE,
-  last_synced_at TIMESTAMPTZ,
-  sync_status VARCHAR(32) NOT NULL DEFAULT 'never',
-  sync_error TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(creator_id, platform)
-);
-
-CREATE INDEX creator_platforms_creator_idx ON creator_platforms(creator_id);
-
-CREATE TABLE "user" (
-  id TEXT PRIMARY KEY NOT NULL,
-  name TEXT NOT NULL,
-  email TEXT NOT NULL UNIQUE,
-  email_verified BOOLEAN NOT NULL DEFAULT false,
-  image TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE account (
-  id TEXT PRIMARY KEY NOT NULL,
-  issuer TEXT NOT NULL,
-  account_id TEXT NOT NULL,
-  provider_id TEXT NOT NULL,
-  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
-  access_token TEXT,
-  refresh_token TEXT,
-  id_token TEXT,
-  access_token_expires_at TIMESTAMPTZ,
-  refresh_token_expires_at TIMESTAMPTZ,
-  scope TEXT,
-  password TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX account_issuer_account_id_idx ON account(issuer, account_id);
-`;
 
 let creatorId = "";
 let otherCreatorId = "";

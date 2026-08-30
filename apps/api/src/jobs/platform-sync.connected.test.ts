@@ -5,6 +5,7 @@ import * as schema from "@sponsee/db/schema";
 import { syncPlatformRow } from "./platform-sync.js";
 import { getConnectedAuth } from "../platforms/connected.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
+import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
 
 // SPO-109: rows with a connected OAuth account sync with the broadcaster's
 // token — the path that unlocks true Twitch subscriber counts. Token
@@ -15,64 +16,6 @@ vi.mock("../platforms/connected.js", () => ({
 }));
 
 const mockedGetConnectedAuth = vi.mocked(getConnectedAuth);
-
-const SCHEMA_SQL = `
-DROP TABLE IF EXISTS activity_events CASCADE;
-DROP TABLE IF EXISTS creator_platforms CASCADE;
-DROP TABLE IF EXISTS creators CASCADE;
-
-CREATE TABLE creators (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  display_name VARCHAR(255) NOT NULL,
-  pronouns VARCHAR(64),
-  category VARCHAR(128),
-  avatar_url TEXT,
-  timezone VARCHAR(64) NOT NULL DEFAULT 'America/New_York',
-  default_currency CHAR(3) NOT NULL DEFAULT 'USD',
-  plan VARCHAR(32) NOT NULL DEFAULT 'starter',
-  paypal_link TEXT,
-  wise_text TEXT,
-  bank_text TEXT,
-  stripe_customer_id TEXT,
-  stripe_subscription_id TEXT,
-  subscription_status VARCHAR(32),
-  current_period_end TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE creator_platforms (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
-  platform VARCHAR(32) NOT NULL,
-  ccv INTEGER,
-  followers INTEGER,
-  schedule_label VARCHAR(255),
-  connected_account_id TEXT,
-  handle VARCHAR(255),
-  channel_url TEXT,
-  avatar_url TEXT,
-  subscriber_count INTEGER,
-  subscriber_count_is_estimate BOOLEAN NOT NULL DEFAULT FALSE,
-  last_synced_at TIMESTAMPTZ,
-  sync_status VARCHAR(32) NOT NULL DEFAULT 'never',
-  sync_error TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(creator_id, platform)
-);
-
-CREATE TABLE activity_events (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
-  actor VARCHAR(32) NOT NULL DEFAULT 'creator',
-  entity_type VARCHAR(64) NOT NULL,
-  entity_id UUID NOT NULL,
-  kind VARCHAR(32) NOT NULL,
-  payload JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-`;
 
 let creatorId = "";
 
