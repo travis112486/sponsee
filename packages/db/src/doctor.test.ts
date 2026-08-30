@@ -104,10 +104,11 @@ describe("diagnose", () => {
       );
 
       expect(diagnose(journal.entries, repaired).problems).toEqual([]);
-      expect(diagnose(journal.entries, repaired).pending.map((e) => e.tag)).toEqual([
-        "0003_ordinary_fabian_cortez",
-        "0004_oval_quasar",
-      ]);
+      // Everything the 3-row ledger has not applied — derived from the journal
+      // so that adding a migration does not fail this test for the wrong reason.
+      expect(diagnose(journal.entries, repaired).pending.map((e) => e.tag)).toEqual(
+        journal.entries.slice(poisoned.length).map((e) => e.tag),
+      );
     });
   });
 

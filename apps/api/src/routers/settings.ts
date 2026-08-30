@@ -5,6 +5,25 @@ import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import * as schema from "@sponsee/db/schema";
 import { platforms } from "@sponsee/shared";
 
+/**
+ * Creator-supplied URL that we store and may later render as an `href`/`src`.
+ *
+ * Zod's `.url()` accepts any scheme, including `javascript:` and `data:`.
+ * Nothing renders these fields today, so this is hardening rather than a live
+ * XSS fix — but the allowlist has to be in place before a public profile page
+ * ever links them, not after.
+ */
+const httpsUrl = z
+  .string()
+  .url()
+  .refine((value) => {
+    try {
+      return new URL(value).protocol === "https:";
+    } catch {
+      return false;
+    }
+  }, "Must be an https:// URL");
+
 export const settingsRouter = createTRPCRouter({
   // ── Profile ──
   getProfile: creatorScopedProcedure.query(async ({ ctx }) => {
@@ -21,7 +40,7 @@ export const settingsRouter = createTRPCRouter({
         displayName: z.string().min(1).max(255).optional(),
         pronouns: z.string().max(64).optional().nullable(),
         category: z.string().max(128).optional().nullable(),
-        avatarUrl: z.string().url().optional().nullable(),
+        avatarUrl: httpsUrl.optional().nullable(),
         timezone: z.string().max(64).optional(),
         defaultCurrency: z.string().length(3).optional(),
       })
@@ -127,7 +146,7 @@ export const settingsRouter = createTRPCRouter({
   updateRails: creatorScopedProcedure
     .input(
       z.object({
-        paypalLink: z.string().url().optional().nullable(),
+        paypalLink: httpsUrl.optional().nullable(),
         wiseText: z.string().optional().nullable(),
         bankText: z.string().optional().nullable(),
       })
