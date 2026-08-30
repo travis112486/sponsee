@@ -6,9 +6,10 @@ import { trpc } from "@/trpc";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import QueryError from "@/components/QueryError";
+import { httpsUrlOrEmpty } from "@/lib/url-schema";
 
 const railsSchema = z.object({
-  paypalLink: z.string().url().optional().or(z.literal("")),
+  paypalLink: httpsUrlOrEmpty.optional(),
   wiseText: z.string().optional(),
   bankText: z.string().optional(),
 });
