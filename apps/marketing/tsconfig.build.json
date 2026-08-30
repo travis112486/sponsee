@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "//": "Vercel builds apps/marketing standalone, so vitest (a workspace-root devDependency) is not installed. Test files import it and would fail the build's `tsc` step. The main tsconfig.json keeps `api` in `include` so CI still typechecks api/waitlist.test.ts; this build config drops `**/*.test.ts` from the emit/typecheck that runs before `vite build`.",
+  "exclude": ["**/*.test.ts", "**/*.spec.ts"]
+}
