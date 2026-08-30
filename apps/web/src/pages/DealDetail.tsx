@@ -1,7 +1,15 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import { trpc } from "@/trpc";
-import { stageLabels, platforms, deliverableStatuses, benchmarkDeliverableTypes } from "@sponsee/shared";
+import {
+  stageLabels,
+  platforms,
+  deliverableStatuses,
+  benchmarkDeliverableTypes,
+  proofKinds,
+  proofKindLabels,
+  type ProofKind,
+} from "@sponsee/shared";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { BenchmarkBand } from "@/components/BenchmarkBand";
@@ -16,6 +24,7 @@ import {
   ChevronDown,
   Plus,
   Trash2,
+  Link2,
 } from "lucide-react";
 import QueryError from "@/components/QueryError";
 
@@ -88,7 +97,26 @@ export default function DealDetail() {
   const deleteDeliverable = trpc.deliverable.delete.useMutation({
     onSuccess: () => {
       utils.deals.getById.invalidate({ id: id! });
+      // Deleting a deliverable detaches its proofs (deliverableId → null)
+      utils.proof.listByDeal.invalidate({ dealId: id! });
       toast("Deliverable removed");
+    },
+  });
+
+  const { data: proofs } = trpc.proof.listByDeal.useQuery({ dealId: id! }, { enabled: !!id });
+
+  const addProof = trpc.proof.create.useMutation({
+    onSuccess: () => {
+      utils.proof.listByDeal.invalidate({ dealId: id! });
+      toast("Evidence added");
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const removeProof = trpc.proof.delete.useMutation({
+    onSuccess: () => {
+      utils.proof.listByDeal.invalidate({ dealId: id! });
+      toast("Evidence removed");
     },
   });
 
@@ -99,6 +127,10 @@ export default function DealDetail() {
   const [deliverablePlatform, setDeliverablePlatform] = useState<string>("");
   const [deliverableDueAt, setDeliverableDueAt] = useState("");
   const [openStatusId, setOpenStatusId] = useState<string | null>(null);
+  const [evidenceFormId, setEvidenceFormId] = useState<string | null>(null);
+  const [proofKind, setProofKind] = useState<ProofKind>("clip");
+  const [proofUrl, setProofUrl] = useState("");
+  const [proofNote, setProofNote] = useState("");
 
   if (isLoading) {
     return (
@@ -144,6 +176,24 @@ export default function DealDetail() {
     }
     updateDeal.mutate(payload as { id: string });
     setEditingField(null);
+  }
+
+  function handleAddEvidence(e: React.FormEvent, deliverableId: string) {
+    e.preventDefault();
+    if (!id) return;
+    const url = proofUrl.trim();
+    const note = proofNote.trim();
+    if (!url && !note) return;
+    addProof.mutate({
+      dealId: id,
+      deliverableId,
+      kind: proofKind,
+      url: url || undefined,
+      note: note || undefined,
+    });
+    setProofUrl("");
+    setProofNote("");
+    setEvidenceFormId(null);
   }
 
   function handleAddDeliverable(e: React.FormEvent) {
@@ -357,11 +407,14 @@ export default function DealDetail() {
 
             {deal.deliverables && deal.deliverables.length > 0 ? (
               <div className="mt-3 space-y-2">
-                {deal.deliverables.map((d) => (
+                {deal.deliverables.map((d) => {
+                  const evidence = proofs?.filter((p) => p.deliverableId === d.id) ?? [];
+                  return (
                   <div
                     key={d.id}
-                    className="flex items-center justify-between rounded-lg border border-hairline bg-surface-subtle px-3 py-2"
+                    className="rounded-lg border border-hairline bg-surface-subtle px-3 py-2"
                   >
+                    <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 min-w-0">
                       <ListChecks className="h-3.5 w-3.5 shrink-0 text-ink-3" />
                       <span className="text-[13px] text-ink truncate">{d.title}</span>
@@ -419,13 +472,117 @@ export default function DealDetail() {
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
+                    </div>
+
+                    {/* Evidence (proof-of-delivery) */}
+                    {evidence.length > 0 && (
+                      <div className="mt-2 space-y-1 border-t border-hairline pt-2">
+                        {evidence.map((p) => (
+                          <EvidenceRow
+                            key={p.id}
+                            proof={p}
+                            onRemove={() => {
+                              if (confirm("Remove this evidence?")) {
+                                removeProof.mutate({ id: p.id });
+                              }
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {evidenceFormId === d.id ? (
+                      <form
+                        onSubmit={(e) => handleAddEvidence(e, d.id)}
+                        className="mt-2 space-y-2 border-t border-hairline pt-2"
+                      >
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          <select
+                            value={proofKind}
+                            onChange={(e) => setProofKind(e.target.value as ProofKind)}
+                            className="rounded-lg border border-hairline bg-surface px-3 py-1.5 text-[12px] text-ink outline-none focus:border-pine"
+                          >
+                            {proofKinds.map((k) => (
+                              <option key={k} value={k}>
+                                {proofKindLabels[k]}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            value={proofUrl}
+                            onChange={(e) => setProofUrl(e.target.value)}
+                            placeholder="https:// link (VOD, clip, screenshot…)"
+                            className="sm:col-span-2 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-[12px] text-ink outline-none focus:border-pine"
+                          />
+                        </div>
+                        <input
+                          value={proofNote}
+                          onChange={(e) => setProofNote(e.target.value)}
+                          placeholder="Note (optional — e.g. timestamps, context)"
+                          className="w-full rounded-lg border border-hairline bg-surface px-3 py-1.5 text-[12px] text-ink outline-none focus:border-pine"
+                        />
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setEvidenceFormId(null)}
+                            className="rounded-md border border-hairline px-3 py-1 text-[12px] text-ink-3 hover:bg-surface"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={addProof.isPending || (!proofUrl.trim() && !proofNote.trim())}
+                            className="rounded-md bg-pine px-3 py-1 text-[12px] font-medium text-white hover:bg-pine-hover disabled:opacity-50"
+                          >
+                            Add evidence
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setEvidenceFormId(d.id);
+                          setProofUrl("");
+                          setProofNote("");
+                        }}
+                        className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-ink-3 hover:text-pine"
+                      >
+                        <Plus className="h-3 w-3" />
+                        Add evidence
+                      </button>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <p className="mt-3 text-[13px] text-ink-3">
                 No deliverables yet.
               </p>
+            )}
+
+            {/* Proofs left behind when their deliverable was deleted */}
+            {proofs && proofs.some((p) => !p.deliverableId) && (
+              <div className="mt-3">
+                <p className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                  Other evidence
+                </p>
+                <div className="mt-1.5 space-y-1">
+                  {proofs
+                    .filter((p) => !p.deliverableId)
+                    .map((p) => (
+                      <EvidenceRow
+                        key={p.id}
+                        proof={p}
+                        onRemove={() => {
+                          if (confirm("Remove this evidence?")) {
+                            removeProof.mutate({ id: p.id });
+                          }
+                        }}
+                      />
+                    ))}
+                </div>
+              </div>
             )}
           </div>
 
@@ -493,6 +650,47 @@ export default function DealDetail() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function EvidenceRow({
+  proof,
+  onRemove,
+}: {
+  proof: { id: string; kind: string; url: string | null; note: string | null; createdAt: string | Date };
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-2 rounded px-1 py-0.5">
+      <div className="flex min-w-0 items-start gap-1.5">
+        <Link2 className="mt-0.5 h-3 w-3 shrink-0 text-ink-3" />
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-ink-3">
+              {proofKindLabels[proof.kind as ProofKind] ?? proof.kind}
+            </span>
+            {proof.url ? (
+              <a
+                href={proof.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="truncate text-[12px] text-pine hover:underline"
+              >
+                {proof.url.replace(/^https?:\/\//, "")}
+              </a>
+            ) : (
+              <span className="text-[12px] text-ink-2">Note</span>
+            )}
+          </div>
+          {proof.note && (
+            <p className="mt-0.5 text-[11.5px] leading-4 text-ink-2">{proof.note}</p>
+          )}
+        </div>
+      </div>
+      <button onClick={onRemove} className="mt-0.5 shrink-0 text-ink-3 hover:text-brick">
+        <Trash2 className="h-3 w-3" />
+      </button>
     </div>
   );
 }

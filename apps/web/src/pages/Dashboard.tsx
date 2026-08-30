@@ -1,5 +1,5 @@
 import { trpc } from "@/trpc";
-import { stageLabels, dealStages } from "@sponsee/shared";
+import { stageLabels, dealStages, proofKindLabels, type ProofKind } from "@sponsee/shared";
 import { cn } from "@/lib/utils";
 import {
   KanbanSquare,
@@ -25,11 +25,16 @@ type ActivityPayload = {
   status?: string;
   action?: string;
   reason?: string;
+  proofKind?: string;
 };
 
 function describeActivity(actor: string, payload: unknown): string {
   const p = (payload ?? {}) as ActivityPayload;
   const step = p.step !== undefined ? `step ${p.step}` : "chase";
+
+  const proofKind = p.proofKind ? proofKindLabels[p.proofKind as ProofKind] ?? p.proofKind : "";
+  if (p.action === "proof_added") return `Evidence added${proofKind ? ` (${proofKind})` : ""}`;
+  if (p.action === "proof_removed") return `Evidence removed${proofKind ? ` (${proofKind})` : ""}`;
 
   if (p.action === "pause") return `Chase paused${p.reason ? ` (${p.reason})` : ""}`;
   if (p.action === "resume") return "Chase resumed";

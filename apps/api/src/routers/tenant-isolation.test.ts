@@ -6,6 +6,7 @@ import { eq, and, sql } from "drizzle-orm";
 import { settingsRouter } from "../routers/settings.js";
 import { brandRouter } from "../routers/brand.js";
 import { deliverableRouter } from "../routers/deliverable.js";
+import { proofRouter } from "../routers/proof.js";
 import { dealsRouter } from "../routers/deals.js";
 import { invoiceRouter } from "../routers/invoice.js";
 import { chaseRouter } from "../routers/chase.js";
@@ -73,6 +74,14 @@ CREATE TABLE creator_platforms (
   followers INTEGER,
   schedule_label VARCHAR(255),
   connected_account_id TEXT,
+  handle VARCHAR(255),
+  channel_url TEXT,
+  avatar_url TEXT,
+  subscriber_count INTEGER,
+  subscriber_count_is_estimate BOOLEAN NOT NULL DEFAULT FALSE,
+  last_synced_at TIMESTAMPTZ,
+  sync_status VARCHAR(32) NOT NULL DEFAULT 'never',
+  sync_error TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(creator_id, platform)
@@ -310,6 +319,8 @@ let platformAId = "";
 let platformBId = "";
 let deliverableAId = "";
 let deliverableBId = "";
+let proofAId = "";
+let proofBId = "";
 let invoiceAId = "";
 let invoiceBId = "";
 let templateAId = "";
@@ -377,6 +388,17 @@ async function seed() {
     .returning();
   deliverableAId = delA.id;
   deliverableBId = delB.id;
+
+  const [proofA] = await db
+    .insert(schema.proofs)
+    .values({ dealId: dealAId, deliverableId: deliverableAId, kind: "clip", url: "https://clips.twitch.tv/a" })
+    .returning();
+  const [proofB] = await db
+    .insert(schema.proofs)
+    .values({ dealId: dealBId, deliverableId: deliverableBId, kind: "vod", url: "https://youtube.com/watch?v=b" })
+    .returning();
+  proofAId = proofA.id;
+  proofBId = proofB.id;
 
   const [invoiceA] = await db
     .insert(schema.invoices)
@@ -744,6 +766,126 @@ describe("deliverable router tenant isolation", () => {
         .select()
         .from(schema.deliverables)
         .where(eq(schema.deliverables.id, deliverableBId));
+      expect(rows).toHaveLength(1);
+    });
+  });
+});
+
+// ── Proof router ─────────────────────────────────────────────────────────────
+
+describe("proof router tenant isolation", () => {
+  describe("listByDeal", () => {
+    it("returns proofs for an owned deal", async () => {
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.listByDeal({ dealId: dealAId });
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(proofAId);
+    });
+
+    it("throws NOT_FOUND for a cross-creator deal", async () => {
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      await expect(caller.listByDeal({ dealId: dealBId })).rejects.toSatisfy(
+        (err: TRPCError) => err.code === "NOT_FOUND"
+      );
+    });
+  });
+
+  describe("create", () => {
+    it("creates a proof on an owned deal and records an activity event", async () => {
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      const proof = await caller.create({
+        dealId: dealAId,
+        deliverableId: deliverableAId,
+        kind: "vod",
+        url: "https://twitch.tv/videos/123",
+        note: "Sponsor segment at 1:02:00",
+      });
+      expect(proof.dealId).toBe(dealAId);
+      expect(proof.deliverableId).toBe(deliverableAId);
+      expect(proof.kind).toBe("vod");
+
+      const events = await db
+        .select()
+        .from(schema.activityEvents)
+        .where(eq(schema.activityEvents.entityId, proof.id));
+      expect(events).toHaveLength(1);
+      expect(events[0].creatorId).toBe(creatorAId);
+      expect(events[0].kind).toBe("deliverable");
+      expect(events[0].payload).toMatchObject({ action: "proof_added", proofKind: "vod" });
+    });
+
+    it("accepts a note-only proof", async () => {
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      const proof = await caller.create({
+        dealId: dealAId,
+        deliverableId: deliverableAId,
+        kind: "chat",
+        note: "Chat went wild during the ad read",
+      });
+      expect(proof.url).toBeNull();
+      expect(proof.note).toBe("Chat went wild during the ad read");
+    });
+
+    it("rejects a proof with neither url nor note", async () => {
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      await expect(
+        caller.create({ dealId: dealAId, deliverableId: deliverableAId, kind: "clip" })
+      ).rejects.toSatisfy((err: TRPCError) => err.code === "BAD_REQUEST");
+    });
+
+    it("throws NOT_FOUND for a cross-creator deal", async () => {
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      await expect(
+        caller.create({ dealId: dealBId, kind: "clip", url: "https://example.com/x" })
+      ).rejects.toSatisfy((err: TRPCError) => err.code === "NOT_FOUND");
+    });
+
+    it("throws NOT_FOUND when the deliverable belongs to a different deal", async () => {
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      await expect(
+        caller.create({
+          dealId: dealAId,
+          deliverableId: deliverableBId,
+          kind: "clip",
+          url: "https://example.com/x",
+        })
+      ).rejects.toSatisfy((err: TRPCError) => err.code === "NOT_FOUND");
+    });
+  });
+
+  describe("delete", () => {
+    it("deletes an owned proof and records an activity event", async () => {
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.delete({ id: proofAId });
+      expect(result.success).toBe(true);
+
+      const rows = await db.select().from(schema.proofs).where(eq(schema.proofs.id, proofAId));
+      expect(rows).toHaveLength(0);
+
+      const events = await db
+        .select()
+        .from(schema.activityEvents)
+        .where(eq(schema.activityEvents.entityId, proofAId));
+      expect(events).toHaveLength(1);
+      expect(events[0].payload).toMatchObject({ action: "proof_removed", proofKind: "clip" });
+    });
+
+    it("throws NOT_FOUND for a cross-creator proof", async () => {
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      await expect(caller.delete({ id: proofBId })).rejects.toSatisfy(
+        (err: TRPCError) => err.code === "NOT_FOUND"
+      );
+    });
+
+    it("does not delete a cross-creator proof on rejection", async () => {
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      try {
+        await caller.delete({ id: proofBId });
+      } catch {
+        // expected
+      }
+
+      const rows = await db.select().from(schema.proofs).where(eq(schema.proofs.id, proofBId));
       expect(rows).toHaveLength(1);
     });
   });
