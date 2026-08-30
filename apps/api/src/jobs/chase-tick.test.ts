@@ -88,7 +88,7 @@ describe("sendChaseEmail", () => {
     expect(result.providerMessageId).toBe("msg-123");
   });
 
-  it("marks the event failed (not stranded in sending) when the provider factory throws", async () => {
+  it("leaves the event in approved when the provider factory throws before the claim", async () => {
     const { createEmailProvider } = await import("../email/index.js");
     vi.mocked(createEmailProvider).mockImplementation(() => {
       throw new Error("Missing POSTMARK_SERVER_TOKEN environment variable");
@@ -108,8 +108,11 @@ describe("sendChaseEmail", () => {
       })
     ).rejects.toThrow("Missing POSTMARK_SERVER_TOKEN");
 
-    // Claim wrote `sending`, then the catch must write `failed`.
-    expect(dbState.updateSetPayloads).toContainEqual(expect.objectContaining({ status: "sending" }));
-    expect(dbState.updateSetPayloads).toContainEqual(expect.objectContaining({ status: "failed" }));
+    // The factory is resolved before the atomic claim, so a config error throws
+    // before the event is ever moved out of `approved`: no `sending` claim, no
+    // `failed` write, and the DB is untouched entirely.
+    expect(dbState.updateSetPayloads).toHaveLength(0);
+    expect(dbState.updateSetPayloads).not.toContainEqual(expect.objectContaining({ status: "sending" }));
+    expect(dbState.updateSetPayloads).not.toContainEqual(expect.objectContaining({ status: "failed" }));
   });
 });
