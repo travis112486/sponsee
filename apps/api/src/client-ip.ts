@@ -6,7 +6,7 @@
 // into a site-wide outage, so the header list is explicit, chosen from headers
 // this deployment was observed to actually receive, and overridable per host.
 
-import { isIP } from "node:net";
+import { getIPFromHeader } from "@better-auth/core/utils/ip";
 
 /**
  * Headers to read the client IP from, in order.
@@ -37,6 +37,25 @@ import { isIP } from "node:net";
 export const DEFAULT_IP_HEADERS = ["x-vercel-forwarded-for", "x-forwarded-for"];
 
 type Env = Record<string, string | undefined>;
+
+/**
+ * The `advanced.ipAddress` block handed to Better Auth.
+ *
+ * Every knob here changes how Better Auth resolves a caller, so `auth.ts` and
+ * `resolvesAuthClientIp` below both read this one object rather than each
+ * building their own. `ipv6Subnet` and `trustedProxies` are unset today; they
+ * are threaded through anyway so that setting one later cannot move Better
+ * Auth's verdict without moving the guard's with it.
+ */
+export interface IpAddressOptions {
+  ipAddressHeaders: string[];
+  ipv6Subnet?: number;
+  trustedProxies?: string[];
+}
+
+export function ipAddressOptions(env: Env = process.env): IpAddressOptions {
+  return { ipAddressHeaders: ipAddressHeaders(env) };
+}
 
 /** Header names to read the client IP from, `AUTH_IP_HEADERS` overriding. */
 export function ipAddressHeaders(env: Env = process.env): string[] {
@@ -69,31 +88,47 @@ export function clientIp(headers: Headers, env: Env = process.env): string | nul
  * Whether Better Auth will key its rate limiter on this request's client
  * address, or fall back to the single shared `no-trusted-ip` bucket.
  *
- * This mirrors `getIPFromHeader` in @better-auth/core: with no trusted proxies
- * configured it accepts a header only when the value is a single hop that
- * parses as an IP address. It is deliberately a separate function from
- * `clientIp` above, which is looser (leftmost-of-chain) because our own
- * limiters can afford to be.
+ * The address-parsing rule is not reimplemented here — it *calls* the same
+ * `getIPFromHeader` that `getIP` calls inside Better Auth's rate limiter, over
+ * the same header list and options. That matters because a second
+ * implementation only has to disagree once to be a site-wide outage, and it
+ * did: a hand-rolled `node:net.isIP` check accepted `fe80::1%eth0` (zone IDs
+ * are valid to `isIP`, rejected by Better Auth's zod IPv6 parser), so the guard
+ * would report a resolved caller — leaving the tight 5-per-60s per-caller rule
+ * in force — while Better Auth put that request, and every other one, in the
+ * single shared bucket. One header from any stranger pinned the whole site to
+ * five sign-ins a minute.
  *
- * The two implementations are pinned in agreement by
- * `auth.rate-limit.integration.test.ts`, which drives real requests through the
- * app and compares this predicate against the key Better Auth actually wrote —
- * so an upstream change to that rule surfaces as a failing test rather than as
- * a site-wide sign-in cap in production.
+ * What is left is the `isTest()`/`isDevelopment()` fallback, which cannot be
+ * delegated: Better Auth captures `nodeENV` at module load and reads the real
+ * process environment, so calling it would ignore the `env` argument these
+ * tests use to simulate production. It is mirrored below as the same three
+ * comparisons plus the same `toBoolean(TEST)` semantics, and pinned by
+ * `auth.shared-bucket.integration.test.ts`, which stubs the environment before
+ * import and compares this predicate against the key Better Auth actually
+ * wrote.
+ *
+ * It stays a separate function from `clientIp` above, which is looser
+ * (leftmost-of-chain) because our own limiters can afford to be.
  */
-export function resolvesAuthClientIp(headers: Headers, env: Env = process.env): boolean {
-  for (const name of ipAddressHeaders(env)) {
+export function resolvesAuthClientIp(
+  source: Request | Headers,
+  env: Env = process.env
+): boolean {
+  const headers = source instanceof Headers ? source : source.headers;
+  const { ipAddressHeaders: names, ...options } = ipAddressOptions(env);
+
+  for (const name of names) {
     const value = headers.get(name);
     if (value === null) continue;
-    const hops = value
-      .split(",")
-      .map((hop) => hop.trim())
-      .filter(Boolean);
-    if (hops.length === 1 && isIP(hops[0]!) !== 0) return true;
+    if (getIPFromHeader(value, options)) return true;
   }
+
   // Off production Better Auth substitutes 127.0.0.1 rather than giving up, so
-  // there is no shared bucket to guard against. Mirrors `isTest()`/
-  // `isDevelopment()` in @better-auth/core/env.
+  // there is no shared bucket to guard against.
   const nodeEnv = env.NODE_ENV ?? "";
-  return nodeEnv === "test" || nodeEnv === "dev" || nodeEnv === "development" || !!env.TEST;
+  if (nodeEnv === "dev" || nodeEnv === "development" || nodeEnv === "test") return true;
+  // `toBoolean` in @better-auth/core/env, which treats the string "false" as
+  // false rather than as a non-empty (truthy) string.
+  return env.TEST ? env.TEST !== "false" : false;
 }

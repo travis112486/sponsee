@@ -5,7 +5,8 @@ import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { defaultChaseTemplates, defaultChaseOffsets } from "@sponsee/shared";
 import nodemailer from "nodemailer";
-import { ipAddressHeaders, resolvesAuthClientIp } from "./client-ip.js";
+import { ipAddressOptions, resolvesAuthClientIp } from "./client-ip.js";
+import { SlidingWindowLimiter } from "./rate-limit.js";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -58,7 +59,53 @@ function perCallerOrSharedCeiling(
   request: Request,
   currentRule: { window: number; max: number },
 ) {
-  return resolvesAuthClientIp(request.headers) ? currentRule : SHARED_BUCKET_RULE;
+  return resolvesAuthClientIp(request) ? currentRule : SHARED_BUCKET_RULE;
+}
+
+/**
+ * Per-destination cap on magic-link mail.
+ *
+ * Every rule above is keyed on the *caller*, which is the wrong end of this
+ * particular abuse. Reaching a caller-keyed limit takes a resolvable client
+ * address, and a request sent straight to the Render origin — publicly
+ * reachable, tracked as SPO-102 — has none, so it lands in the shared bucket
+ * and gets `SHARED_BUCKET_RULE`'s 60 per 60s. That is a deliberately survivable
+ * ceiling for sign-in availability, but as a mail bound it means 60 sign-in
+ * emails a minute into one inbox, chosen by the attacker, sent from our domain
+ * and our relay's reputation. Rotating source addresses raises it further.
+ *
+ * So the send path gets its own limit keyed on the destination instead, where
+ * the harm actually accrues. Three per 15 minutes is above any real sign-in
+ * retry (request, mistype, request again) and far below a useful flood.
+ *
+ * Deliberately not Better Auth's `rate_limit` table: it prunes rows older than
+ * its own longest configured window (60s), which would silently reset a
+ * 15-minute counter stored beside them. `SlidingWindowLimiter` is per instance,
+ * so a scaled-out deploy multiplies the allowance by the instance count — still
+ * a bound, and the same trade-off already accepted for the waitlist limiter.
+ */
+const MAGIC_LINK_SENDS_MAX = 3;
+const MAGIC_LINK_SENDS_WINDOW_MS = 15 * 60_000;
+
+export const magicLinkSendLimiter = new SlidingWindowLimiter(
+  MAGIC_LINK_SENDS_MAX,
+  MAGIC_LINK_SENDS_WINDOW_MS,
+);
+
+/**
+ * Whether a magic link may be mailed to `email` right now.
+ *
+ * Shares `rateLimitEnabled` with the Better Auth limiter so the whole
+ * rate-limiting surface is on or off together — in particular off under the
+ * test runner, where suites legitimately sign the same fixture address in
+ * repeatedly.
+ */
+export function allowMagicLinkSend(
+  email: string,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (!rateLimitEnabled(env)) return true;
+  return magicLinkSendLimiter.check(email.trim().toLowerCase()).allowed;
 }
 
 const baseURL = process.env.BETTER_AUTH_URL || "http://localhost:3001";
@@ -198,9 +245,9 @@ export const auth: AuthInstance = betterAuth({
     cookiePrefix: "sponsee",
     useSecureCookies: isProd,
     disableOriginCheck: false, // enforce even in test mode; trustedOrigins drives allow-list
-    ipAddress: {
-      ipAddressHeaders: ipAddressHeaders(),
-    },
+    // Same object `resolvesAuthClientIp` resolves against, so the guard cannot
+    // drift from the configuration it is guarding.
+    ipAddress: ipAddressOptions(),
   },
   databaseHooks: {
     user: {
@@ -215,6 +262,14 @@ export const auth: AuthInstance = betterAuth({
     magicLink({
       expiresIn: 60 * 10, // 10 minutes
       sendMagicLink: async ({ email, url }) => {
+        // Return normally rather than throwing: the caller's response must not
+        // differ between "sent" and "suppressed", or it becomes an oracle for
+        // whether an address has been targeted recently. The log line carries
+        // no address for the same reason.
+        if (!allowMagicLinkSend(email)) {
+          console.warn("[auth] magic-link send suppressed: per-destination rate limit");
+          return;
+        }
         await transporter.sendMail({
           from: smtpFrom,
           to: email,

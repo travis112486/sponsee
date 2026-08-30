@@ -192,6 +192,31 @@ describe("resolvesAuthClientIp agrees with the key Better Auth writes", () => {
       },
     },
     { name: "a single hop that is not an address", headers: { "x-forwarded-for": "unknown" } },
+    // Everything below this line was added after round 3 of review. The cases
+    // above were all well-formed dotted-quad or absent, which is why a guard
+    // that disagreed with Better Auth on every IPv6 form still passed.
+    {
+      name: "an IPv6 zone ID, which node:net accepts and Better Auth rejects",
+      headers: { "x-vercel-forwarded-for": "fe80::1%eth0" },
+    },
+    { name: "a numeric IPv6 zone ID", headers: { "x-vercel-forwarded-for": "fe80::1%1" } },
+    { name: "loopback IPv6", headers: { "x-vercel-forwarded-for": "::1" } },
+    { name: "compressed IPv6", headers: { "x-vercel-forwarded-for": "2001:db8::1" } },
+    { name: "uppercase IPv6", headers: { "x-vercel-forwarded-for": "2001:DB8::1" } },
+    { name: "IPv4-mapped IPv6", headers: { "x-vercel-forwarded-for": "::ffff:192.0.2.1" } },
+    {
+      name: "a bracketed IPv6 with a port",
+      headers: { "x-vercel-forwarded-for": "[2001:db8::1]:443" },
+    },
+    { name: "IPv4 with a port", headers: { "x-vercel-forwarded-for": "203.0.113.7:443" } },
+    { name: "an out-of-range octet", headers: { "x-vercel-forwarded-for": "256.1.1.1" } },
+    { name: "a trailing comma", headers: { "x-vercel-forwarded-for": "203.0.113.7," } },
+    { name: "surrounding whitespace", headers: { "x-vercel-forwarded-for": " 203.0.113.7 " } },
+    { name: "an empty header value", headers: { "x-vercel-forwarded-for": "" } },
+    {
+      name: "an unresolvable first header falling through to the second",
+      headers: { "x-vercel-forwarded-for": "unknown", "x-forwarded-for": "203.0.113.7" },
+    },
   ];
 
   for (const { name, headers } of cases) {

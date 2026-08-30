@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import * as schema from "@sponsee/db/schema";
 import { getTableConfig } from "drizzle-orm/pg-core";
+import { getIPFromHeader } from "@better-auth/core/utils/ip";
+import { isIP } from "node:net";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
@@ -192,6 +194,79 @@ describe("client IP resolution against the deployed topology", () => {
     expect(resolvesAuthClientIp(new Headers({ "x-vercel-forwarded-for": "::1" }), PROD_ENV)).toBe(
       true,
     );
+  });
+
+  it("rejects an IPv6 zone ID, which node:net accepts and Better Auth does not", () => {
+    // The reason this predicate calls getIPFromHeader instead of reimplementing
+    // it. `node:net.isIP("fe80::1%eth0")` returns 6 — a scoped address is a
+    // valid address — but Better Auth parses with zod's ipv6, which rejects the
+    // `%zone` suffix and drops the caller into the shared bucket.
+    //
+    // A guard that answered "resolved" here would leave the tight 5-per-60s
+    // per-caller rule applied to a bucket every caller shares, so one stranger
+    // sending this header would cap sign-in for the entire site at five a
+    // minute. It is the one divergence that is an outage rather than a
+    // loosening, and it took a single header to trigger.
+    for (const zoned of ["fe80::1%eth0", "fe80::1%1", "FE80::1%eth0"]) {
+      expect(isIP(zoned)).not.toBe(0);
+      expect(resolvesAuthClientIp(new Headers({ "x-vercel-forwarded-for": zoned }), PROD_ENV)).toBe(
+        false,
+      );
+    }
+  });
+
+  it("agrees with getIPFromHeader across address forms, not just well-formed IPv4", () => {
+    // The original pinning coverage was dotted-quad only, which is why the zone
+    // ID above got through. Sweep the forms a header can actually carry and
+    // assert against the upstream resolver directly — same module instance the
+    // rate limiter calls, so this cannot pass while production disagrees.
+    const values = [
+      "203.0.113.7",
+      "0.0.0.0",
+      "255.255.255.255",
+      "256.1.1.1",
+      "::1",
+      "::",
+      "2001:db8::1",
+      "2001:DB8::1",
+      "::ffff:192.0.2.1",
+      "fe80::1%eth0",
+      "fe80::1%1",
+      "203.0.113.7:443",
+      "[2001:db8::1]:443",
+      "203.0.113.7, 198.51.100.1",
+      "203.0.113.7,",
+      " 203.0.113.7 ",
+      "unknown",
+      "",
+      ",",
+    ];
+
+    for (const value of values) {
+      const expected = getIPFromHeader(value) !== null;
+      expect(
+        resolvesAuthClientIp(new Headers({ "x-vercel-forwarded-for": value }), PROD_ENV),
+        `disagreed on ${JSON.stringify(value)}`,
+      ).toBe(expected);
+    }
+  });
+
+  it("mirrors Better Auth's toBoolean for the TEST flag", () => {
+    // `!!env.TEST` treated the string "false" as true, because a non-empty
+    // string is truthy. Better Auth's toBoolean does not.
+    expect(resolvesAuthClientIp(new Headers(), { TEST: "false" })).toBe(false);
+    expect(resolvesAuthClientIp(new Headers(), { TEST: "" })).toBe(false);
+    expect(resolvesAuthClientIp(new Headers(), { TEST: "true" })).toBe(true);
+    expect(resolvesAuthClientIp(new Headers(), { TEST: "1" })).toBe(true);
+  });
+
+  it("accepts a Request as well as Headers, so callers pass what Better Auth sees", () => {
+    const request = new Request("https://sponsee.app/api/auth/sign-in/magic-link", {
+      method: "POST",
+      headers: { "x-vercel-forwarded-for": LIVE_CLIENT_IP },
+    });
+
+    expect(resolvesAuthClientIp(request, PROD_ENV)).toBe(true);
   });
 
   it("assumes a resolvable address off production, as Better Auth does", () => {
