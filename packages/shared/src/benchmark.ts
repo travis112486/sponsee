@@ -2,12 +2,28 @@
 // Source of truth for the pricing formula bands and adjustments.
 // Loaded from DB at runtime so it can be edited without deploy.
 
+/**
+ * Band rates for the CPVH pricing formula.
+ *
+ * UNITS — read before deriving any published number from these values.
+ * `compute()` evaluates `price_cents = ccv * durationMinutes * band *
+ * multiplier`, so it consumes a band as **cents per viewer-minute**. A band of
+ * 0.60 therefore bills $0.006 per viewer-minute, i.e. **$0.36 per viewer-hour**.
+ *
+ * The v1 defaults below (0.60 / 1.05 / 2.00) were authored as *dollars per
+ * viewer-hour* — they mirror the $0.60–$1.50/viewer-hour band (≈$2.00 agency)
+ * quoted on the marketing site, and the type is named for cost per viewer-HOUR.
+ * The formula does not reproduce that reading: it lands ~40% low. SPO-93 owns
+ * the fix and the decision of which side moves. Until it closes, treat the
+ * per-viewer-hour figures here as the calculator's real output and do not
+ * present these constants as the published band.
+ */
 export interface CpvhBands {
-  /** floor rate — e.g. 0.60 means $0.006 per viewer-minute */
+  /** floor rate — 0.60 = $0.006 per viewer-minute = $0.36 per viewer-hour */
   floor: number;
-  /** mid-market rate — e.g. 1.05 means $0.0105 per viewer-minute */
+  /** mid-market rate — 1.05 = $0.0105 per viewer-minute = $0.63 per viewer-hour */
   mid: number;
-  /** agency / premium rate — e.g. 2.0 means $0.02 per viewer-minute */
+  /** agency / premium rate — 2.00 = $0.02 per viewer-minute = $1.20 per viewer-hour */
   agency: number;
 }
 
