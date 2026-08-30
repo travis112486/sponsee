@@ -171,7 +171,7 @@ CREATE TABLE contracts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX contracts_deal_idx ON contracts(deal_id);
+CREATE UNIQUE INDEX contracts_deal_idx ON contracts(deal_id);
 
 CREATE TABLE invoices (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -421,6 +421,25 @@ describe("contract router", () => {
         "attached",
         "updated",
       ]);
+    });
+
+    it("converges to a single row when two upserts race on the same deal", async () => {
+      const callerA = contractRouter.createCaller(mockCtx(creatorAId));
+      const callerB = contractRouter.createCaller(mockCtx(creatorAId));
+
+      const [first, second] = await Promise.all([
+        callerA.upsert({ dealId: dealAId, bodyText: "race v1" }),
+        callerB.upsert({ dealId: dealAId, bodyText: "race v2" }),
+      ]);
+
+      expect(first.id).toBe(second.id);
+
+      const all = await db
+        .select()
+        .from(schema.contracts)
+        .where(eq(schema.contracts.dealId, dealAId));
+      expect(all).toHaveLength(1);
+      expect(["race v1", "race v2"]).toContain(all[0].bodyText);
     });
 
     it("rejects when neither text nor URL is provided", async () => {

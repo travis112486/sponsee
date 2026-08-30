@@ -188,7 +188,7 @@ CREATE TABLE contracts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX contracts_deal_idx ON contracts(deal_id);
+CREATE UNIQUE INDEX contracts_deal_idx ON contracts(deal_id);
 
 CREATE TABLE invoices (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

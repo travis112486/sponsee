@@ -46,32 +46,32 @@ export const contractRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const deal = await getOwnedDeal(ctx, input.dealId);
-      const [existing] = await ctx.db
-        .select()
-        .from(contracts)
-        .where(eq(contracts.dealId, input.dealId));
+      const existedBefore = Boolean(
+        (
+          await ctx.db
+            .select({ id: contracts.id })
+            .from(contracts)
+            .where(eq(contracts.dealId, input.dealId))
+        )[0]
+      );
 
       const values = {
         bodyText: input.bodyText?.trim() || null,
         fileUrl: input.fileUrl || null,
       };
 
-      let contract;
-      let action: "attached" | "updated";
-      if (existing) {
-        [contract] = await ctx.db
-          .update(contracts)
-          .set({ ...values, updatedAt: new Date() })
-          .where(eq(contracts.id, existing.id))
-          .returning();
-        action = "updated";
-      } else {
-        [contract] = await ctx.db
-          .insert(contracts)
-          .values({ dealId: input.dealId, ...values })
-          .returning();
-        action = "attached";
-      }
+      // Concurrent double-clicks race on the select-then-insert above, so the
+      // unique index on deal_id is the real guard — onConflictDoUpdate makes
+      // the loser of the race converge on an update instead of a 23505.
+      const [contract] = await ctx.db
+        .insert(contracts)
+        .values({ dealId: input.dealId, ...values })
+        .onConflictDoUpdate({
+          target: contracts.dealId,
+          set: { ...values, updatedAt: new Date() },
+        })
+        .returning();
+      const action: "attached" | "updated" = existedBefore ? "updated" : "attached";
 
       await ctx.db.insert(activityEvents).values({
         creatorId: ctx.creatorId,
