@@ -24,13 +24,17 @@ export interface ComputeResult {
  * Pure function: compute CPVH-based suggested pricing.
  *
  * All monetary values in this module are in **cents** to align with the deal
- * model (valueCents) and invoice model (amountCents).
+ * model (valueCents) and invoice model (amountCents). Band rates are in
+ * **dollars per viewer-hour** — see {@link CpvhBands}.
  *
  * Formula:
- *   price = round(ccv * durationMinutes * bandRate * multiplier)
+ *   viewerHours = ccv * (durationMinutes / 60)
+ *   price_cents = round(viewerHours * bandRate * 100 * multiplier)
  *
- * Where bandRate comes from the benchmark config bands (cents per viewer-minute)
- * and multiplier comes from the deliverable type.
+ * The `* 100` converts the dollars-per-viewer-hour band into cents; the
+ * `/ 60` converts the caller's minutes into the hours the band is quoted in.
+ * Dropping either one is the SPO-93 bug: the two errors are 100/60 = 1.667x
+ * apart, so omitting both at once quoted 60% of the published band.
  */
 export function compute(
   inputs: ComputeInputs,
@@ -58,22 +62,30 @@ export function compute(
 
   const effectiveMultiplier = multiplier * platformAdjustment;
 
-  const floor = Math.round(
-    ccv * durationMinutes * config.cpvhBands.floor * effectiveMultiplier
-  );
-  const mid = Math.round(
-    ccv * durationMinutes * config.cpvhBands.mid * effectiveMultiplier
-  );
-  const agency = Math.round(
-    ccv * durationMinutes * config.cpvhBands.agency * effectiveMultiplier
-  );
+  const viewerHours = viewerHoursOf(ccv, durationMinutes);
+  const priceCents = (bandRate: number) =>
+    Math.round(viewerHours * bandRate * 100 * effectiveMultiplier);
 
-  return { floor, mid, agency };
+  return {
+    floor: priceCents(config.cpvhBands.floor),
+    mid: priceCents(config.cpvhBands.mid),
+    agency: priceCents(config.cpvhBands.agency),
+  };
+}
+
+/** Viewer-hours bought by `ccv` concurrent viewers over `durationMinutes`. */
+export function viewerHoursOf(ccv: number, durationMinutes: number): number {
+  return ccv * (durationMinutes / 60);
 }
 
 /**
- * Compute the implied CPVH rate (dollars per viewer-minute) for a given deal value.
- * Useful for showing where an actual deal sits vs benchmark bands.
+ * Compute the implied CPVH rate (**dollars per viewer-hour**) for a given deal
+ * value. Useful for showing where an actual deal sits vs benchmark bands.
+ *
+ * This is the exact inverse of {@link compute} at multiplier 1.0, and is on the
+ * same scale as {@link CpvhBands} — a deal priced at the mid band returns the
+ * mid band rate. Keep it that way: the Calculator and Dashboard render this
+ * number directly against the published $0.60–$2.00 axis (SPO-93).
  */
 export function impliedCpvh(
   valueCents: number,
@@ -81,5 +93,5 @@ export function impliedCpvh(
   durationMinutes: number
 ): number {
   if (ccv <= 0 || durationMinutes <= 0 || valueCents <= 0) return 0;
-  return (valueCents / 100) / (ccv * durationMinutes);
+  return valueCents / 100 / viewerHoursOf(ccv, durationMinutes);
 }

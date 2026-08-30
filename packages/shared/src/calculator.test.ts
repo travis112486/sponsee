@@ -5,20 +5,20 @@ import { defaultBenchmarkConfig } from "./benchmark.js";
 describe("calculator.compute", () => {
   const config = defaultBenchmarkConfig;
 
-  // All monetary values in the calculator are in **cents**.
-  // For 500 CCV × 60 min, ad-read (1.0×):
-  //   floor = round(500 * 60 * 0.6  * 1.0) = 18000 cents = $180
-  //   mid   = round(500 * 60 * 1.05 * 1.0) = 31500 cents = $315
-  //   agency= round(500 * 60 * 2.0  * 1.0) = 60000 cents = $600
+  // All monetary values in the calculator are in **cents**; bands are dollars
+  // per viewer-hour. 500 CCV × 60 min = 500 viewer-hours, so for ad-read (1.0×):
+  //   floor = round(500 * 0.6  * 100 * 1.0) =  30000 cents = $300
+  //   mid   = round(500 * 1.05 * 100 * 1.0) =  52500 cents = $525
+  //   agency= round(500 * 2.0  * 100 * 1.0) = 100000 cents = $1000
 
   it("returns correct cents for ad-read (500 CCV, 60 min, 1.0x)", () => {
     const result = compute(
       { ccv: 500, durationMinutes: 60, deliverableType: "ad-read" },
       config
     );
-    expect(result.floor).toBe(18000); // $180
-    expect(result.mid).toBe(31500); // $315
-    expect(result.agency).toBe(60000); // $600
+    expect(result.floor).toBe(30000); // $300
+    expect(result.mid).toBe(52500); // $525
+    expect(result.agency).toBe(100000); // $1000
   });
 
   it("returns correct cents for segment (500 CCV, 60 min, 1.25x)", () => {
@@ -26,9 +26,9 @@ describe("calculator.compute", () => {
       { ccv: 500, durationMinutes: 60, deliverableType: "segment" },
       config
     );
-    expect(result.floor).toBe(22500); // $225
-    expect(result.mid).toBe(39375); // $393.75 → 39375 cents
-    expect(result.agency).toBe(75000); // $750
+    expect(result.floor).toBe(37500); // $375
+    expect(result.mid).toBe(65625); // $656.25 → 65625 cents
+    expect(result.agency).toBe(125000); // $1250
   });
 
   it("returns correct cents for vod (500 CCV, 60 min, 1.6x)", () => {
@@ -36,9 +36,9 @@ describe("calculator.compute", () => {
       { ccv: 500, durationMinutes: 60, deliverableType: "vod" },
       config
     );
-    expect(result.floor).toBe(28800); // $288
-    expect(result.mid).toBe(50400); // $504
-    expect(result.agency).toBe(96000); // $960
+    expect(result.floor).toBe(48000); // $480
+    expect(result.mid).toBe(84000); // $840
+    expect(result.agency).toBe(160000); // $1600
   });
 
   it("returns zero for non-positive inputs", () => {
@@ -111,17 +111,17 @@ describe("calculator.compute", () => {
       { ccv: 500, durationMinutes: 60, deliverableType: "unknown" },
       config
     );
-    expect(result.floor).toBe(18000);
-    expect(result.mid).toBe(31500);
-    expect(result.agency).toBe(60000);
+    expect(result.floor).toBe(30000);
+    expect(result.mid).toBe(52500);
+    expect(result.agency).toBe(100000);
   });
 });
 
 describe("calculator.impliedCpvh", () => {
   it("computes correct implied rate", () => {
-    // $315 for 500 viewers * 60 minutes = 30,000 viewer-minutes
-    // $315 / 30,000 = $0.0105 per viewer-minute
-    expect(impliedCpvh(31500, 500, 60)).toBeCloseTo(0.0105, 4);
+    // $525 for 500 viewers * 60 minutes = 500 viewer-hours
+    // $525 / 500 = $1.05 per viewer-hour — exactly the mid band
+    expect(impliedCpvh(52500, 500, 60)).toBeCloseTo(1.05, 10);
   });
 
   it("returns 0 for invalid inputs", () => {

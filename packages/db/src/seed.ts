@@ -291,7 +291,10 @@ async function seed() {
 
   console.log("Created invoice chase state");
 
-  // Seed benchmark config v1
+  // Seed benchmark config v1.
+  // cpvh_bands are dollars per viewer-hour (see CpvhBands in @sponsee/shared).
+  // These match the band published on the marketing site; SPO-93 fixed the
+  // formula that consumed them, not the values, so existing rows stay valid.
   await db.insert(schema.benchmarkConfigs).values({
     version: 1,
     effectiveDate: new Date("2024-01-01"),

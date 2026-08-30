@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Routes, Route, Navigate } from "react-router";
+import { Routes, Route } from "react-router";
 import Layout from "./components/Layout";
 import RequireAuth from "./components/RequireAuth";
 
@@ -9,7 +9,9 @@ const DealDetail = lazy(() => import("./pages/DealDetail"));
 const Payments = lazy(() => import("./pages/Payments"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const CalendarPage = lazy(() => import("./pages/CalendarPage"));
+const Calculator = lazy(() => import("./pages/Calculator"));
 const LoginPage = lazy(() => import("./pages/auth/LoginPage"));
+const NotFound = lazy(() => import("./pages/NotFound"));
 
 function PageSpinner() {
   return (
@@ -75,9 +77,23 @@ export default function App() {
             </Suspense>
           }
         />
-        {/* Rate Calculator remains post-beta scope (SPO-5 §10). */}
-        <Route path="calculator" element={<Navigate to="/" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        {/* Pulled forward from post-beta into the ASAP build (SPO-53). */}
+        <Route
+          path="calculator"
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <Calculator />
+            </Suspense>
+          }
+        />
+        <Route
+          path="*"
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <NotFound />
+            </Suspense>
+          }
+        />
       </Route>
     </Routes>
   );
