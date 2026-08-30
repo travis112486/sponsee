@@ -5,7 +5,7 @@ import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { defaultChaseTemplates, defaultChaseOffsets } from "@sponsee/shared";
 import nodemailer from "nodemailer";
-import { ipAddressHeaders, trustedProxies } from "./client-ip.js";
+import { ipAddressHeaders, resolvesAuthClientIp } from "./client-ip.js";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -25,6 +25,42 @@ export function rateLimitEnabled(env: Record<string, string | undefined> = proce
   if (override !== undefined && override !== "") return override === "true";
   return !(env.NODE_ENV === "test" || !!env.VITEST);
 }
+/**
+ * Sign-in limits to apply when the client address could not be resolved.
+ *
+ * Better Auth does not skip rate limiting when it cannot identify the caller —
+ * it puts every caller into one `no-trusted-ip` bucket and applies the
+ * per-caller rule to it. On the entry paths those rules are 5 per 60s
+ * (magic-link plugin) and 3 per 10s (built-in sign-in rule), which as a global
+ * cap is a site-wide sign-in outage, not a limit.
+ *
+ * So the degraded case gets its own ceiling: still bounded, because the point
+ * of the limit is to stop our domain being used to bomb an arbitrary inbox, but
+ * high enough that it is not itself the outage. One per second is far above
+ * anything beta traffic produces and far below a useful mail flood.
+ */
+const SHARED_BUCKET_RULE = { window: 60, max: 60 };
+
+/**
+ * Paths where a shared bucket would be user-visible: `/sign-in/*` covers
+ * magic-link requests and the Google redirect, `/magic-link/*` covers the
+ * verify hop the user's browser makes when they click the emailed link — which
+ * carries the same 5-per-60s plugin rule and so fails the same way.
+ */
+const AUTH_ENTRY_PATHS = ["/sign-in/*", "/magic-link/*"];
+
+/**
+ * Keeps a per-caller rule per-caller: pass it through untouched when Better
+ * Auth can key on a client address, and swap in the shared ceiling when it
+ * cannot.
+ */
+function perCallerOrSharedCeiling(
+  request: Request,
+  currentRule: { window: number; max: number },
+) {
+  return resolvesAuthClientIp(request.headers) ? currentRule : SHARED_BUCKET_RULE;
+}
+
 const baseURL = process.env.BETTER_AUTH_URL || "http://localhost:3001";
 const webURL = process.env.WEB_URL || "http://localhost:3000";
 
@@ -154,6 +190,9 @@ export const auth: AuthInstance = betterAuth({
   rateLimit: {
     enabled: rateLimitEnabled(),
     storage: "database",
+    customRules: Object.fromEntries(
+      AUTH_ENTRY_PATHS.map((path) => [path, perCallerOrSharedCeiling]),
+    ),
   },
   advanced: {
     cookiePrefix: "sponsee",
@@ -161,7 +200,6 @@ export const auth: AuthInstance = betterAuth({
     disableOriginCheck: false, // enforce even in test mode; trustedOrigins drives allow-list
     ipAddress: {
       ipAddressHeaders: ipAddressHeaders(),
-      trustedProxies: trustedProxies(),
     },
   },
   databaseHooks: {
