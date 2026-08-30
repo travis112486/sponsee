@@ -2,7 +2,13 @@ import { useState } from "react";
 import { trpc } from "@/trpc";
 import { toast } from "sonner";
 import { Loader2, ArrowUpRight, CheckCircle2, AlertCircle } from "lucide-react";
-import { planPricesCents, planDealSlots, planLabels } from "@sponsee/shared";
+import {
+  planPricesCents,
+  planDealSlots,
+  planLabels,
+  isPaidSubscription,
+  hasLiveSubscription,
+} from "@sponsee/shared";
 import type { PlanTier } from "@sponsee/shared";
 import QueryError from "@/components/QueryError";
 
@@ -110,20 +116,16 @@ export default function BillingPanel() {
 
   const currentPlan = subscription?.plan ?? "starter";
   const currentStatus = subscription?.status ?? null;
-  const isPaid = currentStatus === "active" || currentStatus === "trialing";
+  const isPaid = isPaidSubscription(currentStatus);
   // `past_due` / `unpaid` / `paused` grant no entitlements but the subscription
   // is still live in Stripe, so the API refuses a fresh checkout for them — it
   // would bill a second subscription alongside the existing one. The portal is
   // where a card gets fixed and a pause gets lifted, so it has to stay reachable
   // or those creators hit a dead end with no way back to paying us (SPO-87
-  // HIGH-1, SPO-97). Must stay in step with `liveStatuses` in
-  // apps/api/src/billing/entitlements.ts — this list is hand-copied, and the two
-  // disagreeing means the UI offers a button whose only outcome is a 409 toast.
-  const hasLiveSubscription =
-    isPaid ||
-    currentStatus === "past_due" ||
-    currentStatus === "unpaid" ||
-    currentStatus === "paused";
+  // HIGH-1, SPO-97). This calls the same predicate the API guards with rather
+  // than re-deriving it: a hand-copied list that fell behind would offer a
+  // button whose only outcome is a 409 toast (SPO-120).
+  const hasLive = hasLiveSubscription(currentStatus);
   const dealSlotLimit = subscription?.dealSlotLimit ?? planDealSlots[currentPlan];
   const activeDealCount = subscription?.activeDealCount ?? 0;
   const usagePct = dealSlotLimit > 0 ? Math.min(100, (activeDealCount / dealSlotLimit) * 100) : 0;
@@ -153,7 +155,7 @@ export default function BillingPanel() {
           </div>
         </div>
 
-        {hasLiveSubscription && (
+        {hasLive && (
           <div className="mt-4 flex gap-3">
             <button
               onClick={() => portal.mutate()}
@@ -176,11 +178,11 @@ export default function BillingPanel() {
 
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
           {tiers.map((tier) => {
-            const isCurrent = currentPlan === tier && hasLiveSubscription;
+            const isCurrent = currentPlan === tier && hasLive;
             // Subscription already exists, different tier — a portal plan
             // change, not a new checkout. Covers both directions; a downgrade
             // isn't special.
-            const isPlanChange = hasLiveSubscription && tier !== currentPlan;
+            const isPlanChange = hasLive && tier !== currentPlan;
             const price = planPricesCents[tier];
             const slots = planDealSlots[tier];
 
