@@ -397,7 +397,10 @@ describe("PlatformsPanel", () => {
       mockSearchParams = new URLSearchParams("connected=twitch");
       setQueryState({ isLoading: false, isError: false, data: [] });
       render(<PlatformsPanel />);
-      expect(mockCompleteConnectReturn.mutate).toHaveBeenCalledWith({ platform: "twitch" });
+      expect(mockCompleteConnectReturn.mutate).toHaveBeenCalledWith(
+        { platform: "twitch" },
+        expect.objectContaining({ onError: expect.any(Function) })
+      );
       expect(mockSetSearchParams).toHaveBeenCalled();
       const cleaned = mockSetSearchParams.mock.calls[0][0] as URLSearchParams;
       expect(cleaned.has("connected")).toBe(false);
@@ -411,6 +414,19 @@ describe("PlatformsPanel", () => {
       expect(toastMocks.error).toHaveBeenCalledWith(
         expect.stringContaining("Couldn't connect Twitch")
       );
+    });
+
+    it("still attempts completion on a state_mismatch error — a replayed callback means the link may have landed", () => {
+      mockSearchParams = new URLSearchParams("connect_error=twitch&error=state_mismatch");
+      setQueryState({ isLoading: false, isError: false, data: [] });
+      render(<PlatformsPanel />);
+      expect(mockCompleteConnectReturn.mutate).toHaveBeenCalledWith(
+        { platform: "twitch" },
+        expect.objectContaining({ onError: expect.any(Function) })
+      );
+      // The error toast is deferred to the mutation's onError — no toast until
+      // the server confirms the link really didn't land.
+      expect(toastMocks.error).not.toHaveBeenCalled();
     });
   });
 });
