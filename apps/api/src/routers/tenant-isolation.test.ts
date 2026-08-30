@@ -1,9 +1,13 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { eq, and, sql } from "drizzle-orm";
-import { settingsRouter } from "../routers/settings.js";
+import {
+  settingsRouter,
+  syncNowLimiter,
+  SYNC_NOW_MAX_PER_WINDOW,
+} from "../routers/settings.js";
 import { brandRouter } from "../routers/brand.js";
 import { deliverableRouter } from "../routers/deliverable.js";
 import { proofRouter } from "../routers/proof.js";
@@ -572,6 +576,116 @@ describe("settings router tenant isolation", () => {
         .from(schema.creatorPlatforms)
         .where(eq(schema.creatorPlatforms.id, platformBId));
       expect(row.ccv).toBe(200);
+    });
+
+    it("keeps sync state when saving with an unchanged handle", async () => {
+      // The panel sends `handle` on every save; an edit that doesn't change it
+      // (e.g. updating CCV) must not wipe the row's sync state.
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ handle: "streamer-a", syncStatus: "ok", lastSyncedAt: new Date() })
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.upsertPlatform({
+        id: platformAId,
+        platform: "twitch",
+        ccv: 555,
+        handle: "streamer-a",
+      });
+      expect(result?.ccv).toBe(555);
+      expect(result?.syncStatus).toBe("ok");
+    });
+
+    it("resets sync state when the handle changes", async () => {
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ handle: "streamer-a", syncStatus: "error", syncError: "old failure" })
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.upsertPlatform({
+        id: platformAId,
+        platform: "twitch",
+        handle: "brand-new-handle",
+      });
+      expect(result?.syncStatus).toBe("never");
+      expect(result?.syncError).toBeNull();
+    });
+  });
+
+  describe("syncPlatform", () => {
+    beforeEach(() => {
+      // Fresh throttle budget per test; the limiter is module-level state.
+      syncNowLimiter.reset();
+      // Force every platform client into its unconfigured state so no test
+      // can reach a real upstream API, whatever the local shell exports.
+      vi.stubEnv("TWITCH_CLIENT_ID", "");
+      vi.stubEnv("TWITCH_CLIENT_SECRET", "");
+      vi.stubEnv("KICK_CLIENT_ID", "");
+      vi.stubEnv("KICK_CLIENT_SECRET", "");
+      vi.stubEnv("YOUTUBE_API_KEY", "");
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("throws NOT_FOUND for a cross-creator platform, even one with a handle", async () => {
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ handle: "streamer-b" })
+        .where(eq(schema.creatorPlatforms.id, platformBId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      await expect(caller.syncPlatform({ id: platformBId })).rejects.toSatisfy(
+        (err: TRPCError) => err.code === "NOT_FOUND"
+      );
+    });
+
+    it("does not touch the cross-creator row's sync state on rejection", async () => {
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ handle: "streamer-b" })
+        .where(eq(schema.creatorPlatforms.id, platformBId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      try {
+        await caller.syncPlatform({ id: platformBId });
+      } catch {
+        // expected
+      }
+
+      const [row] = await db
+        .select()
+        .from(schema.creatorPlatforms)
+        .where(eq(schema.creatorPlatforms.id, platformBId));
+      expect(row.syncStatus).toBe("never");
+      expect(row.lastSyncedAt).toBeNull();
+    });
+
+    it("throws BAD_REQUEST for an owned platform without a handle", async () => {
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      await expect(caller.syncPlatform({ id: platformAId })).rejects.toSatisfy(
+        (err: TRPCError) => err.code === "BAD_REQUEST"
+      );
+    });
+
+    it("throttles repeated syncs per creator with TOO_MANY_REQUESTS", async () => {
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ handle: "streamer-a" })
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      // With unconfigured clients each call is a no-op sync, so this only
+      // exercises the limiter, never the network.
+      for (let i = 0; i < SYNC_NOW_MAX_PER_WINDOW; i++) {
+        await caller.syncPlatform({ id: platformAId });
+      }
+      await expect(caller.syncPlatform({ id: platformAId })).rejects.toSatisfy(
+        (err: TRPCError) => err.code === "TOO_MANY_REQUESTS"
+      );
     });
   });
 

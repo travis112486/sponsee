@@ -274,4 +274,69 @@ describe("deployable migration smoke test", () => {
       "send_job_id",
     ]);
   });
+
+  // 0007. The API suite's PGlite fixtures declare both `activity_events.kind`
+  // and `creator_platforms.sync_status` as VARCHAR(32), so the sync job's
+  // writes pass every test in the repo whether or not the enum values exist —
+  // the same blind spot 'paused' had (SPO-97). These prove the real migrated
+  // types accept what `syncPlatformRow` writes, and that the `ALTER TYPE
+  // activity_kind ADD VALUE` actually landed.
+  it("extends activity_kind with 'platform_sync' and round-trips a row (0007)", async () => {
+    const enumRes = await client.query<{ label: string }>(
+      `SELECT e.enumlabel AS label
+         FROM pg_type t
+         JOIN pg_enum e ON e.enumtypid = t.oid
+        WHERE t.typname = 'activity_kind'
+        ORDER BY e.enumsortorder`,
+    );
+    expect(enumRes.rows.map((r) => r.label)).toContain("platform_sync");
+
+    await client.exec(`
+      INSERT INTO activity_events (creator_id, actor, entity_type, entity_id, kind, payload)
+      VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'system', 'creator_platform',
+              'cccccccc-cccc-cccc-cccc-cccccccccccc', 'platform_sync',
+              '{"platform": "twitch"}');
+    `);
+
+    const res = await client.query<{ kind: string }>(
+      `SELECT kind FROM activity_events
+        WHERE entity_id = 'cccccccc-cccc-cccc-cccc-cccccccccccc'`,
+    );
+    expect(res.rows[0].kind).toBe("platform_sync");
+  });
+
+  it("enforces platform_sync_status on creator_platforms.sync_status (0007)", async () => {
+    // The column defaults to 'never' — a fresh row must come back with it.
+    await client.exec(`
+      INSERT INTO creator_platforms (id, creator_id, platform, handle)
+      VALUES ('dddddddd-dddd-dddd-dddd-dddddddddddd',
+              'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'twitch', 'teststreamer');
+    `);
+    const fresh = await client.query<{ sync_status: string }>(
+      `SELECT sync_status FROM creator_platforms
+        WHERE id = 'dddddddd-dddd-dddd-dddd-dddddddddddd'`,
+    );
+    expect(fresh.rows[0].sync_status).toBe("never");
+
+    // Both terminal states the sync job writes.
+    for (const status of ["ok", "error"]) {
+      await client.exec(`
+        UPDATE creator_platforms SET sync_status = '${status}'
+         WHERE id = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
+      `);
+      const res = await client.query<{ sync_status: string }>(
+        `SELECT sync_status FROM creator_platforms
+          WHERE id = 'dddddddd-dddd-dddd-dddd-dddddddddddd'`,
+      );
+      expect(res.rows[0].sync_status).toBe(status);
+    }
+
+    // And it is a real enum, not a varchar: garbage must be rejected.
+    await expect(
+      client.exec(`
+        UPDATE creator_platforms SET sync_status = 'garbage'
+         WHERE id = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
+      `),
+    ).rejects.toThrow(/invalid input value for enum platform_sync_status/);
+  });
 });

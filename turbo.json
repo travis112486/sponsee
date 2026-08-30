@@ -1,7 +1,15 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": ["**/.env.*local"],
-  "globalEnv": ["DATABASE_URL", "DATABASE_URL_UNPOOLED"],
+  "globalEnv": [
+    "DATABASE_URL",
+    "DATABASE_URL_UNPOOLED",
+    "TWITCH_CLIENT_ID",
+    "TWITCH_CLIENT_SECRET",
+    "KICK_CLIENT_ID",
+    "KICK_CLIENT_SECRET",
+    "YOUTUBE_API_KEY"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

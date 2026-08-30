@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { trpc } from "@/trpc";
 import { toast } from "sonner";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { platforms, type Platform } from "@sponsee/shared";
 import QueryError from "@/components/QueryError";
 import { applyServerFieldErrors, serverErrorMessage } from "@/lib/trpc-error";
@@ -14,7 +14,11 @@ const platformSchema = z.object({
   ccv: z.coerce.number().int().min(0).optional(),
   followers: z.coerce.number().int().min(0).optional(),
   scheduleLabel: z.string().max(255).optional(),
+  handle: z.string().max(255).optional(),
 });
+
+// Platforms with a public stats API (TikTok Live stays manual entry)
+const SYNCABLE: ReadonlySet<string> = new Set(["twitch", "kick", "youtube"]);
 
 type PlatformForm = z.infer<typeof platformSchema>;
 
@@ -45,6 +49,17 @@ export default function PlatformsPanel() {
     },
     onError: (err) => toast.error(err.message || "Failed to remove platform"),
   });
+  const sync = trpc.settings.syncPlatform.useMutation({
+    onSuccess: (row) => {
+      if (row.syncStatus === "ok") {
+        toast.success("Stats synced");
+      } else {
+        toast.error(row.syncError || "Sync failed — stats unchanged");
+      }
+      utils.settings.getPlatforms.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "Failed to sync"),
+  });
 
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -61,11 +76,12 @@ export default function PlatformsPanel() {
       ccv: undefined,
       followers: undefined,
       scheduleLabel: "",
+      handle: "",
     },
   });
 
   const resetForm = () => {
-    reset({ platform: "twitch", ccv: undefined, followers: undefined, scheduleLabel: "" });
+    reset({ platform: "twitch", ccv: undefined, followers: undefined, scheduleLabel: "", handle: "" });
     setEditingId(null);
   };
 
@@ -75,6 +91,7 @@ export default function PlatformsPanel() {
     ccv: number | null;
     followers: number | null;
     scheduleLabel: string | null;
+    handle: string | null;
   }) => {
     setEditingId(p.id);
     reset({
@@ -82,6 +99,7 @@ export default function PlatformsPanel() {
       ccv: p.ccv ?? undefined,
       followers: p.followers ?? undefined,
       scheduleLabel: p.scheduleLabel ?? "",
+      handle: p.handle ?? "",
     });
   };
 
@@ -92,11 +110,13 @@ export default function PlatformsPanel() {
       ccv: number | null;
       followers: number | null;
       scheduleLabel: string | null;
+      handle: string | null;
     } = {
       platform: form.platform,
       ccv: form.ccv ?? null,
       followers: form.followers ?? null,
       scheduleLabel: form.scheduleLabel || null,
+      handle: form.handle?.trim() || null,
     };
     if (editingId) {
       input.id = editingId;
@@ -134,20 +154,60 @@ export default function PlatformsPanel() {
             className="flex items-center justify-between rounded-lg border border-hairline bg-surface px-4 py-3"
           >
             <div className="flex items-center gap-4">
-              <span className="text-[13.5px] font-semibold capitalize text-ink">{p.platform}</span>
-              {p.ccv != null && (
-                <span className="text-[12.5px] text-ink-3">CCV: {p.ccv.toLocaleString()}</span>
+              {p.avatarUrl && (
+                <img
+                  src={p.avatarUrl}
+                  alt=""
+                  className="h-8 w-8 rounded-full border border-hairline object-cover"
+                />
               )}
-              {p.followers != null && (
-                <span className="text-[12.5px] text-ink-3">
-                  Followers: {p.followers.toLocaleString()}
-                </span>
-              )}
-              {p.scheduleLabel && (
-                <span className="text-[12.5px] text-ink-3">{p.scheduleLabel}</span>
-              )}
+              <div className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-4">
+                  <span className="text-[13.5px] font-semibold capitalize text-ink">{p.platform}</span>
+                  {p.handle && <span className="text-[12.5px] text-ink-3">@{p.handle}</span>}
+                  {p.ccv != null && (
+                    <span className="text-[12.5px] text-ink-3">CCV: {p.ccv.toLocaleString()}</span>
+                  )}
+                  {p.subscriberCount != null && (
+                    <span className="text-[12.5px] text-ink-3">
+                      Subs: {p.subscriberCountIsEstimate ? "~" : ""}
+                      {p.subscriberCount.toLocaleString()}
+                    </span>
+                  )}
+                  {p.followers != null && (
+                    <span className="text-[12.5px] text-ink-3">
+                      Followers: {p.followers.toLocaleString()}
+                    </span>
+                  )}
+                  {p.scheduleLabel && (
+                    <span className="text-[12.5px] text-ink-3">{p.scheduleLabel}</span>
+                  )}
+                </div>
+                {p.syncStatus === "ok" && p.lastSyncedAt && (
+                  <span className="text-[11.5px] text-ink-3">
+                    Last synced {new Date(p.lastSyncedAt).toLocaleString()}
+                  </span>
+                )}
+                {p.syncStatus === "error" && (
+                  <span className="text-[11.5px] text-brick">
+                    Sync failed — showing last known values
+                  </span>
+                )}
+              </div>
             </div>
             <div className="flex items-center gap-2">
+              {SYNCABLE.has(p.platform) && p.handle && (
+                <button
+                  onClick={() => sync.mutate({ id: p.id })}
+                  disabled={sync.isPending && sync.variables?.id === p.id}
+                  className="flex items-center gap-1 text-[12.5px] font-medium text-pine hover:text-pine-hover disabled:opacity-50"
+                >
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 ${sync.isPending && sync.variables?.id === p.id ? "animate-spin" : ""}`}
+                  />
+                  Sync now
+                </button>
+              )}
               <button
                 onClick={() => startEdit(p)}
                 className="text-[12.5px] font-medium text-pine hover:text-pine-hover"
@@ -189,6 +249,19 @@ export default function PlatformsPanel() {
             {errors.platform && (
               <p className="mt-1 text-[12px] text-brick">{errors.platform.message}</p>
             )}
+          </div>
+
+          <div>
+            <label htmlFor="handle" className="mb-1.5 block text-[12.5px] font-medium text-ink">Channel handle</label>
+            <input
+              id="handle"
+              {...register("handle")}
+              placeholder="e.g. yourchannel"
+              className="h-10 w-full rounded-lg border border-hairline bg-surface px-3 text-[13.5px] text-ink outline-none placeholder:text-ink-3 focus:border-pine focus:ring-1 focus:ring-pine"
+            />
+            <p className="mt-1 text-[11.5px] text-ink-3">
+              Twitch/Kick/YouTube: we auto-fill subs, followers, and avatar daily. Leave blank to enter numbers manually.
+            </p>
           </div>
 
           <div>
