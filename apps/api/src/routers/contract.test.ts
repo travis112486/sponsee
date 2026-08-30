@@ -431,7 +431,6 @@ describe("contract router", () => {
     it("rejects non-http(s) links", async () => {
       const caller = contractRouter.createCaller(mockCtx(creatorAId));
       await expect(
-        // eslint-disable-next-line no-script-url
         caller.upsert({ dealId: dealAId, fileUrl: "javascript:alert(1)" })
       ).rejects.toThrow();
     });
