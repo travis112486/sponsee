@@ -257,6 +257,11 @@ export const proofs = pgTable(
     kind: proofKindEnum("kind").notNull(),
     url: text("url"),
     note: text("note"),
+    // Storage-backed evidence (SPO-108): set only for `kind = file`.
+    storageKey: text("storage_key"),
+    mimeType: varchar("mime_type", { length: 255 }),
+    sizeBytes: integer("size_bytes"),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("proofs_deal_idx").on(t.dealId)]
@@ -273,6 +278,12 @@ export const contracts = pgTable(
     status: contractStatusEnum("status").notNull().default("draft"),
     bodyText: text("body_text"),
     fileUrl: text("file_url"),
+    // Storage-backed contract PDF (SPO-108): set when the PDF is uploaded in
+    // platform rather than pasted as a link.
+    storageKey: text("storage_key"),
+    mimeType: varchar("mime_type", { length: 255 }),
+    sizeBytes: integer("size_bytes"),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }),
     signedAt: timestamp("signed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

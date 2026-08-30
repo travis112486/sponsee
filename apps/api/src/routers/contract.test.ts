@@ -155,6 +155,10 @@ CREATE TABLE proofs (
   kind VARCHAR(32) NOT NULL,
   url TEXT,
   note TEXT,
+  storage_key TEXT,
+  mime_type VARCHAR(255),
+  size_bytes INTEGER,
+  uploaded_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -166,6 +170,10 @@ CREATE TABLE contracts (
   status VARCHAR(32) NOT NULL DEFAULT 'draft',
   body_text TEXT,
   file_url TEXT,
+  storage_key TEXT,
+  mime_type VARCHAR(255),
+  size_bytes INTEGER,
+  uploaded_at TIMESTAMPTZ,
   signed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

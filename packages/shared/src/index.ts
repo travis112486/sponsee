@@ -110,9 +110,9 @@ export const defaultChaseTemplates: Array<{
   },
 ];
 
-// Proof kinds — v1 evidence is links + notes only; "file" exists in the DB
-// enum but stays out of this list until storage infra lands (Phase B).
-export const proofKinds = ["vod", "clip", "chat", "overlay", "link"] as const;
+// Proof kinds — links + notes shipped in v1; "file" joins once storage infra
+// landed (SPO-108, Phase B). It has been present in the DB enum all along.
+export const proofKinds = ["vod", "clip", "chat", "overlay", "link", "file"] as const;
 export type ProofKind = (typeof proofKinds)[number];
 
 export const proofKindLabels: Record<ProofKind, string> = {
@@ -121,6 +121,7 @@ export const proofKindLabels: Record<ProofKind, string> = {
   chat: "Chat log",
   overlay: "Overlay",
   link: "Link",
+  file: "File",
 };
 
 // Activity entity kinds
@@ -156,4 +157,35 @@ export const planLabels: Record<PlanTier, string> = {
   starter: "Starter",
   creator: "Creator",
   pro: "Pro",
+};
+
+// ── Storage (SPO-108) ────────────────────────────────────────────────────────
+// Presigned-upload guardrails shared by the API (enforcement) and web (client
+// checks + copy). Never bumped without a matching quota/allowlist review.
+
+/** Per-file cap for presigned uploads (100 MB). */
+export const maxFileUploadBytes = 100 * 1024 * 1024;
+
+/** Allowlist for evidence files: images, PDF, short video. */
+export const proofFileMimeTypes = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "application/pdf",
+  "video/mp4",
+  "video/quicktime",
+  "video/webm",
+] as const;
+export type ProofFileMimeType = (typeof proofFileMimeTypes)[number];
+
+/** Contract uploads are PDF-only. */
+export const contractFileMimeTypes = ["application/pdf"] as const;
+export type ContractFileMimeType = (typeof contractFileMimeTypes)[number];
+
+/** Per-plan storage quota — a paid-tier differentiator. */
+export const planStorageQuotaBytes: Record<PlanTier, number> = {
+  starter: 1 * 1024 * 1024 * 1024, // 1 GB
+  creator: 5 * 1024 * 1024 * 1024, // 5 GB
+  pro: 20 * 1024 * 1024 * 1024, // 20 GB
 };

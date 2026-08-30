@@ -8,9 +8,11 @@ import {
   benchmarkDeliverableTypes,
   proofKinds,
   proofKindLabels,
+  proofFileMimeTypes,
   type ProofKind,
 } from "@sponsee/shared";
 import { cn } from "@/lib/utils";
+import { putToPresignedUrl } from "@/lib/upload";
 import { toast } from "sonner";
 import { BenchmarkBand } from "@/components/BenchmarkBand";
 import { ContractCard } from "@/components/ContractCard";
@@ -125,6 +127,11 @@ export default function DealDetail() {
     },
   });
 
+  const requestProofUpload = trpc.storage.requestUpload.useMutation();
+  const confirmProofUpload = trpc.proof.confirmUpload.useMutation({
+    onError: (err) => toast(err.message),
+  });
+
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>("");
   const [showAddDeliverable, setShowAddDeliverable] = useState(false);
@@ -136,6 +143,8 @@ export default function DealDetail() {
   const [proofKind, setProofKind] = useState<ProofKind>("clip");
   const [proofUrl, setProofUrl] = useState("");
   const [proofNote, setProofNote] = useState("");
+  const [proofFile, setProofFile] = useState<File | null>(null);
+  const [uploadingProof, setUploadingProof] = useState(false);
 
   if (isLoading) {
     return (
@@ -183,9 +192,44 @@ export default function DealDetail() {
     setEditingField(null);
   }
 
-  function handleAddEvidence(e: React.FormEvent, deliverableId: string) {
+  async function handleAddEvidence(e: React.FormEvent, deliverableId: string) {
     e.preventDefault();
     if (!id) return;
+
+    if (proofKind === "file") {
+      if (!proofFile) return;
+      setUploadingProof(true);
+      try {
+        const { uploadUrl, key } = await requestProofUpload.mutateAsync({
+          purpose: "proof",
+          dealId: id,
+          deliverableId,
+          mimeType: proofFile.type,
+          sizeBytes: proofFile.size,
+        });
+        const uploaded = await putToPresignedUrl(proofFile, uploadUrl, key);
+        await confirmProofUpload.mutateAsync({
+          dealId: id,
+          deliverableId,
+          key: uploaded.key,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+          note: proofNote.trim() || undefined,
+        });
+        utils.proof.listByDeal.invalidate({ dealId: id });
+        toast("Evidence added");
+        setProofFile(null);
+        setProofUrl("");
+        setProofNote("");
+        setEvidenceFormId(null);
+      } catch (err) {
+        toast(err instanceof Error ? err.message : "Upload failed");
+      } finally {
+        setUploadingProof(false);
+      }
+      return;
+    }
+
     const url = proofUrl.trim();
     const note = proofNote.trim();
     if (!url && !note) return;
@@ -510,12 +554,21 @@ export default function DealDetail() {
                               </option>
                             ))}
                           </select>
-                          <input
-                            value={proofUrl}
-                            onChange={(e) => setProofUrl(e.target.value)}
-                            placeholder="https:// link (VOD, clip, screenshot…)"
-                            className="sm:col-span-2 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-[12px] text-ink outline-none focus:border-pine"
-                          />
+                          {proofKind === "file" ? (
+                            <input
+                              type="file"
+                              accept={proofFileMimeTypes.join(",")}
+                              onChange={(e) => setProofFile(e.target.files?.[0] ?? null)}
+                              className="sm:col-span-2 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-[12px] text-ink outline-none focus:border-pine file:mr-2 file:rounded file:border-0 file:bg-surface-subtle file:px-2 file:py-1 file:text-[11px] file:text-ink-2"
+                            />
+                          ) : (
+                            <input
+                              value={proofUrl}
+                              onChange={(e) => setProofUrl(e.target.value)}
+                              placeholder="https:// link (VOD, clip, screenshot…)"
+                              className="sm:col-span-2 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-[12px] text-ink outline-none focus:border-pine"
+                            />
+                          )}
                         </div>
                         <input
                           value={proofNote}
@@ -533,10 +586,15 @@ export default function DealDetail() {
                           </button>
                           <button
                             type="submit"
-                            disabled={addProof.isPending || (!proofUrl.trim() && !proofNote.trim())}
+                            disabled={
+                              uploadingProof ||
+                              (proofKind === "file"
+                                ? !proofFile
+                                : addProof.isPending || (!proofUrl.trim() && !proofNote.trim()))
+                            }
                             className="rounded-md bg-pine px-3 py-1 text-[12px] font-medium text-white hover:bg-pine-hover disabled:opacity-50"
                           >
-                            Add evidence
+                            {uploadingProof ? "Uploading…" : proofKind === "file" ? "Upload file" : "Add evidence"}
                           </button>
                         </div>
                       </form>
@@ -661,9 +719,18 @@ function EvidenceRow({
   proof,
   onRemove,
 }: {
-  proof: { id: string; kind: string; url: string | null; note: string | null; createdAt: string | Date };
+  proof: {
+    id: string;
+    kind: string;
+    url: string | null;
+    note: string | null;
+    createdAt: string | Date;
+    presignedUrl?: string | null;
+  };
   onRemove: () => void;
 }) {
+  const href = proof.url ?? proof.presignedUrl ?? null;
+  const isFile = proof.kind === "file";
   return (
     <div className="flex items-start justify-between gap-2 rounded px-1 py-0.5">
       <div className="flex min-w-0 items-start gap-1.5">
@@ -673,14 +740,14 @@ function EvidenceRow({
             <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-ink-3">
               {proofKindLabels[proof.kind as ProofKind] ?? proof.kind}
             </span>
-            {proof.url ? (
+            {href ? (
               <a
-                href={proof.url}
+                href={href}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="truncate text-[12px] text-pine hover:underline"
               >
-                {proof.url.replace(/^https?:\/\//, "")}
+                {isFile ? "View file" : href.replace(/^https?:\/\//, "")}
               </a>
             ) : (
               <span className="text-[12px] text-ink-2">Note</span>

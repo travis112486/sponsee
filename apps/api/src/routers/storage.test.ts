@@ -1,34 +1,17 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
-import { db, pgliteClient } from "@sponsee/db";
+import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { TRPCError } from "@trpc/server";
+import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { storageRouter } from "./storage.js";
+import { proofRouter } from "./proof.js";
+import { contractRouter } from "./contract.js";
+import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 
-// Capture magic-link URLs sent during tests
-const sentEmails: Array<{ email: string; url: string }> = [];
-
-process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
-
-// Mock nodemailer BEFORE auth.ts evaluates so sendMagicLink uses the mock.
-vi.mock("nodemailer", () => ({
-  default: {
-    createTransport: vi.fn(() => ({
-      sendMail: vi.fn(async ({ to, text }: { to: string; text: string }) => {
-        // Extract the magic-link URL from the email body
-        const match = text.match(/(http[^\s]+)/);
-        if (match) {
-          sentEmails.push({ email: to, url: match[1] });
-        }
-      }),
-    })),
-  },
-}));
-
-// Import app AFTER the nodemailer mock is registered.
-const { default: app } = await import("./app.js");
-
-import { initPgliteSchema } from "./test-utils/pglite-setup.js";
-
+// Same full schema as the other integration test files (single-fork shares one
+// PGlite instance, so every suite must be able to stand up the whole schema).
 const SCHEMA_SQL = `
+
 DROP TABLE IF EXISTS activity_events CASCADE;
 DROP TABLE IF EXISTS chase_events CASCADE;
 DROP TABLE IF EXISTS invoice_chase_state CASCADE;
@@ -45,63 +28,6 @@ DROP TABLE IF EXISTS memberships CASCADE;
 DROP TABLE IF EXISTS creators CASCADE;
 DROP TABLE IF EXISTS calculator_profiles CASCADE;
 DROP TABLE IF EXISTS benchmark_configs CASCADE;
-DROP TABLE IF EXISTS verification CASCADE;
-DROP TABLE IF EXISTS session CASCADE;
-DROP TABLE IF EXISTS account CASCADE;
-DROP TABLE IF EXISTS "user" CASCADE;
-
-CREATE TABLE "user" (
-  id TEXT PRIMARY KEY NOT NULL,
-  name TEXT NOT NULL,
-  email TEXT NOT NULL UNIQUE,
-  email_verified BOOLEAN NOT NULL DEFAULT false,
-  image TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE session (
-  id TEXT PRIMARY KEY NOT NULL,
-  expires_at TIMESTAMPTZ NOT NULL,
-  token TEXT NOT NULL UNIQUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  ip_address TEXT,
-  user_agent TEXT,
-  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE
-);
-
-CREATE INDEX session_user_idx ON session(user_id);
-
-CREATE TABLE account (
-  id TEXT PRIMARY KEY NOT NULL,
-  issuer TEXT NOT NULL,
-  account_id TEXT NOT NULL,
-  provider_id TEXT NOT NULL,
-  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
-  access_token TEXT,
-  refresh_token TEXT,
-  id_token TEXT,
-  access_token_expires_at TIMESTAMPTZ,
-  refresh_token_expires_at TIMESTAMPTZ,
-  scope TEXT,
-  password TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX account_issuer_account_id_idx ON account(issuer, account_id);
-
-CREATE TABLE verification (
-  id TEXT PRIMARY KEY NOT NULL,
-  identifier TEXT NOT NULL,
-  value TEXT NOT NULL,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX verification_identifier_idx ON verification(identifier);
 
 CREATE TABLE creators (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -324,7 +250,8 @@ CREATE TABLE chase_events (
   delivered_at TIMESTAMPTZ,
   opened_at TIMESTAMPTZ,
   bounced_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX chase_events_invoice_idx ON chase_events(invoice_id);
@@ -366,194 +293,205 @@ CREATE TABLE calculator_profiles (
 );
 `;
 
+function mockCtx(creatorId: string) {
+  return {
+    session: { user: { id: `user-${creatorId}`, email: "test@example.com", name: "Test User" } },
+    creatorId,
+    db,
+  };
+}
+
+let creatorAId = "";
+let creatorBId = "";
+let dealAId = "";
+let dealBId = "";
+
+async function seed() {
+  const [creatorA] = await db.insert(schema.creators).values({ displayName: "Creator A" }).returning();
+  const [creatorB] = await db.insert(schema.creators).values({ displayName: "Creator B" }).returning();
+  creatorAId = creatorA.id;
+  creatorBId = creatorB.id;
+
+  const [brandA] = await db.insert(schema.brands).values({ creatorId: creatorAId, name: "Brand A" }).returning();
+  const [brandB] = await db.insert(schema.brands).values({ creatorId: creatorBId, name: "Brand B" }).returning();
+
+  const [dealA] = await db.insert(schema.deals).values({ creatorId: creatorAId, brandId: brandA.id, title: "Deal A", stage: "negotiating" }).returning();
+  const [dealB] = await db.insert(schema.deals).values({ creatorId: creatorBId, brandId: brandB.id, title: "Deal B" }).returning();
+  dealAId = dealA.id;
+  dealBId = dealB.id;
+}
+
 async function cleanTables() {
-  await db.execute(`
+  await db.execute(sql`
     TRUNCATE TABLE
-      activity_events, chase_events, invoice_chase_state, chase_templates,
-      invoices, contracts, proofs, deliverables, deals, contacts, brands,
-      creator_platforms, memberships, creators,
-      verification, session, account, "user"
+      activity_events,
+      proofs,
+      contracts,
+      deliverables,
+      deals,
+      brands,
+      creators
     CASCADE
   `);
 }
 
-// ── Setup ────────────────────────────────────────────────────────────────────
-
 beforeAll(async () => {
-  if (!pgliteClient) throw new Error("PGlite client not available");
   await initPgliteSchema(SCHEMA_SQL);
 });
 
 beforeEach(async () => {
   await cleanTables();
-  sentEmails.length = 0;
+  await seed();
 });
 
-// ── Auth integration tests ───────────────────────────────────────────────────
-
-describe("auth end-to-end flow", () => {
-  it("provisions creator + membership + chase templates on first magic-link sign-in", async () => {
-    const email = "creator@example.com";
-
-    // Step 1: Request magic link
-    const signInRes = await app.request("/api/auth/sign-in/magic-link", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, callbackURL: "/" }),
+describe("storage.requestUpload", () => {
+  it("issues a creator-scoped presigned PUT for a valid proof upload", async () => {
+    const caller = storageRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.requestUpload({
+      purpose: "proof",
+      dealId: dealAId,
+      mimeType: "image/png",
+      sizeBytes: 1234,
     });
 
-    expect(signInRes.status).toBe(200);
-    expect(sentEmails).toHaveLength(1);
-    expect(sentEmails[0].email).toBe(email);
-
-    // Step 2: Extract verification token from the magic-link URL
-    const magicUrl = new URL(sentEmails[0].url);
-    expect(magicUrl.searchParams.get("token")).toBeTruthy();
-
-    // Step 3: Verify the magic link token (use full URL to preserve callbackURL)
-    const verifyRes = await app.request(sentEmails[0].url.replace(magicUrl.origin, ""), {
-      method: "GET",
-    });
-
-    expect(verifyRes.status).toBe(302); // redirect after success
-
-    // Step 4: Extract session cookie
-    const setCookie = verifyRes.headers.get("set-cookie") || "";
-    expect(setCookie).toContain("sponsee.session_token");
-
-    // Step 5: Verify session via auth endpoint
-    const sessionRes = await app.request("/api/auth/get-session", {
-      method: "GET",
-      headers: { cookie: setCookie, Origin: "http://localhost:3000" },
-    });
-
-    expect(sessionRes.status).toBe(200);
-    const sessionBody = (await sessionRes.json()) as { user?: { id: string; email: string } };
-    expect(sessionBody.user?.email).toBe(email);
-    const userId = sessionBody.user!.id;
-
-    // Step 6: Verify creator workspace was provisioned
-    const [membership] = await db
-      .select()
-      .from(schema.memberships)
-      .where(eq(schema.memberships.userId, userId));
-
-    expect(membership).toBeDefined();
-    expect(membership.role).toBe("owner");
-
-    const [creator] = await db
-      .select()
-      .from(schema.creators)
-      .where(eq(schema.creators.id, membership.creatorId));
-
-    expect(creator).toBeDefined();
-    expect(creator.displayName).toBe("creator"); // from email prefix
-    expect(creator.plan).toBe("starter");
-
-    // Step 7: Verify default chase templates were seeded
-    const templates = await db
-      .select()
-      .from(schema.chaseTemplates)
-      .where(eq(schema.chaseTemplates.creatorId, creator.id));
-
-    expect(templates).toHaveLength(3);
-    expect(templates.map((t) => t.step).sort()).toEqual([1, 2, 3]);
-
-    // Step 8: Sign out
-    const signOutRes = await app.request("/api/auth/sign-out", {
-      method: "POST",
-      headers: { cookie: setCookie, Origin: "http://localhost:3000" },
-    });
-
-    expect(signOutRes.status).toBe(200);
-
-    // Step 9: Verify session is invalidated
-    const afterSignOutRes = await app.request("/api/auth/get-session", {
-      method: "GET",
-      headers: { cookie: setCookie, Origin: "http://localhost:3000" },
-    });
-
-    const afterBody = (await afterSignOutRes.json()) as { user?: unknown } | null;
-    expect(afterBody?.user ?? afterBody).toBeNull();
+    expect(result.key).toMatch(new RegExp(`^${creatorAId}/proofs/${dealAId}/`));
+    expect(result.uploadUrl).toBe(`memory://upload/${result.key}`);
+    expect(result.expiresAt).toBeInstanceOf(Date);
   });
 
-  it("does not double-provision workspace for existing user", async () => {
-    const email = "repeat@example.com";
+  it("routes contract uploads under /contracts/", async () => {
+    const caller = storageRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.requestUpload({
+      purpose: "contract",
+      dealId: dealAId,
+      mimeType: "application/pdf",
+      sizeBytes: 500,
+    });
+    expect(result.key).toContain(`${creatorAId}/contracts/${dealAId}/`);
+  });
 
-    // First sign-in
-    await app.request("/api/auth/sign-in/magic-link", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, callbackURL: "/" }),
+  it("rejects a deal owned by another creator", async () => {
+    const caller = storageRouter.createCaller(mockCtx(creatorAId));
+    await expect(
+      caller.requestUpload({ purpose: "proof", dealId: dealBId, mimeType: "image/png", sizeBytes: 1 })
+    ).rejects.toThrowError(TRPCError);
+  });
+
+  it("rejects a non-allowlisted mime type", async () => {
+    const caller = storageRouter.createCaller(mockCtx(creatorAId));
+    await expect(
+      caller.requestUpload({ purpose: "proof", dealId: dealAId, mimeType: "text/html", sizeBytes: 1 })
+    ).rejects.toThrowError(TRPCError);
+  });
+
+  it("rejects a non-PDF contract upload", async () => {
+    const caller = storageRouter.createCaller(mockCtx(creatorAId));
+    await expect(
+      caller.requestUpload({ purpose: "contract", dealId: dealAId, mimeType: "image/png", sizeBytes: 1 })
+    ).rejects.toThrowError(TRPCError);
+  });
+
+  it("rejects an oversized file", async () => {
+    const caller = storageRouter.createCaller(mockCtx(creatorAId));
+    await expect(
+      caller.requestUpload({ purpose: "proof", dealId: dealAId, mimeType: "image/png", sizeBytes: 101 * 1024 * 1024 })
+    ).rejects.toThrowError(TRPCError);
+  });
+
+  it("enforces the per-plan storage quota", async () => {
+    // Seed exactly the starter quota (1 GB) of used storage, then request more.
+    await db.insert(schema.proofs).values({
+      dealId: dealAId,
+      kind: "file",
+      storageKey: `${creatorAId}/proofs/seed.png`,
+      sizeBytes: 1024 * 1024 * 1024,
+      uploadedAt: new Date(),
     });
 
-    const magicUrl1 = new URL(sentEmails[0].url);
-    await app.request(sentEmails[0].url.replace(magicUrl1.origin, ""), { method: "GET" });
-
-    const [user] = await db.select().from(schema.user).where(eq(schema.user.email, email));
-    const [membership1] = await db
-      .select()
-      .from(schema.memberships)
-      .where(eq(schema.memberships.userId, user.id));
-
-    // Second sign-in (new magic link, same email)
-    await app.request("/api/auth/sign-in/magic-link", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, callbackURL: "/" }),
-    });
-
-    const magicUrl2 = new URL(sentEmails[1].url);
-    await app.request(sentEmails[1].url.replace(magicUrl2.origin, ""), { method: "GET" });
-
-    // Should still have exactly one membership / creator
-    const memberships = await db
-      .select()
-      .from(schema.memberships)
-      .where(eq(schema.memberships.userId, user.id));
-
-    expect(memberships).toHaveLength(1);
-    expect(memberships[0].creatorId).toBe(membership1.creatorId);
-
-    const creators = await db.select().from(schema.creators);
-    expect(creators).toHaveLength(1);
+    const caller = storageRouter.createCaller(mockCtx(creatorAId));
+    await expect(
+      caller.requestUpload({ purpose: "proof", dealId: dealAId, mimeType: "image/png", sizeBytes: 1 })
+    ).rejects.toThrowError(TRPCError);
   });
 });
 
-describe("auth trusted origins", () => {
-  it("rejects magic-link requests from untrusted origins with 403 INVALID_ORIGIN", async () => {
-    const res = await app.request("/api/auth/sign-in/magic-link", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://evil.com",
-        // Include a dummy cookie so Better Auth's validateOrigin runs
-        Cookie: "sponsee.session_token=dummy",
-      },
-      body: JSON.stringify({ email: "test@example.com", callbackURL: "/" }),
-    });
-
-    // Hono CORS middleware does not set Access-Control-Allow-Origin for untrusted origins
-    const allowOrigin = res.headers.get("access-control-allow-origin");
-    expect(allowOrigin).not.toBe("https://evil.com");
-
-    // Better Auth itself rejects the request
-    expect(res.status).toBe(403);
-    const body = (await res.json()) as { code?: string };
-    expect(body.code).toBe("INVALID_ORIGIN");
+describe("storage.getUrl", () => {
+  it("serves a key under the caller's own tenant", async () => {
+    const caller = storageRouter.createCaller(mockCtx(creatorAId));
+    const { url } = await caller.getUrl({ key: `${creatorAId}/proofs/x.png` });
+    expect(url).toBe(`memory://object/${creatorAId}/proofs/x.png`);
   });
 
-  it("sets CORS headers for the configured web origin", async () => {
-    const res = await app.request("/api/auth/sign-in/magic-link", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "http://localhost:3000",
-      },
-      body: JSON.stringify({ email: "test@example.com", callbackURL: "/" }),
+  it("rejects a foreign tenant key", async () => {
+    const caller = storageRouter.createCaller(mockCtx(creatorAId));
+    await expect(caller.getUrl({ key: `${creatorBId}/proofs/x.png` })).rejects.toThrowError(TRPCError);
+  });
+});
+
+describe("proof.confirmUpload", () => {
+  it("persists an uploaded file proof and logs activity", async () => {
+    const caller = proofRouter.createCaller(mockCtx(creatorAId));
+    const key = `${creatorAId}/proofs/${dealAId}/abc.png`;
+    const proof = await caller.confirmUpload({
+      dealId: dealAId,
+      key,
+      mimeType: "image/png",
+      sizeBytes: 1234,
+      note: "screenshot",
     });
 
-    expect(res.headers.get("access-control-allow-origin")).toBe("http://localhost:3000");
-    expect(res.headers.get("access-control-allow-credentials")).toBe("true");
+    expect(proof.kind).toBe("file");
+    expect(proof.storageKey).toBe(key);
+    expect(proof.mimeType).toBe("image/png");
+    expect(proof.sizeBytes).toBe(1234);
+    expect(proof.uploadedAt).toBeInstanceOf(Date);
+
+    const events = await db
+      .select()
+      .from(schema.activityEvents)
+      .where(eq(schema.activityEvents.entityId, proof.id));
+    expect(events).toHaveLength(1);
+    expect(events[0].payload).toMatchObject({ action: "proof_added", proofKind: "file" });
+  });
+
+  it("rejects a foreign tenant key", async () => {
+    const caller = proofRouter.createCaller(mockCtx(creatorAId));
+    await expect(
+      caller.confirmUpload({ dealId: dealAId, key: `${creatorBId}/proofs/x.png`, mimeType: "image/png", sizeBytes: 1 })
+    ).rejects.toThrowError(TRPCError);
+  });
+
+  it("rejects a disallowed mime type", async () => {
+    const caller = proofRouter.createCaller(mockCtx(creatorAId));
+    await expect(
+      caller.confirmUpload({ dealId: dealAId, key: `${creatorAId}/proofs/x.png`, mimeType: "text/html", sizeBytes: 1 })
+    ).rejects.toThrowError(TRPCError);
+  });
+});
+
+describe("contract.confirmUpload", () => {
+  it("attaches an uploaded PDF and clears pasted text/link", async () => {
+    const caller = contractRouter.createCaller(mockCtx(creatorAId));
+    await caller.upsert({ dealId: dealAId, bodyText: "old text" });
+
+    const key = `${creatorAId}/contracts/${dealAId}/contract.pdf`;
+    const contract = await caller.confirmUpload({
+      dealId: dealAId,
+      key,
+      mimeType: "application/pdf",
+      sizeBytes: 500,
+    });
+
+    expect(contract.storageKey).toBe(key);
+    expect(contract.mimeType).toBe("application/pdf");
+    expect(contract.bodyText).toBeNull();
+    expect(contract.fileUrl).toBeNull();
+  });
+
+  it("rejects a non-PDF upload", async () => {
+    const caller = contractRouter.createCaller(mockCtx(creatorAId));
+    await expect(
+      caller.confirmUpload({ dealId: dealAId, key: `${creatorAId}/contracts/x.png`, mimeType: "image/png", sizeBytes: 1 })
+    ).rejects.toThrowError(TRPCError);
   });
 });

@@ -1,9 +1,15 @@
 import { useState } from "react";
 import { trpc } from "@/trpc";
-import { contractStatuses, contractStatusLabels, type ContractStatus } from "@sponsee/shared";
+import {
+  contractStatuses,
+  contractStatusLabels,
+  contractFileMimeTypes,
+  type ContractStatus,
+} from "@sponsee/shared";
 import { cn } from "@/lib/utils";
+import { putToPresignedUrl } from "@/lib/upload";
 import { toast } from "sonner";
-import { ChevronDown, ExternalLink, FileSignature, Link2, Pencil, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ExternalLink, FileSignature, Link2, Pencil, Plus, Trash2, Upload } from "lucide-react";
 
 const statusBadge: Record<ContractStatus, string> = {
   draft: "bg-surface text-ink-3 border-hairline",
@@ -57,10 +63,22 @@ export function ContractCard({ dealId }: { dealId: string }) {
     onError: (err) => toast(err.message),
   });
 
+  const requestUpload = trpc.storage.requestUpload.useMutation();
+  const confirmUpload = trpc.contract.confirmUpload.useMutation({
+    onSuccess: () => {
+      invalidate();
+      setShowForm(false);
+      toast("Contract uploaded");
+    },
+    onError: (err) => toast(err.message),
+  });
+
   const [showForm, setShowForm] = useState(false);
-  const [mode, setMode] = useState<"link" | "text">("link");
+  const [mode, setMode] = useState<"link" | "text" | "upload">("link");
   const [linkValue, setLinkValue] = useState("");
   const [textValue, setTextValue] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
 
   function openForm() {
@@ -70,8 +88,34 @@ export function ContractCard({ dealId }: { dealId: string }) {
     setShowForm(true);
   }
 
-  function handleSave(e: React.FormEvent) {
+  async function handleSave(e: React.FormEvent) {
     e.preventDefault();
+    if (mode === "upload") {
+      if (!file) return;
+      setUploading(true);
+      try {
+        const { uploadUrl, key } = await requestUpload.mutateAsync({
+          purpose: "contract",
+          dealId,
+          mimeType: file.type,
+          sizeBytes: file.size,
+        });
+        const uploaded = await putToPresignedUrl(file, uploadUrl, key);
+        await confirmUpload.mutateAsync({
+          dealId,
+          key: uploaded.key,
+          mimeType: uploaded.mimeType,
+          sizeBytes: uploaded.sizeBytes,
+        });
+        setFile(null);
+      } catch (err) {
+        toast(err instanceof Error ? err.message : "Upload failed");
+      } finally {
+        setUploading(false);
+      }
+      return;
+    }
+
     const fileUrl = linkValue.trim();
     const bodyText = textValue.trim();
     if (!fileUrl && !bodyText) return;
@@ -164,6 +208,16 @@ export function ContractCard({ dealId }: { dealId: string }) {
             >
               Paste text
             </button>
+            <button
+              type="button"
+              onClick={() => setMode("upload")}
+              className={cn(
+                "rounded-md px-2 py-1 text-[11px] font-medium",
+                mode === "upload" ? "bg-pine text-white" : "text-ink-3 hover:bg-surface"
+              )}
+            >
+              Upload PDF
+            </button>
           </div>
 
           {mode === "link" ? (
@@ -173,13 +227,26 @@ export function ContractCard({ dealId }: { dealId: string }) {
               placeholder="https://drive.google.com/… or a PDF link"
               className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
             />
-          ) : (
+          ) : mode === "text" ? (
             <textarea
               value={textValue}
               onChange={(e) => setTextValue(e.target.value)}
               placeholder="Paste the contract text here"
               className="min-h-[120px] w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
             />
+          ) : (
+            <div className="space-y-2">
+              <input
+                type="file"
+                accept={contractFileMimeTypes.join(",")}
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine file:mr-2 file:rounded file:border-0 file:bg-surface file:px-2 file:py-1 file:text-[11px] file:text-ink-2"
+              />
+              <p className="flex items-center gap-1 text-[11px] text-ink-3">
+                <Upload className="h-3 w-3" />
+                Uploaded PDFs are stored privately and viewable in-platform.
+              </p>
+            </div>
           )}
 
           <div className="flex justify-end gap-2">
@@ -192,10 +259,15 @@ export function ContractCard({ dealId }: { dealId: string }) {
             </button>
             <button
               type="submit"
-              disabled={upsert.isPending || !(linkValue.trim() || textValue.trim())}
+              disabled={
+                uploading ||
+                (mode === "upload"
+                  ? !file
+                  : upsert.isPending || !(linkValue.trim() || textValue.trim()))
+              }
               className="rounded-md bg-pine px-3 py-1 text-[12px] font-medium text-white hover:bg-pine-hover disabled:opacity-50"
             >
-              Save contract
+              {uploading ? "Uploading…" : mode === "upload" ? "Upload PDF" : "Save contract"}
             </button>
           </div>
         </form>
