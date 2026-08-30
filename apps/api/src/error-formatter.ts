@@ -63,7 +63,19 @@ type ErrorShapeLike = { message: string; data: Record<string, unknown> };
 
 /**
  * tRPC root `errorFormatter`. Applies to every router, so it deliberately does
- * nothing at all unless the error's cause is a ZodError.
+ * nothing at all unless the error is an *input-validation* failure whose cause
+ * is a ZodError.
+ *
+ * The `BAD_REQUEST` check is what makes "input validation" precise rather than
+ * merely likely. tRPC raises input-parse failures as `BAD_REQUEST` with the
+ * ZodError as `cause`; anything a procedure *body* throws is wrapped as
+ * `INTERNAL_SERVER_ERROR` with the original as `cause`. Without the code check,
+ * a procedure that `.parse()`s an untrusted payload — a webhook, a third-party
+ * API response — would have its internal schema failure dressed up as a
+ * creator-facing "Field: expected string" message and its internal field names
+ * published on `data.zodError`. Keying on the cause alone cannot tell those two
+ * apart; keying on the code can. There is no such `.parse()` in a procedure
+ * body today, which is exactly why this is cheap to add now.
  */
 export function formatTRPCError<TShape extends ErrorShapeLike>({
   shape,
@@ -72,8 +84,11 @@ export function formatTRPCError<TShape extends ErrorShapeLike>({
   shape: TShape;
   error: TRPCError;
 }) {
-  const zodError: FlattenedZodError | null =
-    error.cause instanceof ZodError ? (error.cause.flatten() as FlattenedZodError) : null;
+  const isInputValidation = error.code === "BAD_REQUEST" && error.cause instanceof ZodError;
+
+  const zodError: FlattenedZodError | null = isInputValidation
+    ? ((error.cause as ZodError).flatten() as FlattenedZodError)
+    : null;
 
   return {
     ...shape,

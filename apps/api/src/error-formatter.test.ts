@@ -149,6 +149,26 @@ describe("formatTRPCError", () => {
     expect(formatted.code).toBe(baseShape.code);
   });
 
+  it("leaves a ZodError thrown from a procedure body untouched", () => {
+    // Not an input-validation failure: tRPC wraps anything a procedure body
+    // throws as INTERNAL_SERVER_ERROR. Formatting it would dress an internal
+    // schema failure up as creator input feedback and publish the internal
+    // field names on data.zodError.
+    const internalSchema = z.object({ providerAccountId: z.string() });
+    const error = new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      cause: zodErrorFor(internalSchema, { providerAccountId: 12345 }),
+    });
+    const shape = { ...baseShape, message: "Internal server error" };
+
+    const formatted = formatTRPCError({ shape, error });
+
+    expect(formatted.data.zodError).toBeNull();
+    expect(formatted.message).toBe("Internal server error");
+    expect(formatted.message).not.toContain("providerAccountId");
+    expect(formatted.message).not.toContain("Provider account ID");
+  });
+
   it("preserves every other key on the default shape", () => {
     const error = badRequestFrom(zodErrorFor(profileSchema, {}));
     const formatted = formatTRPCError({ shape: baseShape, error });
@@ -174,6 +194,12 @@ describe("tRPC root wiring", () => {
       .mutation(({ input }) => input),
     boom: publicProcedure.mutation(() => {
       throw new TRPCError({ code: "FORBIDDEN", message: "No creator workspace" });
+    }),
+    // Stands in for a procedure that validates an untrusted third-party payload
+    // (a webhook body, a platform API response) inside its own body.
+    syncFromProvider: publicProcedure.mutation(() => {
+      const payload: unknown = { providerAccountId: 12345 };
+      return z.object({ providerAccountId: z.string() }).parse(payload);
     }),
   });
 
@@ -211,6 +237,17 @@ describe("tRPC root wiring", () => {
     expect(error!.message).toBe("No creator workspace");
     expect(error!.data.code).toBe("FORBIDDEN");
     expect(error!.data.zodError).toBeNull();
+  });
+
+  it("does not format a ZodError raised inside a procedure body", async () => {
+    const { status, error } = await call("syncFromProvider", {});
+
+    expect(status).toBe(500);
+    expect(error!.data.code).toBe("INTERNAL_SERVER_ERROR");
+    // The internal schema's field names must not reach the client as structure.
+    expect(error!.data.zodError).toBeNull();
+    // ...nor as a friendly, creator-facing sentence implying they typed it.
+    expect(error!.message).not.toContain("Provider account ID");
   });
 
   it("does not disturb successful calls", async () => {
