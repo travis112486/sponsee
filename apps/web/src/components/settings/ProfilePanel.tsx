@@ -6,12 +6,13 @@ import { trpc } from "@/trpc";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import QueryError from "@/components/QueryError";
+import { httpsUrlOrEmpty } from "@/lib/url-schema";
 
 const profileSchema = z.object({
   displayName: z.string().min(1, "Display name is required").max(255),
   pronouns: z.string().max(64).optional(),
   category: z.string().max(128).optional(),
-  avatarUrl: z.string().url().optional().or(z.literal("")),
+  avatarUrl: httpsUrlOrEmpty.optional(),
   timezone: z.string().max(64).optional(),
   defaultCurrency: z.string().length(3).optional(),
 });
