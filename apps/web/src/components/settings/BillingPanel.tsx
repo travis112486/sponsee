@@ -71,7 +71,16 @@ export default function BillingPanel() {
     },
   });
 
-  const handleUpgrade = (tier: PlanTier) => {
+  // A creator who already pays must change plans in the Stripe portal, which
+  // swaps the price on their one subscription and prorates it. Sending them back
+  // through Checkout would open a *second* subscription on the same customer and
+  // bill both at once (SPO-87 HIGH-1) — the API rejects it, and this keeps the
+  // UI from offering a path that only ends in an error toast.
+  const handlePlanClick = (tier: PlanTier, alreadyPaid: boolean) => {
+    if (alreadyPaid) {
+      portal.mutate();
+      return;
+    }
     setUpgradingTo(tier);
     checkout.mutate({ tier });
   };
@@ -96,6 +105,13 @@ export default function BillingPanel() {
   const currentPlan = subscription?.plan ?? "starter";
   const currentStatus = subscription?.status ?? null;
   const isPaid = currentStatus === "active" || currentStatus === "trialing";
+  // `past_due` / `unpaid` grant no entitlements but the subscription is still
+  // live in Stripe, so the API refuses a fresh checkout for them — it would bill
+  // a second subscription alongside the failing one. The portal is where a card
+  // gets fixed, so it has to stay reachable or those creators hit a dead end
+  // with no way back to paying us (SPO-87 HIGH-1).
+  const hasLiveSubscription =
+    isPaid || currentStatus === "past_due" || currentStatus === "unpaid";
   const dealSlotLimit = subscription?.dealSlotLimit ?? planDealSlots[currentPlan];
   const activeDealCount = subscription?.activeDealCount ?? 0;
   const usagePct = dealSlotLimit > 0 ? Math.min(100, (activeDealCount / dealSlotLimit) * 100) : 0;
@@ -125,7 +141,7 @@ export default function BillingPanel() {
           </div>
         </div>
 
-        {isPaid && (
+        {hasLiveSubscription && (
           <div className="mt-4 flex gap-3">
             <button
               onClick={() => portal.mutate()}
@@ -148,8 +164,11 @@ export default function BillingPanel() {
 
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
           {tiers.map((tier) => {
-            const isCurrent = currentPlan === tier && isPaid;
-            const isDowngrade = isPaid && tier !== currentPlan;
+            const isCurrent = currentPlan === tier && hasLiveSubscription;
+            // Subscription already exists, different tier — a portal plan
+            // change, not a new checkout. Covers both directions; a downgrade
+            // isn't special.
+            const isPlanChange = hasLiveSubscription && tier !== currentPlan;
             const price = planPricesCents[tier];
             const slots = planDealSlots[tier];
 
@@ -195,25 +214,28 @@ export default function BillingPanel() {
                 </ul>
 
                 <button
-                  onClick={() => handleUpgrade(tier)}
-                  disabled={isCurrent || upgradingTo === tier || checkout.isPending}
+                  onClick={() => handlePlanClick(tier, isPlanChange)}
+                  disabled={
+                    isCurrent || upgradingTo === tier || checkout.isPending || portal.isPending
+                  }
                   className={`mt-4 flex h-9 w-full items-center justify-center gap-1.5 rounded-lg text-[13px] font-semibold transition-colors disabled:opacity-50 ${
                     isCurrent
                       ? "bg-pine text-white cursor-default"
-                      : isDowngrade
+                      : isPlanChange
                       ? "border border-hairline bg-surface-subtle text-ink hover:bg-hairline"
                       : "bg-pine text-white hover:bg-pine-hover"
                   }`}
                 >
-                  {upgradingTo === tier && (
+                  {((upgradingTo === tier && !isPlanChange) ||
+                    (isPlanChange && portal.isPending)) && (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   )}
                   {isCurrent
                     ? "Subscribed"
-                    : isDowngrade
+                    : isPlanChange
                     ? "Switch to " + planLabels[tier]
                     : "Upgrade to " + planLabels[tier]}
-                  {!isCurrent && !isDowngrade && <ArrowUpRight className="h-3.5 w-3.5" />}
+                  {!isCurrent && !isPlanChange && <ArrowUpRight className="h-3.5 w-3.5" />}
                 </button>
               </div>
             );

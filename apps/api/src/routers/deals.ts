@@ -2,10 +2,14 @@ import { z } from "zod";
 import { eq, and, isNull, desc } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db } from "@sponsee/db";
+import { db, type DB } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { dealStages, dealTypes, platforms, paymentTerms } from "@sponsee/shared";
-import { assertDealSlotAvailable } from "../billing/gate.js";
+import {
+  assertDealSlotAvailable,
+  assertSlotForReopen,
+  withCreatorSlotLock,
+} from "../billing/gate.js";
 
 export const dealsRouter = createTRPCRouter({
   list: creatorScopedProcedure.query(async ({ ctx }) => {
@@ -88,43 +92,49 @@ export const dealsRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Plan gate (SPO-24): enforce the tier's active-deal slot limit.
-      await assertDealSlotAvailable(ctx.db, ctx.creatorId);
+      // Plan gate (SPO-24): enforce the tier's active-deal slot limit. The check
+      // and the insert run inside one creator-locked transaction so two creates
+      // arriving together at limit−1 cannot both pass (SPO-87 MEDIUM-2).
+      return withCreatorSlotLock(ctx.db, ctx.creatorId, async (tx) => {
+        await assertDealSlotAvailable(tx, ctx.creatorId);
 
-      // Verify brand ownership
-      const [brand] = await db
-        .select()
-        .from(schema.brands)
-        .where(and(eq(schema.brands.id, input.brandId), eq(schema.brands.creatorId, ctx.creatorId)));
-      if (!brand) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Brand not found" });
-      }
-
-      // Verify contact ownership if provided
-      if (input.primaryContactId) {
-        const [contact] = await db
+        // Verify brand ownership
+        const [brand] = await tx
           .select()
-          .from(schema.contacts)
-          .innerJoin(schema.brands, eq(schema.contacts.brandId, schema.brands.id))
+          .from(schema.brands)
           .where(
-            and(
-              eq(schema.contacts.id, input.primaryContactId),
-              eq(schema.brands.creatorId, ctx.creatorId)
-            )
+            and(eq(schema.brands.id, input.brandId), eq(schema.brands.creatorId, ctx.creatorId))
           );
-        if (!contact) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+        if (!brand) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Brand not found" });
         }
-      }
 
-      const [deal] = await db
-        .insert(schema.deals)
-        .values({
-          creatorId: ctx.creatorId,
-          ...input,
-        })
-        .returning();
-      return deal;
+        // Verify contact ownership if provided
+        if (input.primaryContactId) {
+          const [contact] = await tx
+            .select()
+            .from(schema.contacts)
+            .innerJoin(schema.brands, eq(schema.contacts.brandId, schema.brands.id))
+            .where(
+              and(
+                eq(schema.contacts.id, input.primaryContactId),
+                eq(schema.brands.creatorId, ctx.creatorId)
+              )
+            );
+          if (!contact) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+          }
+        }
+
+        const [deal] = await tx
+          .insert(schema.deals)
+          .values({
+            creatorId: ctx.creatorId,
+            ...input,
+          })
+          .returning();
+        return deal;
+      });
     }),
 
   update: creatorScopedProcedure
@@ -150,54 +160,78 @@ export const dealsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
 
-      // Verify contact ownership if provided
-      if (data.primaryContactId) {
-        const [contact] = await db
-          .select()
-          .from(schema.contacts)
-          .innerJoin(schema.brands, eq(schema.contacts.brandId, schema.brands.id))
-          .where(
-            and(
-              eq(schema.contacts.id, data.primaryContactId),
-              eq(schema.brands.creatorId, ctx.creatorId)
-            )
-          );
-        if (!contact) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+      const applyUpdate = async (tx: DB) => {
+        // Verify contact ownership if provided
+        if (data.primaryContactId) {
+          const [contact] = await tx
+            .select()
+            .from(schema.contacts)
+            .innerJoin(schema.brands, eq(schema.contacts.brandId, schema.brands.id))
+            .where(
+              and(
+                eq(schema.contacts.id, data.primaryContactId),
+                eq(schema.brands.creatorId, ctx.creatorId)
+              )
+            );
+          if (!contact) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+          }
         }
+
+        const [deal] = await tx
+          .update(schema.deals)
+          .set({
+            ...data,
+            updatedAt: new Date(),
+            stageEnteredAt: data.stage ? new Date() : undefined,
+          })
+          .where(and(eq(schema.deals.id, id), eq(schema.deals.creatorId, ctx.creatorId)))
+          .returning();
+
+        if (!deal) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
+        }
+
+        return deal;
+      };
+
+      // Only a move *out of* `paid` can consume a slot, so nothing else pays the
+      // cost of a lock.
+      if (data.stage === undefined || data.stage === "paid") {
+        return applyUpdate(ctx.db);
       }
 
-      const [deal] = await db
-        .update(schema.deals)
-        .set({
-          ...data,
-          updatedAt: new Date(),
-          stageEnteredAt: data.stage ? new Date() : undefined,
-        })
-        .where(and(eq(schema.deals.id, id), eq(schema.deals.creatorId, ctx.creatorId)))
-        .returning();
-
-      if (!deal) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
-      }
-
-      return deal;
+      return withCreatorSlotLock(ctx.db, ctx.creatorId, async (tx) => {
+        await assertSlotForReopen(tx, ctx.creatorId, id);
+        return applyUpdate(tx);
+      });
     }),
 
   updateStage: creatorScopedProcedure
     .input(z.object({ id: z.string().uuid(), stage: z.enum(dealStages) }))
     .mutation(async ({ ctx, input }) => {
-      const [deal] = await db
-        .update(schema.deals)
-        .set({ stage: input.stage, stageEnteredAt: new Date(), updatedAt: new Date() })
-        .where(and(eq(schema.deals.id, input.id), eq(schema.deals.creatorId, ctx.creatorId)))
-        .returning();
+      const applyStage = async (tx: DB) => {
+        const [deal] = await tx
+          .update(schema.deals)
+          .set({ stage: input.stage, stageEnteredAt: new Date(), updatedAt: new Date() })
+          .where(and(eq(schema.deals.id, input.id), eq(schema.deals.creatorId, ctx.creatorId)))
+          .returning();
 
-      if (!deal) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
+        if (!deal) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
+        }
+
+        return deal;
+      };
+
+      if (input.stage === "paid") {
+        return applyStage(ctx.db);
       }
 
-      return deal;
+      return withCreatorSlotLock(ctx.db, ctx.creatorId, async (tx) => {
+        await assertSlotForReopen(tx, ctx.creatorId, input.id);
+        return applyStage(tx);
+      });
     }),
 
   delete: creatorScopedProcedure
