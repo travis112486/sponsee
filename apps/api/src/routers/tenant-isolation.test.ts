@@ -657,6 +657,64 @@ describe("settings router tenant isolation", () => {
       });
       expect(result?.syncStatus).toBe("ok");
     });
+
+    it("applies explicit null ccv, followers, and scheduleLabel on the no-id upsert path", async () => {
+      // SPO-130: the conflict set used to swallow explicit nulls for these
+      // fields (`?? undefined`), so clearing them via the add-platform form
+      // silently kept the stale values while the id path cleared them.
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ followers: 5000, scheduleLabel: "Mon/Wed/Fri" })
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.upsertPlatform({
+        platform: "twitch",
+        ccv: null,
+        followers: null,
+        scheduleLabel: null,
+      });
+      expect(result?.id).toBe(platformAId);
+      expect(result?.ccv).toBeNull();
+      expect(result?.followers).toBeNull();
+      expect(result?.scheduleLabel).toBeNull();
+    });
+
+    it("keeps ccv, followers, and scheduleLabel on the no-id path when the keys are omitted", async () => {
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ followers: 5000, scheduleLabel: "Mon/Wed/Fri" })
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.upsertPlatform({
+        platform: "twitch",
+        handle: "streamer-a",
+      });
+      expect(result?.id).toBe(platformAId);
+      expect(result?.ccv).toBe(100);
+      expect(result?.followers).toBe(5000);
+      expect(result?.scheduleLabel).toBe("Mon/Wed/Fri");
+    });
+
+    it("no-ops on the no-id path when ccv, followers, and scheduleLabel are unchanged", async () => {
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ followers: 5000, scheduleLabel: "Mon/Wed/Fri" })
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.upsertPlatform({
+        platform: "twitch",
+        ccv: 100,
+        followers: 5000,
+        scheduleLabel: "Mon/Wed/Fri",
+      });
+      expect(result?.id).toBe(platformAId);
+      expect(result?.ccv).toBe(100);
+      expect(result?.followers).toBe(5000);
+      expect(result?.scheduleLabel).toBe("Mon/Wed/Fri");
+    });
   });
 
   describe("syncPlatform", () => {
