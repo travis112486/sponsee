@@ -94,7 +94,8 @@ export default function PlatformsPanel() {
       }
       utils.settings.getPlatforms.invalidate();
     },
-    onError: (err) => toast.error(serverErrorMessage(err, "Failed to finish connecting")),
+    // No default onError: the two mutate() call sites below need different
+    // failure toasts (plain failure vs. the original provider error).
   });
   const disconnect = trpc.settings.disconnectPlatform.useMutation({
     onSuccess: () => {
@@ -120,12 +121,25 @@ export default function PlatformsPanel() {
     handledConnectReturn.current = true;
 
     if (connected === "twitch" || connected === "kick") {
-      completeConnect.mutate({ platform: connected });
+      completeConnect.mutate(
+        { platform: connected },
+        { onError: (err) => toast.error(serverErrorMessage(err, "Failed to finish connecting")) }
+      );
     } else if (connectError) {
       const detail = searchParams.get("error");
-      toast.error(
-        `Couldn't connect ${PLATFORM_LABEL[connectError as ConnectablePlatform] ?? connectError}${detail ? `: ${detail.replace(/_/g, " ")}` : ""}`
-      );
+      const connectErrorToast = () =>
+        toast.error(
+          `Couldn't connect ${PLATFORM_LABEL[connectError as ConnectablePlatform] ?? connectError}${detail ? `: ${detail.replace(/_/g, " ")}` : ""}`
+        );
+      if ((connectError === "twitch" || connectError === "kick") && detail?.startsWith("state")) {
+        // A replayed OAuth callback (proxy retry, browser prefetch) burns the
+        // one-time state and redirects here with state_mismatch even though
+        // the first hit already linked the account. The server knows whether
+        // the link landed — ask it before believing the error.
+        completeConnect.mutate({ platform: connectError }, { onError: connectErrorToast });
+      } else {
+        connectErrorToast();
+      }
     }
     const next = new URLSearchParams(searchParams);
     next.delete("connected");
