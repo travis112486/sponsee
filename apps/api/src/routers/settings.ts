@@ -134,7 +134,11 @@ export const settingsRouter = createTRPCRouter({
             ccv: data.ccv ?? undefined,
             followers: data.followers ?? undefined,
             scheduleLabel: data.scheduleLabel ?? undefined,
-            handle: data.handle ?? undefined,
+            // Unlike the fields above, an explicit null must go through:
+            // syncReset counts clearing the handle as a change, so swallowing
+            // the null here would reset sync state while keeping the old
+            // handle (SPO-126). Absent stays absent — undefined is not set.
+            handle: data.handle,
             ...syncReset,
             updatedAt: new Date(),
           },
@@ -170,7 +174,9 @@ export const settingsRouter = createTRPCRouter({
           message: `Too many syncs — try again in ${decision.retryAfter}s`,
         });
       }
-      // Records ok/error on the row rather than throwing on API failures
+      // Records ok/error on the row rather than throwing on API failures.
+      // `outcome: "skipped"` means nothing was attempted (credentials not
+      // provisioned) — the panel shows a neutral notice, not a failure.
       return syncPlatformRow(row);
     }),
 

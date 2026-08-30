@@ -20,19 +20,29 @@ export interface SyncResult {
 type PlatformRow = typeof creatorPlatforms.$inferSelect;
 
 /**
+ * "skipped" means no sync was attempted (manual-entry platform, no handle, or
+ * credentials not provisioned) — distinct from "error" so callers don't
+ * present an untouched row as a failed sync (SPO-126).
+ */
+export interface SyncRowResult {
+  row: PlatformRow;
+  outcome: "synced" | "error" | "skipped";
+}
+
+/**
  * Sync one creator_platforms row. Records ok/error status on the row instead
  * of throwing, so a bad handle never fails the whole batch or a "Sync now"
- * request. Returns the updated row.
+ * request. Returns the updated row plus what actually happened.
  */
-export async function syncPlatformRow(row: PlatformRow): Promise<PlatformRow> {
+export async function syncPlatformRow(row: PlatformRow): Promise<SyncRowResult> {
   const client = createPlatformClient(row.platform);
-  if (!client || !row.handle) return row; // TikTok etc. — manual entry only
+  if (!client || !row.handle) return { row, outcome: "skipped" }; // TikTok etc. — manual entry only
 
   if (!client.isConfigured()) {
     // Credentials not provisioned yet — leave the row untouched rather than
     // flagging a creator-visible error for an ops-side gap.
     console.warn(`[platform-sync] ${client.name} skipped: credentials not configured`);
-    return row;
+    return { row, outcome: "skipped" };
   }
 
   const now = new Date();
@@ -77,7 +87,7 @@ export async function syncPlatformRow(row: PlatformRow): Promise<PlatformRow> {
       });
     }
 
-    return updated;
+    return { row: updated, outcome: "synced" };
   } catch (err) {
     const message = (err as Error).message.slice(0, 500);
     const [updated] = await db
@@ -86,7 +96,7 @@ export async function syncPlatformRow(row: PlatformRow): Promise<PlatformRow> {
       .where(eq(creatorPlatforms.id, row.id))
       .returning();
     console.error(`[platform-sync] ${row.platform}/${row.handle} failed: ${message}`);
-    return updated ?? row;
+    return { row: updated ?? row, outcome: "error" };
   }
 }
 
@@ -100,14 +110,10 @@ export async function runPlatformSync(): Promise<SyncResult> {
   const result: SyncResult = { synced: 0, errored: 0, skipped: 0 };
 
   for (const row of rows) {
-    const client = createPlatformClient(row.platform);
-    if (!client || !client.isConfigured() || !row.handle) {
-      result.skipped++;
-      continue;
-    }
-    const updated = await syncPlatformRow(row);
-    if (updated.syncStatus === "ok") result.synced++;
-    else result.errored++;
+    const { outcome } = await syncPlatformRow(row);
+    if (outcome === "synced") result.synced++;
+    else if (outcome === "error") result.errored++;
+    else result.skipped++;
   }
 
   return result;

@@ -50,9 +50,13 @@ export default function PlatformsPanel() {
     onError: (err) => toast.error(err.message || "Failed to remove platform"),
   });
   const sync = trpc.settings.syncPlatform.useMutation({
-    onSuccess: (row) => {
-      if (row.syncStatus === "ok") {
+    onSuccess: ({ row, outcome }) => {
+      if (outcome === "synced") {
         toast.success("Stats synced");
+      } else if (outcome === "skipped") {
+        // Nothing was attempted (e.g. credentials not provisioned yet) —
+        // don't tell the creator a sync failed when none ran.
+        toast.info("Platform sync isn't available yet — your stats are unchanged");
       } else {
         toast.error(row.syncError || "Sync failed — stats unchanged");
       }

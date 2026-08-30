@@ -612,6 +612,51 @@ describe("settings router tenant isolation", () => {
       expect(result?.syncStatus).toBe("never");
       expect(result?.syncError).toBeNull();
     });
+
+    it("fully applies an explicit null handle on the no-id upsert path", async () => {
+      // SPO-126a: the conflict set used to swallow `handle: null` while
+      // syncReset still counted it as a change — old handle kept, sync state
+      // wiped. Handle and sync state must move together.
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ handle: "streamer-a", syncStatus: "ok", lastSyncedAt: new Date() })
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.upsertPlatform({ platform: "twitch", handle: null });
+      expect(result?.id).toBe(platformAId);
+      expect(result?.handle).toBeNull();
+      expect(result?.syncStatus).toBe("never");
+      expect(result?.syncError).toBeNull();
+    });
+
+    it("keeps handle and sync state on the no-id path when handle is omitted", async () => {
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ handle: "streamer-a", syncStatus: "ok" })
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.upsertPlatform({ platform: "twitch", ccv: 321 });
+      expect(result?.ccv).toBe(321);
+      expect(result?.handle).toBe("streamer-a");
+      expect(result?.syncStatus).toBe("ok");
+    });
+
+    it("keeps sync state on the no-id path when the handle is unchanged", async () => {
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ handle: "streamer-a", syncStatus: "ok" })
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.upsertPlatform({
+        platform: "twitch",
+        handle: "streamer-a",
+        ccv: 42,
+      });
+      expect(result?.syncStatus).toBe("ok");
+    });
   });
 
   describe("syncPlatform", () => {
@@ -669,6 +714,21 @@ describe("settings router tenant isolation", () => {
       await expect(caller.syncPlatform({ id: platformAId })).rejects.toSatisfy(
         (err: TRPCError) => err.code === "BAD_REQUEST"
       );
+    });
+
+    it("returns outcome 'skipped' with the row untouched when credentials aren't configured", async () => {
+      // SPO-126b: a skipped sync used to be indistinguishable from a failed
+      // one, so the panel toasted "Sync failed" in the pre-credentials window.
+      await db
+        .update(schema.creatorPlatforms)
+        .set({ handle: "streamer-a" })
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.syncPlatform({ id: platformAId });
+      expect(result.outcome).toBe("skipped");
+      expect(result.row.syncStatus).toBe("never");
+      expect(result.row.lastSyncedAt).toBeNull();
     });
 
     it("throttles repeated syncs per creator with TOO_MANY_REQUESTS", async () => {
