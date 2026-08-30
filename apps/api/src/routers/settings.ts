@@ -1,10 +1,24 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import * as schema from "@sponsee/db/schema";
 import { platforms } from "@sponsee/shared";
 import { syncPlatformRow } from "../jobs/platform-sync.js";
+import { SlidingWindowLimiter } from "../rate-limit.js";
+
+// "Sync now" fans out into 2-3 upstream requests (with retry/backoff) against
+// app credentials shared by every tenant, so one click-happy creator can burn
+// quota for all of them. `sync.isPending` in the panel guards a single browser
+// tab and nothing else. Ten per window is far above real use — a creator has at
+// most three syncable platforms — while bounding a stuck retry loop or script.
+export const SYNC_NOW_MAX_PER_WINDOW = 10;
+export const SYNC_NOW_WINDOW_MS = 5 * 60 * 1000;
+
+export const syncNowLimiter = new SlidingWindowLimiter(
+  SYNC_NOW_MAX_PER_WINDOW,
+  SYNC_NOW_WINDOW_MS
+);
 
 /**
  * Creator-supplied URL that we store and may later render as an `href`/`src`.
@@ -79,9 +93,19 @@ export const settingsRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
-      // A new handle means prior sync state no longer applies
+      // A *changed* handle means prior sync state no longer applies. Compared
+      // in SQL against the stored row because the panel sends `handle` on
+      // every save — resetting whenever the key is merely present would wipe
+      // syncStatus/syncError on unrelated edits (e.g. updating CCV).
+      // IS DISTINCT FROM makes clearing a handle count as a change too.
+      const handleChanged = sql`${schema.creatorPlatforms.handle} IS DISTINCT FROM ${input.handle ?? null}`;
       const syncReset =
-        "handle" in input ? ({ syncStatus: "never", syncError: null } as const) : {};
+        "handle" in input
+          ? {
+              syncStatus: sql`CASE WHEN ${handleChanged} THEN 'never' ELSE ${schema.creatorPlatforms.syncStatus} END`,
+              syncError: sql`CASE WHEN ${handleChanged} THEN NULL ELSE ${schema.creatorPlatforms.syncError} END`,
+            }
+          : {};
       if (id) {
         const [platform] = await ctx.db
           .update(schema.creatorPlatforms)
@@ -136,6 +160,15 @@ export const settingsRouter = createTRPCRouter({
       }
       if (!row.handle) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Add a channel handle first" });
+      }
+      // Checked after the ownership/handle guards so only requests that would
+      // actually reach the upstream APIs consume budget.
+      const decision = syncNowLimiter.check(ctx.creatorId);
+      if (!decision.allowed) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Too many syncs — try again in ${decision.retryAfter}s`,
+        });
       }
       // Records ok/error on the row rather than throwing on API failures
       return syncPlatformRow(row);

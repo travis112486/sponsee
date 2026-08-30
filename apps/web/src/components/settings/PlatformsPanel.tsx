@@ -199,10 +199,12 @@ export default function PlatformsPanel() {
               {SYNCABLE.has(p.platform) && p.handle && (
                 <button
                   onClick={() => sync.mutate({ id: p.id })}
-                  disabled={sync.isPending}
+                  disabled={sync.isPending && sync.variables?.id === p.id}
                   className="flex items-center gap-1 text-[12.5px] font-medium text-pine hover:text-pine-hover disabled:opacity-50"
                 >
-                  <RefreshCw className={`h-3.5 w-3.5 ${sync.isPending ? "animate-spin" : ""}`} />
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 ${sync.isPending && sync.variables?.id === p.id ? "animate-spin" : ""}`}
+                  />
                   Sync now
                 </button>
               )}

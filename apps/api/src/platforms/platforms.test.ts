@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { TwitchClient } from "./twitch.js";
 import { KickClient } from "./kick.js";
 import { YouTubeClient } from "./youtube.js";
