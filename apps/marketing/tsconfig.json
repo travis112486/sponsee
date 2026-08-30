@@ -20,5 +20,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src"]
+  "//include": "`api` holds the Vercel functions. They were outside the project until SPO-88, so nothing typechecked the waitlist endpoint that returns captured PII.",
+  "include": ["src", "api"]
 }

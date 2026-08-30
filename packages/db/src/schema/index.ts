@@ -4,6 +4,7 @@ import {
   varchar,
   text,
   integer,
+  bigint,
   timestamp,
   boolean,
   jsonb,
@@ -494,6 +495,17 @@ export const verification = pgTable(
   },
   (t) => [index("verification_identifier_idx").on(t.identifier)]
 );
+// Better Auth rate-limit counters. Backs `rateLimit.storage: "database"` in
+// apps/api/src/auth.ts — the field names must stay `key`/`count`/`lastRequest`
+// because the adapter looks the model's columns up by Better Auth field name.
+// `last_request` is epoch milliseconds, which overflows int4.
+export const rateLimit = pgTable("rate_limit", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  count: integer("count").notNull().default(0),
+  lastRequest: bigint("last_request", { mode: "number" }).notNull(),
+});
+
 export const waitlistSignups = pgTable(
   "waitlist_signups",
   {

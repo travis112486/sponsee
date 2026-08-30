@@ -36,6 +36,13 @@
       "when": 1788040285283,
       "tag": "0004_oval_quasar",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788047488290,
+      "tag": "0005_rate_limit",
+      "breakpoints": true
     }
   ]
 }

@@ -5,8 +5,26 @@ import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { defaultChaseTemplates, defaultChaseOffsets } from "@sponsee/shared";
 import nodemailer from "nodemailer";
+import { ipAddressHeaders, trustedProxies } from "./client-ip.js";
 
 const isProd = process.env.NODE_ENV === "production";
+
+/**
+ * Whether Better Auth's rate limiter runs.
+ *
+ * Better Auth only self-enables it when `NODE_ENV === "production"`, so a
+ * staging box or a misconfigured deploy would accept unlimited magic-link
+ * requests — i.e. unbounded sign-in email to arbitrary addresses from our
+ * domain. It is therefore enabled explicitly here, off only under the test
+ * runner (where every request shares one localhost bucket and the built-in
+ * 3-per-10s sign-in rule would fail unrelated suites).
+ * `AUTH_RATE_LIMIT_ENABLED` overrides in both directions.
+ */
+export function rateLimitEnabled(env: Record<string, string | undefined> = process.env) {
+  const override = env.AUTH_RATE_LIMIT_ENABLED;
+  if (override !== undefined && override !== "") return override === "true";
+  return !(env.NODE_ENV === "test" || !!env.VITEST);
+}
 const baseURL = process.env.BETTER_AUTH_URL || "http://localhost:3001";
 const webURL = process.env.WEB_URL || "http://localhost:3000";
 
@@ -23,13 +41,26 @@ const smtpUser = process.env.SMTP_USER || "";
 const smtpPass = process.env.SMTP_PASS || "";
 const smtpFrom = process.env.SMTP_FROM || "noreply@sponsee.app";
 
-const transporter = nodemailer.createTransport({
-  host: smtpHost,
-  port: smtpPort,
-  secure: smtpPort === 465,
-  auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined,
-  tls: { rejectUnauthorized: false },
-});
+/**
+ * Nodemailer options for the magic-link transport.
+ *
+ * Mailpit's dev listener presents a self-signed certificate, so certificate
+ * verification is relaxed for local/CI only. It must stay on everywhere else: a
+ * magic link is a full account-takeover primitive (10-minute single-use token,
+ * stored in plain text), so anyone with network position toward the SMTP relay
+ * could otherwise MITM the connection and read sign-in links off the wire.
+ */
+export function smtpTransportOptions(prod: boolean) {
+  return {
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined,
+    ...(prod ? {} : { tls: { rejectUnauthorized: false } }),
+  };
+}
+
+const transporter = nodemailer.createTransport(smtpTransportOptions(isProd));
 
 // Google OAuth only when credentials are present
 const googleClientId = process.env.GOOGLE_CLIENT_ID;
@@ -98,6 +129,9 @@ export const auth: AuthInstance = betterAuth({
       session: schema.session,
       account: schema.account,
       verification: schema.verification,
+      // Required by `rateLimit.storage: "database"` below — the Drizzle adapter
+      // throws on any model missing from this map.
+      rateLimit: schema.rateLimit,
     },
   }),
   secret: process.env.BETTER_AUTH_SECRET!,
@@ -114,10 +148,21 @@ export const auth: AuthInstance = betterAuth({
         },
       }
     : undefined,
+  // Storage is the database, not per-instance memory: the serverless adapter in
+  // apps/api/api/index.ts gives every cold start a fresh empty limiter, which
+  // makes an in-memory counter no limit at all.
+  rateLimit: {
+    enabled: rateLimitEnabled(),
+    storage: "database",
+  },
   advanced: {
     cookiePrefix: "sponsee",
     useSecureCookies: isProd,
     disableOriginCheck: false, // enforce even in test mode; trustedOrigins drives allow-list
+    ipAddress: {
+      ipAddressHeaders: ipAddressHeaders(),
+      trustedProxies: trustedProxies(),
+    },
   },
   databaseHooks: {
     user: {
