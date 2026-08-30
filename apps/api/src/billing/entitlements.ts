@@ -21,8 +21,20 @@ export function isPaidSubscription(status: SubscriptionStatus | null): boolean {
  * `incomplete` is deliberately excluded: its first payment never succeeded and
  * Stripe voids it within 23 hours, so a fresh Checkout is the recovery path
  * rather than a double charge.
+ *
+ * `paused` is included for the same reason as `past_due`: `pause_collection`
+ * stops the invoices, not the subscription — it is still attached to the
+ * customer and resumes on its own schedule, so a second Checkout stacks a real
+ * charge on top of it (SPO-97). It grants no entitlements, hence live but not
+ * paid.
  */
-const liveStatuses: SubscriptionStatus[] = ["active", "trialing", "past_due", "unpaid"];
+const liveStatuses: SubscriptionStatus[] = [
+  "active",
+  "trialing",
+  "past_due",
+  "unpaid",
+  "paused",
+];
 
 export function hasLiveSubscription(status: SubscriptionStatus | null): boolean {
   return status != null && liveStatuses.includes(status);
@@ -31,10 +43,16 @@ export function hasLiveSubscription(status: SubscriptionStatus | null): boolean 
 /**
  * Coerce a raw Stripe subscription status into our enum.
  *
- * Stripe can send statuses our `subscription_status` enum doesn't carry (e.g.
- * `paused`). Writing one straight through would blow up the INSERT, return 500,
- * and put the event into Stripe's retry loop forever. Unknown statuses collapse
- * to null, which `isPaidSubscription` treats as unpaid — the safe direction.
+ * Stripe may add statuses our `subscription_status` enum doesn't carry. Writing
+ * one straight through would blow up the UPDATE, return 500, and put the event
+ * into Stripe's retry loop forever. Unknown statuses collapse to null, which
+ * `isPaidSubscription` treats as unpaid — the safe direction for entitlements.
+ *
+ * It is the *unsafe* direction for `hasLiveSubscription`, which reads null as
+ * "no subscription exists" and lets a second Checkout open. That is why the fix
+ * for `paused` was to add it to the enum rather than special-case it here: the
+ * enum has to stay an honest list of what Stripe can send, and anything still
+ * missing from it keeps the double-bill exposure (SPO-97).
  */
 export function toSubscriptionStatus(value: string | null | undefined): SubscriptionStatus | null {
   if (!value) return null;

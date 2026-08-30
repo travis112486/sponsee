@@ -59,7 +59,13 @@ vi.mock("stripe", () => ({
 const { default: app } = await import("./app.js");
 import { initPgliteSchema } from "./test-utils/pglite-setup.js";
 import { planDealSlots } from "@sponsee/shared";
-import { isPaidSubscription, getDealSlotLimit, canCreateDeal } from "./billing/entitlements.js";
+import {
+  isPaidSubscription,
+  hasLiveSubscription,
+  toSubscriptionStatus,
+  getDealSlotLimit,
+  canCreateDeal,
+} from "./billing/entitlements.js";
 
 const SCHEMA_SQL = `
 DROP TABLE IF EXISTS activity_events CASCADE;
@@ -292,6 +298,34 @@ describe("entitlements", () => {
     expect(isPaidSubscription("past_due")).toBe(false);
     expect(isPaidSubscription("canceled")).toBe(false);
     expect(isPaidSubscription(null)).toBe(false);
+  });
+
+  // SPO-97. `pause_collection` stops invoicing without detaching the
+  // subscription from the customer, so it has to answer the two questions
+  // differently: no entitlements, but a second Checkout would still double-bill.
+  it("treats paused as live but unpaid", () => {
+    expect(isPaidSubscription("paused")).toBe(false);
+    expect(hasLiveSubscription("paused")).toBe(true);
+    expect(getDealSlotLimit("pro", "paused")).toBe(planDealSlots.starter);
+    expect(canCreateDeal("pro", "paused", planDealSlots.starter)).toBe(false);
+  });
+
+  // The gap this issue closed was upstream of the guard, not in it: `paused`
+  // was absent from the enum, so it never survived the coercion to *reach*
+  // `hasLiveSubscription` as anything but null. Pin the enum membership itself,
+  // since a guard fed null is a guard that says "no subscription".
+  it("carries every live Stripe status through the enum coercion", () => {
+    for (const status of ["active", "trialing", "past_due", "unpaid", "paused"] as const) {
+      expect(toSubscriptionStatus(status)).toBe(status);
+      expect(hasLiveSubscription(toSubscriptionStatus(status))).toBe(true);
+    }
+  });
+
+  it("does not treat dead subscriptions as live", () => {
+    for (const status of ["canceled", "incomplete", "incomplete_expired"] as const) {
+      expect(hasLiveSubscription(status)).toBe(false);
+    }
+    expect(hasLiveSubscription(null)).toBe(false);
   });
 
   it("returns starter limits when subscription is not paid", () => {
@@ -540,7 +574,7 @@ describe("billing.createCheckoutSession", () => {
     });
   }
 
-  for (const status of ["active", "trialing", "past_due", "unpaid"] as const) {
+  for (const status of ["active", "trialing", "past_due", "unpaid", "paused"] as const) {
     it(`refuses a second checkout while a subscription is ${status}`, async () => {
       const { creator, cookie } = await createUserAndCreator("test@example.com", "pro");
       await db
@@ -931,12 +965,16 @@ describe("stripe webhook", () => {
     const { creator } = await createUserAndCreator("test@example.com");
     await db
       .update(schema.creators)
-      .set({ stripeSubscriptionId: "sub_paused", subscriptionStatus: "active", plan: "pro" })
+      .set({ stripeSubscriptionId: "sub_odd", subscriptionStatus: "active", plan: "pro" })
       .where(eq(schema.creators.id, creator.id));
 
     mockSubscriptionEvent("customer.subscription.updated", {
-      id: "sub_paused",
-      status: "paused",
+      id: "sub_odd",
+      // Deliberately not a status Stripe sends today. This test used to use
+      // `paused`, which is the one that made the null-collapse a live
+      // double-bill (SPO-97) — it is a real enum member now, so proving the
+      // fallback needs a value the enum genuinely does not carry.
+      status: "some_future_stripe_status",
       metadata: { creatorId: creator.id },
       items: { data: [{ price: { id: "price_test_pro" } }] },
     });
@@ -955,6 +993,61 @@ describe("stripe webhook", () => {
     expect(updated?.subscriptionStatus).toBeNull();
     // Unpaid status ⇒ starter limits, even though the plan column still says pro.
     expect(getDealSlotLimit(updated!.plan, updated!.subscriptionStatus)).toBe(planDealSlots.starter);
+  });
+
+  // SPO-97, end to end over the production path: Stripe delivers `paused`, the
+  // webhook persists it, and the checkout guard reads it back. Before the fix
+  // the coercion dropped it to null here, which the guard reads as "no
+  // subscription" — so this creator got a *second* subscription billed on top of
+  // the paused one, the exact HIGH-1 SPO-87 closed for the other four statuses.
+  it("persists a paused subscription and still refuses a second checkout", async () => {
+    const { creator, cookie } = await createUserAndCreator("test@example.com", "pro");
+    await db
+      .update(schema.creators)
+      .set({
+        stripeCustomerId: "cus_paused",
+        stripeSubscriptionId: "sub_paused",
+        subscriptionStatus: "active",
+      })
+      .where(eq(schema.creators.id, creator.id));
+
+    mockSubscriptionEvent("customer.subscription.updated", {
+      id: "sub_paused",
+      status: "paused",
+      metadata: { creatorId: creator.id },
+      items: { data: [{ price: { id: "price_test_pro" } }] },
+    });
+
+    const hookRes = await app.request("/api/webhooks/stripe", {
+      method: "POST",
+      headers: { "stripe-signature": "sig" },
+      body: "payload",
+    });
+    expect(hookRes.status).toBe(200);
+
+    const [updated] = await db
+      .select()
+      .from(schema.creators)
+      .where(eq(schema.creators.id, creator.id));
+    // Stored as itself, not collapsed to null.
+    expect(updated?.subscriptionStatus).toBe("paused");
+    // Live, but paying for nothing: the plan column still says pro and the
+    // limits still say starter.
+    expect(updated?.plan).toBe("pro");
+    expect(getDealSlotLimit(updated!.plan, updated!.subscriptionStatus)).toBe(planDealSlots.starter);
+
+    mockStripeCheckoutSessions.create.mockResolvedValue({
+      url: "https://checkout.stripe.com/test",
+    });
+
+    const checkoutRes = await app.request("/api/trpc/billing.createCheckoutSession", {
+      method: "POST",
+      headers: { cookie, Origin: "http://localhost:3000", "Content-Type": "application/json" },
+      body: JSON.stringify({ json: { tier: "creator" } }),
+    });
+
+    expect(checkoutRes.status).toBe(409);
+    expect(mockStripeCheckoutSessions.create).not.toHaveBeenCalled();
   });
 
   it("ignores a subscription whose creator cannot be resolved", async () => {

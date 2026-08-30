@@ -62,6 +62,13 @@ export const planTierEnum = pgEnum("plan_tier", ["starter", "creator", "pro"]);
 export const proofKindEnum = pgEnum("proof_kind", ["vod", "clip", "chat", "overlay", "link", "file"]);
 export const contractStatusEnum = pgEnum("contract_status", ["draft", "sent", "viewed", "signed"]);
 
+// Mirrors Stripe's `Subscription.status`. `paused` is the one Stripe sends that
+// isn't part of the normal lifecycle — it only appears once someone sets
+// `pause_collection` — but carrying it here is what keeps the checkout guard
+// honest: an unlisted status collapses to null on the way in, and null reads as
+// "no subscription", which is how a second subscription gets billed alongside a
+// paused one (SPO-97). Appended rather than slotted in next to the other
+// non-paying statuses so the migration stays a plain ADD VALUE.
 export const subscriptionStatusEnum = pgEnum("subscription_status", [
   "active",
   "past_due",
@@ -70,6 +77,7 @@ export const subscriptionStatusEnum = pgEnum("subscription_status", [
   "incomplete",
   "incomplete_expired",
   "trialing",
+  "paused",
 ]);
 
 // Creators (tenants)

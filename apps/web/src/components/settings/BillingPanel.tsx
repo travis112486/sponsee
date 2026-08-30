@@ -33,6 +33,12 @@ function statusBadge(status: string | null) {
           <CheckCircle2 className="h-3 w-3" /> Trialing
         </span>
       );
+    case "paused":
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-amber-tint px-2 py-0.5 text-[12px] font-medium text-amber">
+          <AlertCircle className="h-3 w-3" /> Paused
+        </span>
+      );
     case "canceled":
       return (
         <span className="inline-flex items-center gap-1 rounded-full bg-hairline px-2 py-0.5 text-[12px] font-medium text-ink-3">
@@ -105,13 +111,19 @@ export default function BillingPanel() {
   const currentPlan = subscription?.plan ?? "starter";
   const currentStatus = subscription?.status ?? null;
   const isPaid = currentStatus === "active" || currentStatus === "trialing";
-  // `past_due` / `unpaid` grant no entitlements but the subscription is still
-  // live in Stripe, so the API refuses a fresh checkout for them — it would bill
-  // a second subscription alongside the failing one. The portal is where a card
-  // gets fixed, so it has to stay reachable or those creators hit a dead end
-  // with no way back to paying us (SPO-87 HIGH-1).
+  // `past_due` / `unpaid` / `paused` grant no entitlements but the subscription
+  // is still live in Stripe, so the API refuses a fresh checkout for them — it
+  // would bill a second subscription alongside the existing one. The portal is
+  // where a card gets fixed and a pause gets lifted, so it has to stay reachable
+  // or those creators hit a dead end with no way back to paying us (SPO-87
+  // HIGH-1, SPO-97). Must stay in step with `liveStatuses` in
+  // apps/api/src/billing/entitlements.ts — this list is hand-copied, and the two
+  // disagreeing means the UI offers a button whose only outcome is a 409 toast.
   const hasLiveSubscription =
-    isPaid || currentStatus === "past_due" || currentStatus === "unpaid";
+    isPaid ||
+    currentStatus === "past_due" ||
+    currentStatus === "unpaid" ||
+    currentStatus === "paused";
   const dealSlotLimit = subscription?.dealSlotLimit ?? planDealSlots[currentPlan];
   const activeDealCount = subscription?.activeDealCount ?? 0;
   const usagePct = dealSlotLimit > 0 ? Math.min(100, (activeDealCount / dealSlotLimit) * 100) : 0;
