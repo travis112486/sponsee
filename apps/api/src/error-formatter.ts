@@ -69,6 +69,77 @@ type ErrorShapeLike = { message: string; data: Record<string, unknown> };
  */
 export const INTERNAL_ERROR_MESSAGE = "Something went wrong on our end. Please try again.";
 
+/** Every error code tRPC can put on the wire. */
+type TRPCErrorCode = TRPCError["code"];
+
+/**
+ * The codes that mean *we* failed, not the caller.
+ *
+ * tRPC gives four more codes INTERNAL_SERVER_ERROR's JSON-RPC number (-32603)
+ * and its HTTP class. They carry our internals for the same reason a 500 does
+ * and tell the creator nothing they can act on, so they get a 500's treatment —
+ * scrub unless authored, and log every one. A branch keyed on the string
+ * "INTERNAL_SERVER_ERROR" silently misses all four.
+ */
+const SERVER_FAULT_CODES = new Set<TRPCErrorCode>([
+  "INTERNAL_SERVER_ERROR",
+  "NOT_IMPLEMENTED",
+  "BAD_GATEWAY",
+  "SERVICE_UNAVAILABLE",
+  "GATEWAY_TIMEOUT",
+]);
+
+function isServerFault(code: TRPCErrorCode): boolean {
+  return SERVER_FAULT_CODES.has(code);
+}
+
+/**
+ * What to publish when the message we would otherwise send is not ours to send:
+ * inherited from a cause, or tRPC's bare code string.
+ *
+ * One generic sentence for everything would be wrong. It is right for a 500 —
+ * our bug, nothing in it a creator could use — but a CONFLICT or a FORBIDDEN is
+ * usually something they *can* act on, and answering those with "something went
+ * wrong on our end" turns a fixable error into an apparent outage and strands
+ * them. So each code gets a default that says what happened and, where there is
+ * one, what to do about it.
+ *
+ * These are fallbacks, not the norm. A procedure that words its own message
+ * keeps it (see `isAuthoredMessage`); this is what a creator sees when nobody
+ * wrote anything for them, which today is the lapsed-session UNAUTHORIZED in
+ * trpc.ts and, from here on, any call site that attaches a `cause` and no text.
+ *
+ * Typed as a total Record over tRPC's code union deliberately: a tRPC upgrade
+ * that adds a code fails typecheck here, rather than silently falling back to
+ * the raw code string this table exists to keep off the wire.
+ */
+export const DEFAULT_MESSAGE_BY_CODE: Record<TRPCErrorCode, string> = {
+  // Ours to fix. Nothing actionable, so say nothing specific.
+  INTERNAL_SERVER_ERROR: INTERNAL_ERROR_MESSAGE,
+  NOT_IMPLEMENTED: INTERNAL_ERROR_MESSAGE,
+  BAD_GATEWAY: INTERNAL_ERROR_MESSAGE,
+  SERVICE_UNAVAILABLE: "That service is temporarily unavailable. Please try again in a moment.",
+  GATEWAY_TIMEOUT: "That took too long to finish. Please try again.",
+
+  // Theirs to act on. Name the problem and the way out.
+  PARSE_ERROR: "We could not read that request. Please try again.",
+  BAD_REQUEST: "That request was not valid. Please check what you entered and try again.",
+  UNAUTHORIZED: "Please sign in and try again.",
+  PAYMENT_REQUIRED: "Your plan does not include this. Upgrade in Settings to continue.",
+  FORBIDDEN: "You do not have access to that.",
+  NOT_FOUND: "We could not find that.",
+  METHOD_NOT_SUPPORTED: "That action is not supported here.",
+  TIMEOUT: "That took too long to finish. Please try again.",
+  CONFLICT: "That conflicts with something that already exists. Refresh and try again.",
+  PRECONDITION_FAILED: "This changed somewhere else. Refresh and try again.",
+  PRECONDITION_REQUIRED: "This changed somewhere else. Refresh and try again.",
+  PAYLOAD_TOO_LARGE: "That is too large to send. Please try something smaller.",
+  UNSUPPORTED_MEDIA_TYPE: "That file type is not supported.",
+  UNPROCESSABLE_CONTENT: "We could not process that. Please check what you entered and try again.",
+  TOO_MANY_REQUESTS: "Too many attempts. Please wait a moment and try again.",
+  CLIENT_CLOSED_REQUEST: "That request was cancelled.",
+};
+
 /**
  * Is this message the thrown value's own text, handed to the client verbatim?
  *
@@ -109,10 +180,13 @@ function isInputValidationFailure(error: TRPCError): boolean {
  * whatever was thrown?
  *
  * Stricter than {@link isInheritedFromCause} by one case: no message and no
- * cause at all, where tRPC falls back to the code string itself. On a 500 that
- * fallback reads "INTERNAL_SERVER_ERROR", which is not a sentence we chose to
- * show anyone. On the other codes it is the load-bearing default for the bare
- * guards (`TRPCError({ code: "UNAUTHORIZED" })`), so only 500s use this test.
+ * cause at all, where tRPC falls back to the code string itself. That fallback
+ * is an enum name, not a sentence — "INTERNAL_SERVER_ERROR", "UNAUTHORIZED" —
+ * and it reaches creators verbatim, since the panels render `err.message` into
+ * a toast. It is not internal the way a driver's message is, but it is not
+ * something we chose to show anyone either, so it is replaced on every code
+ * rather than only on 500s (SPO-131). The code itself stays on `data.code`,
+ * which is where a client should branch on it.
  */
 function isAuthoredMessage(error: TRPCError): boolean {
   if (isInheritedFromCause(error)) return false;
@@ -120,11 +194,12 @@ function isAuthoredMessage(error: TRPCError): boolean {
 }
 
 /**
- * tRPC root `errorFormatter`. Applies to every router, and sorts errors into
- * three: expand a validation failure, strip an internal one, pass the rest
- * through.
+ * tRPC root `errorFormatter`. Applies to every router, and does three things:
+ * drop the trace from every body, expand a validation failure into a readable
+ * sentence, and publish nothing on any other error that we did not word
+ * ourselves.
  *
- * The phase matters as much as the cause. A ZodError raised while parsing the
+ * Input validation is the special case. The phase matters as much as the cause. A ZodError raised while parsing the
  * procedure's declared input is a creator's own bad form data: tRPC wraps it as
  * `BAD_REQUEST`, and rewriting it into a readable sentence is the whole point of
  * this formatter. A ZodError raised *inside* a procedure body — `.parse()` on a
@@ -136,18 +211,17 @@ function isAuthoredMessage(error: TRPCError): boolean {
  * zodError })` still gets formatted. That is an explicit "this is the caller's
  * fault" signal from the procedure, not an escaped internal parse.)
  *
- * Internal failures get the opposite treatment: `INTERNAL_SERVER_ERROR` bodies
- * are stripped down rather than dressed up, because dropping the ZodError from
- * `data.zodError` alone does not keep it off the wire — the same dump rides out
- * on `message` and `data.stack`. Only a message the procedure *authored* is
- * published; everything else becomes `INTERNAL_ERROR_MESSAGE`, and the real
- * error goes to the server log via `logTRPCError`.
+ * Everything else is scrubbed unless the procedure authored the message.
+ * Dropping the ZodError from `data.zodError` alone does not keep it off the
+ * wire — the same dump rides out on `message`, whose text a stack then repeats.
+ * So a message we did not write is replaced with `DEFAULT_MESSAGE_BY_CODE[code]`
+ * and the real error goes to the server log via `logTRPCError`.
  *
- * The pass-through branch is not a free pass either. A message inherited from a
- * `cause` is a library's text whatever code carries it, so the same scrub runs
- * on every code. The difference is only in what counts as inherited: a 500 also
- * loses tRPC's bare code fallback, while the other codes keep theirs — an
- * unauthenticated request answers "UNAUTHORIZED", not a sentence blaming us.
+ * That scrub covers every code, not just `INTERNAL_SERVER_ERROR` (SPO-131). The
+ * mechanism was never 500-specific: a `CONFLICT` built from a unique violation
+ * inherits the constraint name and the conflicting values just as readily. What
+ * *is* code-specific is the replacement sentence — see `DEFAULT_MESSAGE_BY_CODE`
+ * for why a 4xx must not be answered with the 500's copy.
  */
 export function formatTRPCError<TShape extends ErrorShapeLike>({
   shape,
@@ -156,52 +230,61 @@ export function formatTRPCError<TShape extends ErrorShapeLike>({
   shape: TShape;
   error: TRPCError;
 }) {
-  const zodError: FlattenedZodError | null = isInputValidationFailure(error)
-    ? ((error.cause as ZodError).flatten() as FlattenedZodError)
-    : null;
+  // tRPC withholds `data.stack` only when NODE_ENV is exactly "production", so
+  // on staging — and anywhere else NODE_ENV is not that string — every error
+  // body carries a trace. It goes on all of them, in every branch below.
+  //
+  // A trace is never publishable, whoever wrote the sentence in front of it. It
+  // repeats the message a V8 stack opens with `${name}: ${message}`, so it
+  // re-publishes whatever the scrub just removed — and it names our absolute
+  // paths and call structure besides, which no creator can act on. tRPC's own
+  // unknown-procedure `NOT_FOUND` is the case that makes the point: authored by
+  // the library, so no message-based rule reaches it, and it ships a full trace
+  // through node_modules. `NODE_ENV === "production"` was the only thing
+  // standing in front of all of that, and it is the wrong guard to rely on.
+  const { stack: _stack, ...data } = shape.data;
 
-  if (zodError) {
+  if (isInputValidationFailure(error)) {
+    const zodError = (error.cause as ZodError).flatten() as FlattenedZodError;
+
     return {
       ...shape,
       message: summarizeZodError(zodError),
-      data: { ...shape.data, zodError },
+      data: { ...data, zodError },
     };
   }
 
-  const isInternal = error.code === "INTERNAL_SERVER_ERROR";
-  const publishMessage = isInternal ? isAuthoredMessage(error) : !isInheritedFromCause(error);
-
-  // tRPC withholds `data.stack` only when NODE_ENV is exactly "production", so
-  // on staging — and anywhere else NODE_ENV is not that string — it ships the
-  // same text `message` was just scrubbed of (a V8 stack opens with `${name}:
-  // ${message}`), plus our file paths. If the message is not fit to publish,
-  // neither is the trace it came from; and a 500's trace never is.
-  const dropStack = isInternal || !publishMessage;
-  const { stack: _stack, ...dataWithoutStack } = shape.data;
-
   return {
     ...shape,
-    message: publishMessage ? shape.message : INTERNAL_ERROR_MESSAGE,
-    data: { ...(dropStack ? dataWithoutStack : shape.data), zodError: null },
+    message: isAuthoredMessage(error) ? shape.message : DEFAULT_MESSAGE_BY_CODE[error.code],
+    data: { ...data, zodError: null },
   };
 }
 
 /**
  * tRPC `onError` handler, wired at the fetch adapter in app.ts.
  *
- * This is the other half of scrubbing the body: the real message, cause and
- * trace have to land somewhere, and now that is here rather than the client's
- * network tab. So it logs exactly what the formatter withholds — every 500, plus
- * any other code whose message was inherited from a cause, which is the one
- * non-500 case that gets scrubbed and would otherwise vanish entirely.
+ * The other half of the scrub: the real message and cause have to land
+ * somewhere, and now that is here rather than the client's network tab. So this
+ * has to widen exactly in step with `formatTRPCError` — scrubbing a code
+ * without logging it would delete the only copy of the failure, which is the
+ * blinding this handler exists to prevent.
  *
- * Silent for the rest — a creator mistyping a URL or hitting an auth guard is
- * not an incident, and logging those would bury the ones that are.
+ * Two things qualify. A server fault is an incident whatever it says, so it is
+ * logged even when the sentence on the wire is one we wrote — and that means
+ * the whole 5xx family, not the one code whose name says "internal". Anything
+ * else qualifies only once the formatter actually *withholds* something: a
+ * message inherited from a cause. Input validation is the exception, since its
+ * inherited message is expanded onto the wire rather than withheld, and is the
+ * creator's own form data besides.
+ *
+ * Everything else stays silent. A lapsed session, or a procedure answering with
+ * a sentence it wrote itself, is a handled outcome, not an incident; logging
+ * every plan-gate rejection would bury the failures that matter.
  */
 export function logTRPCError({ error, path }: { error: TRPCError; path?: string }): void {
-  if (error.code !== "INTERNAL_SERVER_ERROR") {
-    if (!isInheritedFromCause(error) || isInputValidationFailure(error)) return;
-  }
+  const withheldFromClient = isInheritedFromCause(error) && !isInputValidationFailure(error);
+  if (!isServerFault(error.code) && !withheldFromClient) return;
 
   console.error(`[trpc] ${path ?? "<no path>"} failed:`, error.message);
   if (error.cause) console.error("[trpc] cause:", error.cause);
