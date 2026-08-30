@@ -29,6 +29,22 @@ const mockUpsertReturn = { mutate: vi.fn(), isPending: false };
 let mockDeleteReturn = { mutate: vi.fn(), isPending: false };
 const mockSyncReturn = { mutate: vi.fn(), isPending: false };
 
+// Captured so tests can drive the mutation callbacks directly.
+type SyncMutationOptions = {
+  onSuccess: (result: {
+    row: { syncStatus?: string; syncError?: string | null };
+    outcome: "synced" | "error" | "skipped";
+  }) => void;
+};
+let syncMutationOptions: SyncMutationOptions | undefined;
+
+const toastMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+}));
+vi.mock("sonner", () => ({ toast: toastMocks }));
+
 vi.mock("@/trpc", () => ({
   trpc: {
     useUtils: () => ({
@@ -49,7 +65,10 @@ vi.mock("@/trpc", () => ({
         useMutation: () => mockDeleteReturn,
       },
       syncPlatform: {
-        useMutation: () => mockSyncReturn,
+        useMutation: (opts: SyncMutationOptions) => {
+          syncMutationOptions = opts;
+          return mockSyncReturn;
+        },
       },
     },
   },
@@ -195,5 +214,55 @@ describe("PlatformsPanel", () => {
     });
     render(<PlatformsPanel />);
     expect(screen.queryByRole("button", { name: /Sync now/ })).not.toBeInTheDocument();
+  });
+
+  describe("sync result toasts", () => {
+    const row = {
+      id: "p1",
+      platform: "twitch",
+      ccv: null,
+      followers: null,
+      scheduleLabel: null,
+      handle: "somestreamer",
+    };
+
+    function renderPanel() {
+      setQueryState({ isLoading: false, isError: false, data: [row] });
+      render(<PlatformsPanel />);
+    }
+
+    it("toasts success when the sync ran", () => {
+      renderPanel();
+      syncMutationOptions!.onSuccess({
+        row: { ...row, syncStatus: "ok", syncError: null },
+        outcome: "synced",
+      });
+      expect(toastMocks.success).toHaveBeenCalledWith("Stats synced");
+      expect(toastMocks.error).not.toHaveBeenCalled();
+      expect(mockInvalidate).toHaveBeenCalled();
+    });
+
+    it("toasts a neutral notice, not an error, when the sync was skipped (SPO-126b)", () => {
+      renderPanel();
+      syncMutationOptions!.onSuccess({
+        row: { ...row, syncStatus: "never", syncError: null },
+        outcome: "skipped",
+      });
+      expect(toastMocks.info).toHaveBeenCalledWith(
+        "Platform sync isn't available yet — your stats are unchanged"
+      );
+      expect(toastMocks.error).not.toHaveBeenCalled();
+      expect(mockInvalidate).toHaveBeenCalled();
+    });
+
+    it("toasts the recorded error when the sync failed", () => {
+      renderPanel();
+      syncMutationOptions!.onSuccess({
+        row: { ...row, syncStatus: "error", syncError: "Channel not found for handle" },
+        outcome: "error",
+      });
+      expect(toastMocks.error).toHaveBeenCalledWith("Channel not found for handle");
+      expect(toastMocks.success).not.toHaveBeenCalled();
+    });
   });
 });
