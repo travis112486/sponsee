@@ -193,6 +193,23 @@ describe("PlatformsPanel", () => {
     expect(scheduleInput.tagName.toLowerCase()).toBe("input");
   });
 
+  it("disables the platform select in edit mode and enables it in add mode", () => {
+    setQueryState({
+      isLoading: false,
+      isError: false,
+      data: [{ id: "p1", platform: "twitch", ccv: null, followers: null, scheduleLabel: null }],
+    });
+    render(<PlatformsPanel />);
+
+    // Add mode: the select is the row's identity, so it starts enabled.
+    expect(screen.getByLabelText("Platform")).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    // Edit mode: platform is the row's identity — it can't be changed in place.
+    expect(screen.getByLabelText("Platform")).toBeDisabled();
+  });
+
   it("delete button has accessible name and is disabled while deleting", () => {
     mockDeleteReturn = { mutate: vi.fn(), isPending: false };
     setQueryState({

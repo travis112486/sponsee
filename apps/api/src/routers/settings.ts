@@ -107,18 +107,40 @@ export const settingsRouter = createTRPCRouter({
             }
           : {};
       if (id) {
+        // Platform is the row's identity, not a field to edit in place (SPO-136).
+        // Match it in the WHERE so a changing `platform` can neither silently
+        // reclassify the row nor trip the (creatorId, platform) unique index into
+        // a raw 500; a mismatch resolves below into NOT_FOUND or CONFLICT.
+        const { platform: requestedPlatform, ...updates } = data;
         const [platform] = await ctx.db
           .update(schema.creatorPlatforms)
-          .set({ ...data, ...syncReset, updatedAt: new Date() })
+          .set({ ...updates, ...syncReset, updatedAt: new Date() })
           .where(
             and(
               eq(schema.creatorPlatforms.id, id),
-              eq(schema.creatorPlatforms.creatorId, ctx.creatorId)
+              eq(schema.creatorPlatforms.creatorId, ctx.creatorId),
+              eq(schema.creatorPlatforms.platform, requestedPlatform)
             )
           )
           .returning();
         if (!platform) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Platform not found" });
+          const [existing] = await ctx.db
+            .select({ id: schema.creatorPlatforms.id })
+            .from(schema.creatorPlatforms)
+            .where(
+              and(
+                eq(schema.creatorPlatforms.id, id),
+                eq(schema.creatorPlatforms.creatorId, ctx.creatorId)
+              )
+            );
+          if (!existing) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Platform not found" });
+          }
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "Platform can't be changed on an existing row — delete it and add the new platform instead",
+          });
         }
         return platform;
       }

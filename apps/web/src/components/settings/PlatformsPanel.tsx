@@ -395,7 +395,8 @@ export default function PlatformsPanel() {
             <select
               id="platform"
               {...register("platform")}
-              className="h-10 w-full rounded-lg border border-hairline bg-surface px-3 text-[13.5px] text-ink outline-none focus:border-pine focus:ring-1 focus:ring-pine"
+              disabled={!!editingId}
+              className="h-10 w-full rounded-lg border border-hairline bg-surface px-3 text-[13.5px] text-ink outline-none focus:border-pine focus:ring-1 focus:ring-pine disabled:opacity-60"
             >
               {platforms.map((p) => (
                 <option key={p} value={p}>
