@@ -19,6 +19,7 @@ let mockQueryReturn: {
     subscriberCountIsEstimate?: boolean;
     lastSyncedAt?: string | null;
     syncStatus?: string;
+    connectedAccountId?: string | null;
   }>;
   isLoading: boolean;
   isError: boolean;
@@ -28,6 +29,23 @@ let mockQueryReturn: {
 const mockUpsertReturn = { mutate: vi.fn(), isPending: false };
 let mockDeleteReturn = { mutate: vi.fn(), isPending: false };
 const mockSyncReturn = { mutate: vi.fn(), isPending: false };
+const mockCompleteConnectReturn = { mutate: vi.fn(), isPending: false, variables: undefined };
+const mockDisconnectReturn = { mutate: vi.fn(), isPending: false };
+
+// Mutable URL state backing the mocked useSearchParams — set before render to
+// simulate returning from the OAuth redirect.
+let mockSearchParams = new URLSearchParams();
+const mockSetSearchParams = vi.fn();
+vi.mock("react-router", () => ({
+  useSearchParams: () => [mockSearchParams, mockSetSearchParams],
+}));
+
+const linkSocialMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ data: { url: "https://id.example/oauth" }, error: null })
+);
+vi.mock("@/lib/auth-client", () => ({
+  authClient: { linkSocial: linkSocialMock },
+}));
 
 // Captured so tests can drive the mutation callbacks directly.
 type SyncMutationOptions = {
@@ -42,6 +60,7 @@ const toastMocks = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
   info: vi.fn(),
+  warning: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: toastMocks }));
 
@@ -70,6 +89,12 @@ vi.mock("@/trpc", () => ({
           return mockSyncReturn;
         },
       },
+      completePlatformConnect: {
+        useMutation: () => mockCompleteConnectReturn,
+      },
+      disconnectPlatform: {
+        useMutation: () => mockDisconnectReturn,
+      },
     },
   },
 }));
@@ -77,6 +102,7 @@ vi.mock("@/trpc", () => ({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  mockSearchParams = new URLSearchParams();
 });
 
 function setQueryState(state: Partial<typeof mockQueryReturn>) {
@@ -263,6 +289,93 @@ describe("PlatformsPanel", () => {
       });
       expect(toastMocks.error).toHaveBeenCalledWith("Channel not found for handle");
       expect(toastMocks.success).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("OAuth connect (SPO-109)", () => {
+    it("offers Connect buttons for Twitch and Kick", () => {
+      setQueryState({ isLoading: false, isError: false, data: [] });
+      render(<PlatformsPanel />);
+      expect(screen.getByRole("button", { name: /Connect Twitch/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Connect Kick/ })).toBeInTheDocument();
+    });
+
+    it("starts the link flow with per-platform callback URLs", async () => {
+      setQueryState({ isLoading: false, isError: false, data: [] });
+      render(<PlatformsPanel />);
+      fireEvent.click(screen.getByRole("button", { name: /Connect Twitch/ }));
+      await vi.waitFor(() => expect(linkSocialMock).toHaveBeenCalled());
+      expect(linkSocialMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "twitch",
+          callbackURL: expect.stringContaining("connected=twitch"),
+          errorCallbackURL: expect.stringContaining("connect_error=twitch"),
+        })
+      );
+    });
+
+    it("shows a Connected pill with Disconnect for linked platforms", () => {
+      setQueryState({
+        isLoading: false,
+        isError: false,
+        data: [
+          {
+            id: "p1",
+            platform: "twitch",
+            ccv: null,
+            followers: null,
+            scheduleLabel: null,
+            handle: "somestreamer",
+            connectedAccountId: "acct-1",
+          },
+        ],
+      });
+      render(<PlatformsPanel />);
+      expect(screen.getByText(/Twitch connected/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Connect Twitch/ })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /Disconnect/ }));
+      expect(mockDisconnectReturn.mutate).toHaveBeenCalledWith({ id: "p1" });
+    });
+
+    it("shows Sync now for connected rows even without a handle", () => {
+      setQueryState({
+        isLoading: false,
+        isError: false,
+        data: [
+          {
+            id: "p1",
+            platform: "twitch",
+            ccv: null,
+            followers: null,
+            scheduleLabel: null,
+            handle: null,
+            connectedAccountId: "acct-1",
+          },
+        ],
+      });
+      render(<PlatformsPanel />);
+      expect(screen.getByRole("button", { name: /Sync now/ })).toBeInTheDocument();
+    });
+
+    it("finishes the connect when returning with ?connected=, then strips the params", () => {
+      mockSearchParams = new URLSearchParams("connected=twitch");
+      setQueryState({ isLoading: false, isError: false, data: [] });
+      render(<PlatformsPanel />);
+      expect(mockCompleteConnectReturn.mutate).toHaveBeenCalledWith({ platform: "twitch" });
+      expect(mockSetSearchParams).toHaveBeenCalled();
+      const cleaned = mockSetSearchParams.mock.calls[0][0] as URLSearchParams;
+      expect(cleaned.has("connected")).toBe(false);
+    });
+
+    it("surfaces provider errors when returning with ?connect_error=", () => {
+      mockSearchParams = new URLSearchParams("connect_error=twitch&error=access_denied");
+      setQueryState({ isLoading: false, isError: false, data: [] });
+      render(<PlatformsPanel />);
+      expect(mockCompleteConnectReturn.mutate).not.toHaveBeenCalled();
+      expect(toastMocks.error).toHaveBeenCalledWith(
+        expect.stringContaining("Couldn't connect Twitch")
+      );
     });
   });
 });

@@ -1,14 +1,15 @@
-import type { PlatformStats, PlatformStatsClient } from "./types.js";
+import type { ConnectedAuth, PlatformStats, PlatformStatsClient } from "./types.js";
 import { fetchJson } from "./http.js";
 
 /**
- * Twitch Helix adapter (no-OAuth v1).
+ * Twitch Helix adapter.
  * https://dev.twitch.tv/docs/api/reference
  *
  * App access token (client credentials) gives public data only:
  * - Get Users → profile_image_url, display_name, broadcaster id
  * - Get Channel Followers → follower total (public since 2023)
- * True subscriber counts require streamer OAuth (channel:read:subscriptions) — Phase B.
+ * With the streamer's own token (Phase B, channel:read:subscriptions),
+ * Get Broadcaster Subscriptions adds the true subscriber count.
  */
 export class TwitchClient implements PlatformStatsClient {
   readonly name = "twitch";
@@ -76,6 +77,45 @@ export class TwitchClient implements PlatformStatsClient {
       avatarUrl: user.profile_image_url || null,
       // True sub counts need streamer OAuth — Phase B (connectedAccountId)
       subscriberCount: null,
+      subscriberCountIsEstimate: false,
+      followers: typeof followersRes.total === "number" ? followersRes.total : null,
+    };
+  }
+
+  async fetchConnectedStats(auth: ConnectedAuth): Promise<PlatformStats> {
+    if (!this.isConfigured()) {
+      throw new Error("Twitch sync not configured (TWITCH_CLIENT_ID/TWITCH_CLIENT_SECRET missing)");
+    }
+    // Helix requires the app's Client-Id header even with a user token, and
+    // Get Broadcaster Subscriptions only answers for the token's own channel.
+    const headers = { "Client-Id": this.clientId, Authorization: `Bearer ${auth.accessToken}` };
+    const broadcasterId = auth.providerAccountId;
+
+    // No login param: returns the user the token belongs to
+    const users = await fetchJson<{
+      data: Array<{ id: string; login: string; display_name: string; profile_image_url: string }>;
+    }>("https://api.twitch.tv/helix/users", { headers });
+    const user = users.data[0];
+    if (!user) {
+      throw new Error("Twitch connection is no longer valid — reconnect in Settings → Platforms");
+    }
+
+    const [followersRes, subsRes] = await Promise.all([
+      fetchJson<{ total: number }>(
+        `https://api.twitch.tv/helix/channels/followers?broadcaster_id=${broadcasterId}&first=1`,
+        { headers }
+      ),
+      fetchJson<{ total: number }>(
+        `https://api.twitch.tv/helix/subscriptions?broadcaster_id=${broadcasterId}&first=1`,
+        { headers }
+      ),
+    ]);
+
+    return {
+      handle: user.login,
+      channelUrl: `https://www.twitch.tv/${user.login}`,
+      avatarUrl: user.profile_image_url || null,
+      subscriberCount: typeof subsRes.total === "number" ? subsRes.total : null,
       subscriberCountIsEstimate: false,
       followers: typeof followersRes.total === "number" ? followersRes.total : null,
     };

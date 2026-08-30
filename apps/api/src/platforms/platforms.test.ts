@@ -104,6 +104,62 @@ describe("TwitchClient", () => {
       "TWITCH_CLIENT_ID/TWITCH_CLIENT_SECRET missing"
     );
   });
+
+  it("fetchConnectedStats uses the broadcaster token and returns the true sub count", async () => {
+    const fetchMock = mockFetchSequence([
+      {
+        json: {
+          data: [
+            {
+              id: "141981764",
+              login: "somestreamer",
+              display_name: "SomeStreamer",
+              profile_image_url: "https://static-cdn.jtvnw.net/avatar.png",
+            },
+          ],
+        },
+      },
+      { json: { total: 5421 } },
+      { json: { total: 208, data: [], points: 250 } },
+    ]);
+
+    const stats = await client().fetchConnectedStats({
+      accessToken: "user-token",
+      providerAccountId: "141981764",
+    });
+
+    expect(stats).toEqual({
+      handle: "somestreamer",
+      channelUrl: "https://www.twitch.tv/somestreamer",
+      avatarUrl: "https://static-cdn.jtvnw.net/avatar.png",
+      subscriberCount: 208,
+      subscriberCountIsEstimate: false,
+      followers: 5421,
+    });
+
+    // No client-credentials grant: every call rides the broadcaster token
+    const tokenCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes("id.twitch.tv/oauth2/token")
+    );
+    expect(tokenCalls).toHaveLength(0);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect((init as RequestInit).headers).toMatchObject({
+        Authorization: "Bearer user-token",
+      });
+    }
+    // Subscriptions endpoint answers only for the token's own channel
+    const subsCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/helix/subscriptions")
+    );
+    expect(String(subsCall?.[0])).toContain("broadcaster_id=141981764");
+  });
+
+  it("fetchConnectedStats reports an invalid connection when the token resolves no user", async () => {
+    mockFetchSequence([{ json: { data: [] } }]);
+    await expect(
+      client().fetchConnectedStats({ accessToken: "stale", providerAccountId: "1" })
+    ).rejects.toThrow("no longer valid");
+  });
 });
 
 describe("KickClient", () => {
@@ -149,6 +205,47 @@ describe("KickClient", () => {
       { json: { data: [] } },
     ]);
     await expect(client().fetchStats("ghost")).rejects.toThrow("Kick channel not found");
+  });
+
+  it("fetchConnectedStats reads the broadcaster's own channel with their token", async () => {
+    const fetchMock = mockFetchSequence([
+      {
+        json: {
+          data: [{ broadcaster_user_id: 777, slug: "somekicker", active_subscribers_count: 312 }],
+        },
+      },
+      { json: { data: [{ user_id: 777, profile_picture: "https://kick.com/pfp.jpg" }] } },
+    ]);
+
+    const stats = await client().fetchConnectedStats({
+      accessToken: "kick-user-token",
+      providerAccountId: "777",
+    });
+
+    expect(stats).toEqual({
+      handle: "somekicker",
+      channelUrl: "https://kick.com/somekicker",
+      avatarUrl: "https://kick.com/pfp.jpg",
+      subscriberCount: 312,
+      subscriberCountIsEstimate: false,
+      followers: null,
+    });
+
+    // Parameterless endpoints: the token itself selects the channel/user
+    expect(String(fetchMock.mock.calls[0][0])).toBe("https://api.kick.com/public/v1/channels");
+    expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.kick.com/public/v1/users");
+    // No client-credentials grant on the connected path
+    const tokenCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes("id.kick.com/oauth/token")
+    );
+    expect(tokenCalls).toHaveLength(0);
+  });
+
+  it("fetchConnectedStats reports an invalid connection when no channel comes back", async () => {
+    mockFetchSequence([{ json: { data: [] } }]);
+    await expect(
+      client().fetchConnectedStats({ accessToken: "stale", providerAccountId: "777" })
+    ).rejects.toThrow("no longer valid");
   });
 });
 

@@ -21,6 +21,17 @@ export interface PlatformStats {
   followers: number | null;
 }
 
+/**
+ * Broadcaster OAuth credentials for a connected account (Phase B).
+ * Resolved by the caller (see connected.ts) so clients stay auth-agnostic.
+ */
+export interface ConnectedAuth {
+  /** Fresh user access token — refreshed by the caller before each sync */
+  accessToken: string;
+  /** Provider-side user id of the connected account (Better Auth account.accountId) */
+  providerAccountId: string;
+}
+
 export interface PlatformStatsClient {
   readonly name: string;
 
@@ -29,4 +40,11 @@ export interface PlatformStatsClient {
 
   /** Fetch public stats for a channel handle/slug. Throws on API errors or unknown handles. */
   fetchStats(handle: string): Promise<PlatformStats>;
+
+  /**
+   * Fetch stats with the broadcaster's own OAuth token, unlocking fields the
+   * public API gates (true Twitch subscriber counts). Absent on platforms
+   * whose public API already returns everything (YouTube).
+   */
+  fetchConnectedStats?(auth: ConnectedAuth): Promise<PlatformStats>;
 }

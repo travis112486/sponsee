@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { trpc } from "@/trpc";
+import { authClient } from "@/lib/auth-client";
 import { toast } from "sonner";
-import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Link2, Loader2, Plus, RefreshCw, Trash2, Unplug } from "lucide-react";
 import { platforms, type Platform } from "@sponsee/shared";
 import QueryError from "@/components/QueryError";
 import { applyServerFieldErrors, serverErrorMessage } from "@/lib/trpc-error";
@@ -19,6 +21,16 @@ const platformSchema = z.object({
 
 // Platforms with a public stats API (TikTok Live stays manual entry)
 const SYNCABLE: ReadonlySet<string> = new Set(["twitch", "kick", "youtube"]);
+
+// Platforms where a one-time OAuth connect unlocks broadcaster-gated data
+// (true Twitch subscriber counts; Kick fallback if app-token counts are gated)
+const CONNECTABLE = ["twitch", "kick"] as const;
+type ConnectablePlatform = (typeof CONNECTABLE)[number];
+
+const PLATFORM_LABEL: Record<ConnectablePlatform, string> = {
+  twitch: "Twitch",
+  kick: "Kick",
+};
 
 type PlatformForm = z.infer<typeof platformSchema>;
 
@@ -65,7 +77,76 @@ export default function PlatformsPanel() {
     onError: (err) => toast.error(err.message || "Failed to sync"),
   });
 
+  const completeConnect = trpc.settings.completePlatformConnect.useMutation({
+    onSuccess: ({ row, outcome }, variables) => {
+      const label = PLATFORM_LABEL[variables.platform];
+      if (outcome === "synced") {
+        toast.success(`${label} connected — subscriber count synced`);
+      } else if (outcome === "skipped") {
+        toast.success(`${label} connected — stats will sync with the next daily run`);
+      } else {
+        toast.warning(
+          `${label} connected, but the first sync failed: ${row.syncError || "unknown error"}`
+        );
+      }
+      utils.settings.getPlatforms.invalidate();
+    },
+    onError: (err) => toast.error(serverErrorMessage(err, "Failed to finish connecting")),
+  });
+  const disconnect = trpc.settings.disconnectPlatform.useMutation({
+    onSuccess: () => {
+      toast.success("Platform disconnected");
+      utils.settings.getPlatforms.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "Failed to disconnect"),
+  });
+
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState<ConnectablePlatform | null>(null);
+
+  // Finish the OAuth round-trip: Better Auth redirected back with
+  // ?connected=<platform> (or ?connect_error=<platform>&error=...). The ref
+  // guards StrictMode's double-invoked effects from firing the mutation twice.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const handledConnectReturn = useRef(false);
+  useEffect(() => {
+    if (handledConnectReturn.current) return;
+    const connected = searchParams.get("connected");
+    const connectError = searchParams.get("connect_error");
+    if (!connected && !connectError) return;
+    handledConnectReturn.current = true;
+
+    if (connected === "twitch" || connected === "kick") {
+      completeConnect.mutate({ platform: connected });
+    } else if (connectError) {
+      const detail = searchParams.get("error");
+      toast.error(
+        `Couldn't connect ${PLATFORM_LABEL[connectError as ConnectablePlatform] ?? connectError}${detail ? `: ${detail.replace(/_/g, " ")}` : ""}`
+      );
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("connected");
+    next.delete("connect_error");
+    next.delete("error");
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startConnect = async (platform: ConnectablePlatform) => {
+    setConnecting(platform);
+    const callbackBase = `${window.location.origin}/settings`;
+    const { data, error } = await authClient.linkSocial({
+      provider: platform,
+      callbackURL: `${callbackBase}?connected=${platform}`,
+      errorCallbackURL: `${callbackBase}?connect_error=${platform}`,
+    });
+    if (error) {
+      setConnecting(null);
+      toast.error(error.message || `Couldn't start the ${PLATFORM_LABEL[platform]} connect flow`);
+    } else if (data?.url) {
+      window.location.assign(data.url);
+    }
+  };
 
   const {
     register,
@@ -147,6 +228,58 @@ export default function PlatformsPanel() {
 
   return (
     <div className="space-y-6">
+      {/* Connect accounts (SPO-109): one-time OAuth unlocks broadcaster-gated stats */}
+      <div className="rounded-lg border border-hairline bg-surface-subtle p-4">
+        <h4 className="text-[13.5px] font-semibold text-ink">Connect accounts</h4>
+        <p className="mt-1 text-[11.5px] text-ink-3">
+          Twitch doesn't publish subscriber counts — connect once and we'll pull your true subs
+          (and keep your avatar and followers fresh) automatically.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-3">
+          {CONNECTABLE.map((platform) => {
+            const row = data?.find((p) => p.platform === platform);
+            const isConnected = Boolean(row?.connectedAccountId);
+            const isPending =
+              connecting === platform ||
+              (completeConnect.isPending && completeConnect.variables?.platform === platform);
+            return (
+              <div key={platform} className="flex items-center gap-2">
+                {isConnected && row ? (
+                  <>
+                    <span className="flex items-center gap-1.5 rounded-full bg-pine/10 px-3 py-1 text-[12.5px] font-medium text-pine">
+                      <Link2 className="h-3.5 w-3.5" />
+                      {PLATFORM_LABEL[platform]} connected
+                      {row.handle ? ` · @${row.handle}` : ""}
+                    </span>
+                    <button
+                      onClick={() => disconnect.mutate({ id: row.id })}
+                      disabled={disconnect.isPending}
+                      className="flex items-center gap-1 text-[12.5px] font-medium text-ink-3 transition-colors hover:text-brick disabled:opacity-50"
+                    >
+                      <Unplug className="h-3.5 w-3.5" />
+                      Disconnect
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => startConnect(platform)}
+                    disabled={isPending}
+                    className="flex h-9 items-center gap-2 rounded-lg border border-hairline bg-surface px-4 text-[13px] font-semibold text-ink transition-colors hover:border-pine hover:text-pine disabled:opacity-50"
+                  >
+                    {isPending ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Link2 className="h-3.5 w-3.5" />
+                    )}
+                    Connect {PLATFORM_LABEL[platform]}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Existing platforms list */}
       <div className="space-y-3">
         {data?.length === 0 && (
@@ -200,7 +333,7 @@ export default function PlatformsPanel() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {SYNCABLE.has(p.platform) && p.handle && (
+              {SYNCABLE.has(p.platform) && (p.handle || p.connectedAccountId) && (
                 <button
                   onClick={() => sync.mutate({ id: p.id })}
                   disabled={sync.isPending && sync.variables?.id === p.id}
