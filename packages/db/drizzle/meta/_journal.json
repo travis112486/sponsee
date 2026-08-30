@@ -43,6 +43,13 @@
       "when": 1788047488290,
       "tag": "0005_rate_limit",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788079674706,
+      "tag": "0006_paused_subscription_status",
+      "breakpoints": true
     }
   ]
 }

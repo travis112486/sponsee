@@ -178,6 +178,9 @@ describe("deployable migration smoke test", () => {
       "incomplete",
       "incomplete_expired",
       "trialing",
+      // Appended by 0006 (SPO-97), which is why it sorts last rather than
+      // beside the other non-paying statuses.
+      "paused",
     ]);
 
     // Round-trip rather than a catalog check: proves the enum type is usable
@@ -206,6 +209,25 @@ describe("deployable migration smoke test", () => {
       subscription_status: "past_due",
     });
     expect(billingRes.rows[0].current_period_end).not.toBeNull();
+  });
+
+  // 0006. The catalog assertion above proves the label exists; this proves the
+  // column will actually take it. The API's own suite runs against a PGlite
+  // schema where `subscription_status` is a VARCHAR, so a missing enum value
+  // would be invisible there and only surface as a failing webhook UPDATE in
+  // production (SPO-97).
+  it("accepts 'paused' in the subscription_status column (0006)", async () => {
+    await client.exec(`
+      UPDATE creators
+         SET subscription_status = 'paused'
+       WHERE id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    `);
+
+    const res = await client.query<{ subscription_status: string }>(
+      `SELECT subscription_status FROM creators
+        WHERE id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'`,
+    );
+    expect(res.rows[0].subscription_status).toBe("paused");
   });
 
   it("extends chase_event_status with 'sending', ordered before 'sent' (0001)", async () => {
