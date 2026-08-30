@@ -302,6 +302,14 @@ export async function sendChaseEmail(args: {
   body: string;
   idempotencyKey: string;
 }): Promise<{ providerMessageId: string }> {
+  // Resolve the provider before the atomic claim. The factory is pure config
+  // resolution (it reads env vars and constructs a provider instance) with no
+  // database state, so a config error throws while the event is still
+  // `approved` and pg-boss retries it cleanly — instead of stranding it in
+  // `sending` (or burning the claim to mark it `failed`) for a mere
+  // misconfiguration.
+  const provider = createEmailProvider();
+
   // Atomic claim: only `approved` or `failed` may transition to `sending`.
   // A `sending` event is NEVER reclaimed here; stranded sends are rescued
   // periodically by runChaseTick after a staleness threshold.
@@ -342,8 +350,6 @@ export async function sendChaseEmail(args: {
       `Chase event ${args.chaseEventId} is not in approved/failed state or is already being processed`
     );
   }
-
-  const provider = createEmailProvider();
 
   try {
     const info = await provider.send({

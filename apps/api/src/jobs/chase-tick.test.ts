@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { sendChaseEmail } from "./chase-tick.js";
 
+// Capture every `db.update(...).set(payload)` so tests can assert the state
+// machine transitions (claim → sending, failure → failed).
+const dbState = vi.hoisted(() => ({ updateSetPayloads: [] as Array<Record<string, unknown>> }));
+
 // Mock @sponsee/db
 vi.mock("@sponsee/db", () => ({
   db: {
@@ -12,11 +16,14 @@ vi.mock("@sponsee/db", () => ({
       })),
     })),
     update: vi.fn(() => ({
-      set: vi.fn(() => ({
-        where: vi.fn(() => ({
-          returning: vi.fn(() => Promise.resolve([{ status: "sending" }])),
-        })),
-      })),
+      set: vi.fn((payload: Record<string, unknown>) => {
+        dbState.updateSetPayloads.push(payload);
+        return {
+          where: vi.fn(() => ({
+            returning: vi.fn(() => Promise.resolve([{ status: "sending" }])),
+          })),
+        };
+      }),
     })),
     insert: vi.fn(() => ({
       values: vi.fn(() => Promise.resolve()),
@@ -40,6 +47,7 @@ vi.mock("../email/index.js", () => ({
 describe("sendChaseEmail", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dbState.updateSetPayloads.length = 0;
   });
 
   afterEach(() => {
@@ -78,5 +86,33 @@ describe("sendChaseEmail", () => {
       })
     );
     expect(result.providerMessageId).toBe("msg-123");
+  });
+
+  it("leaves the event in approved when the provider factory throws before the claim", async () => {
+    const { createEmailProvider } = await import("../email/index.js");
+    vi.mocked(createEmailProvider).mockImplementation(() => {
+      throw new Error("Missing POSTMARK_SERVER_TOKEN environment variable");
+    });
+
+    await expect(
+      sendChaseEmail({
+        chaseEventId: "evt-1",
+        invoiceId: "inv-1",
+        step: 1,
+        toEmail: "brand@example.com",
+        fromEmail: "chase@sponsee.app",
+        replyToEmail: "creator@example.com",
+        subject: "Reminder",
+        body: "Please pay",
+        idempotencyKey: "key-1",
+      })
+    ).rejects.toThrow("Missing POSTMARK_SERVER_TOKEN");
+
+    // The factory is resolved before the atomic claim, so a config error throws
+    // before the event is ever moved out of `approved`: no `sending` claim, no
+    // `failed` write, and the DB is untouched entirely.
+    expect(dbState.updateSetPayloads).toHaveLength(0);
+    expect(dbState.updateSetPayloads).not.toContainEqual(expect.objectContaining({ status: "sending" }));
+    expect(dbState.updateSetPayloads).not.toContainEqual(expect.objectContaining({ status: "failed" }));
   });
 });
