@@ -51,9 +51,9 @@ describe("calculatorRouter.compute", () => {
       deliverableType: "ad-read",
     });
 
-    expect(result.floor).toBe(18000);
-    expect(result.mid).toBe(31500);
-    expect(result.agency).toBe(60000);
+    expect(result.floor).toBe(30000);
+    expect(result.mid).toBe(52500);
+    expect(result.agency).toBe(100000);
   });
 
   it("falls back to defaultBenchmarkConfig when DB config fails validation", async () => {
@@ -73,9 +73,9 @@ describe("calculatorRouter.compute", () => {
       deliverableType: "ad-read",
     });
 
-    expect(result.floor).toBe(18000);
-    expect(result.mid).toBe(31500);
-    expect(result.agency).toBe(60000);
+    expect(result.floor).toBe(30000);
+    expect(result.mid).toBe(52500);
+    expect(result.agency).toBe(100000);
   });
 
   it("uses the latest valid DB config when present", async () => {
@@ -107,11 +107,11 @@ describe("calculatorRouter.compute", () => {
       deliverableType: "ad-read",
     });
 
-    // With v2 bands: floor=0.8, mid=1.4, agency=2.5
-    // 500 * 60 * 0.8 = 24000 cents
-    expect(result.floor).toBe(24000);
-    expect(result.mid).toBe(42000);
-    expect(result.agency).toBe(75000);
+    // With v2 bands: floor=$0.80, mid=$1.40, agency=$2.50 per viewer-hour
+    // 500 CCV x 60 min = 500 viewer-hours; 500 * 0.8 * 100 = 40000 cents
+    expect(result.floor).toBe(40000);
+    expect(result.mid).toBe(70000);
+    expect(result.agency).toBe(125000);
   });
 
   it("applies platform-mix adjustments from DB config", async () => {
@@ -142,8 +142,8 @@ describe("calculatorRouter.compute", () => {
       platforms: ["twitch"],
     });
 
-    // 500 * 60 * 0.6 * 1.2 = 21600 cents
-    expect(result.floor).toBe(21600);
+    // 500 viewer-hours * $0.60 * 100 * 1.2 = 36000 cents
+    expect(result.floor).toBe(36000);
   });
 
   it("round-trips seed config version and bands correctly", async () => {
@@ -168,9 +168,10 @@ describe("calculatorRouter.compute", () => {
       deliverableType: "ad-read",
     });
 
-    // Reference values from SPO-31: 180/315/600 as dollars = 18000/31500/60000 cents
-    expect(result.floor).toBe(18000);
-    expect(result.mid).toBe(31500);
-    expect(result.agency).toBe(60000);
+    // Reference values (SPO-31, re-based on viewer-hours by SPO-93):
+    // 500 viewer-hours at $0.60/$1.05/$2.00 = $300/$525/$1000
+    expect(result.floor).toBe(30000);
+    expect(result.mid).toBe(52500);
+    expect(result.agency).toBe(100000);
   });
 });
