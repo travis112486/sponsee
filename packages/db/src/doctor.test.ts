@@ -29,7 +29,19 @@ function hashedLedger(n: number): LedgerRow[] {
     .map((m, i) => ({ id: i + 1, createdAt: m.when, hash: m.hash }));
 }
 
-const POISON = 1788105600000; // 2026-08-30T16:00Z — the value 0002 shipped with
+const ONE_DAY = 86_400_000;
+
+/**
+ * The future timestamp row 3 recorded. It shipped as the literal 1788105600000
+ * (2026-08-30T16:00Z), the value 0002 was generated with, but the fixture never
+ * needed that exact number — only that it sits ahead of every journal `when`,
+ * which is what makes `maxApplied > maxJournal` in `diagnose` and produces the
+ * SPO-76 diagnosis. `db:generate` stamps `when` with wall-clock now, so a fixed
+ * constant stops describing a poisoned ledger the moment a migration is
+ * generated past it. Derived from the journal, the premise holds by
+ * construction however many migrations land and whenever they land.
+ */
+const POISON = Math.max(...journal.entries.map((e) => e.when)) + ONE_DAY;
 
 describe("diagnose", () => {
   it("passes on a fully migrated database", () => {
@@ -57,14 +69,33 @@ describe("diagnose", () => {
   });
 
   // The SPO-76 case: a long-lived database that ran `db:migrate` between 8/27
-  // and PR #4. 0002 recorded the future timestamp, 0003 and 0004 were skipped,
-  // and the CLI reported success.
+  // and PR #4. The third entry recorded a future timestamp, every entry after
+  // it was skipped, and the CLI reported success.
   describe("a ledger poisoned by the pre-PR#4 journal", () => {
+    // Three rows on purpose: that is the SPO-76 database, which had applied
+    // 0000-0002 when it recorded the poisoned timestamp. The count is the
+    // scenario, not an incidental number to grow alongside the journal.
     const poisoned: LedgerRow[] = [
       { id: 1, createdAt: journal.entries[0].when },
       { id: 2, createdAt: journal.entries[1].when },
       { id: 3, createdAt: POISON },
     ];
+
+    it("is a fixture whose poison timestamp is ahead of the whole journal", () => {
+      // The premise every case below rests on. Asserted rather than assumed so
+      // that re-pinning POISON to a literal fails here, with the reason, rather
+      // than as three unrelated-looking failures once wall-clock passes it.
+      expect(POISON).toBeGreaterThan(Math.max(...journal.entries.map((e) => e.when)));
+    });
+
+    // Everything past the ledger's last row is what this database never
+    // applied. It is the journal's tail, not a fixed set, so derive it —
+    // naming the tags here would go stale on the next `db:generate`, and a
+    // guardrail you have to hand-edit is one people learn to edit unread.
+    const unapplied = journal.entries.slice(poisoned.length).map((e) => e.tag);
+
+    /** The entry row 3 should have recorded, i.e. the one carrying POISON. */
+    const misdated = journal.entries[poisoned.length - 1];
 
     it("fails, and names the silent no-op", () => {
       const { problems } = diagnose(journal.entries, poisoned);
@@ -74,19 +105,20 @@ describe("diagnose", () => {
       );
     });
 
-    it("reports 0003 and 0004 as skipped rather than pending", () => {
+    it("reports every unapplied migration as skipped rather than pending", () => {
       const { pending, problems } = diagnose(journal.entries, poisoned);
       const skipped = problems.find(
         (p) => p.title === "migrations were skipped, not applied",
       )?.detail;
 
       expect(pending).toEqual([]);
-      expect(skipped).toContain("0003_ordinary_fabian_cortez");
-      expect(skipped).toContain("0004_oval_quasar");
+      expect(unapplied.length).toBeGreaterThan(0);
+      for (const tag of unapplied) expect(skipped).toContain(tag);
 
-      // 0002 carries the poisoned timestamp but its DDL did run. Listing it as
-      // skipped would send an operator chasing a migration that already applied.
-      expect(skipped).not.toContain("0002_sturdy_war_machine");
+      // The misdated entry carries the poisoned timestamp but its DDL did run.
+      // Listing it as skipped would send an operator chasing a migration that
+      // already applied.
+      expect(skipped).not.toContain(misdated.tag);
     });
 
     it("emits repair SQL that makes the ledger healthy again", () => {
@@ -94,20 +126,19 @@ describe("diagnose", () => {
       const repair = problems.find((p) => p.repair)?.repair;
 
       expect(repair).toContain(
-        `set created_at = ${journal.entries[2].when} where id = 3`,
+        `set created_at = ${misdated.when} where id = ${poisoned.length}`,
       );
 
       // Apply the repair the way an operator would, then confirm the only
       // remaining finding is the pending work `db:migrate` will now do for real.
       const repaired = poisoned.map((row) =>
-        row.createdAt === POISON ? { ...row, createdAt: journal.entries[2].when } : row,
+        row.createdAt === POISON ? { ...row, createdAt: misdated.when } : row,
       );
 
       expect(diagnose(journal.entries, repaired).problems).toEqual([]);
-      // Everything the 3-row ledger has not applied — derived from the journal
-      // so that adding a migration does not fail this test for the wrong reason.
+      expect(unapplied.length).toBeGreaterThan(0); // or the next line is vacuous
       expect(diagnose(journal.entries, repaired).pending.map((e) => e.tag)).toEqual(
-        journal.entries.slice(poisoned.length).map((e) => e.tag),
+        unapplied,
       );
     });
   });
