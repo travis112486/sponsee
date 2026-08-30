@@ -3,6 +3,7 @@ import { createHmac } from "crypto";
 import { MailpitProvider } from "./mailpit.js";
 import { PostmarkProvider } from "./postmark.js";
 import { ResendProvider } from "./resend.js";
+import { createEmailProvider } from "./index.js";
 import type { SendEmailPayload } from "./types.js";
 
 const samplePayload: SendEmailPayload = {
@@ -366,5 +367,66 @@ describe("ResendProvider", () => {
       const ok = provider.verifyWebhookSignature!("body", { "svix-id": "id", "svix-timestamp": timestamp, "svix-signature": "v1,sig" });
       expect(ok).toBe(false);
     });
+  });
+});
+
+describe("createEmailProvider", () => {
+  const prodEnv = { NODE_ENV: "production" };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to Mailpit outside production (dev/test unchanged)", () => {
+    const provider = createEmailProvider(undefined, {});
+    expect(provider.name).toBe("mailpit");
+    expect(provider).toBeInstanceOf(MailpitProvider);
+  });
+
+  it("throws naming EMAIL_PROVIDER when production and unset", () => {
+    expect(() => createEmailProvider(undefined, { ...prodEnv })).toThrow(/EMAIL_PROVIDER/);
+  });
+
+  it("throws naming EMAIL_PROVIDER when production and mailpit", () => {
+    expect(() => createEmailProvider(undefined, { ...prodEnv, EMAIL_PROVIDER: "mailpit" })).toThrow(/EMAIL_PROVIDER/);
+  });
+
+  it("throws naming EMAIL_PROVIDER when production and unknown provider", () => {
+    expect(() => createEmailProvider(undefined, { ...prodEnv, EMAIL_PROVIDER: "sendgrid" })).toThrow(/EMAIL_PROVIDER/);
+  });
+
+  it("throws naming POSTMARK_SERVER_TOKEN when production postmark without token", () => {
+    expect(() => createEmailProvider(undefined, { ...prodEnv, EMAIL_PROVIDER: "postmark" })).toThrow(
+      /POSTMARK_SERVER_TOKEN/,
+    );
+  });
+
+  it("returns a PostmarkProvider when production postmark with token", () => {
+    const provider = createEmailProvider(undefined, {
+      ...prodEnv,
+      EMAIL_PROVIDER: "postmark",
+      POSTMARK_SERVER_TOKEN: "tok",
+    });
+    expect(provider.name).toBe("postmark");
+    expect(provider).toBeInstanceOf(PostmarkProvider);
+  });
+
+  it("throws naming RESEND_API_KEY when production resend without key", () => {
+    expect(() => createEmailProvider(undefined, { ...prodEnv, EMAIL_PROVIDER: "resend" })).toThrow(/RESEND_API_KEY/);
+  });
+
+  it("returns a ResendProvider when production resend with key", () => {
+    const provider = createEmailProvider(undefined, {
+      ...prodEnv,
+      EMAIL_PROVIDER: "resend",
+      RESEND_API_KEY: "key",
+    });
+    expect(provider.name).toBe("resend");
+    expect(provider).toBeInstanceOf(ResendProvider);
+  });
+
+  it("bypasses the production guard for an explicit provider name (webhook path)", () => {
+    expect(() => createEmailProvider("mailpit", { ...prodEnv })).not.toThrow();
+    expect(createEmailProvider("mailpit", { ...prodEnv }).name).toBe("mailpit");
   });
 });
