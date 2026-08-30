@@ -10,6 +10,7 @@ const Payments = lazy(() => import("./pages/Payments"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const LoginPage = lazy(() => import("./pages/auth/LoginPage"));
+const NotFound = lazy(() => import("./pages/NotFound"));
 
 function PageSpinner() {
   return (
@@ -77,7 +78,14 @@ export default function App() {
         />
         {/* Rate Calculator remains post-beta scope (SPO-5 §10). */}
         <Route path="calculator" element={<Navigate to="/" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route
+          path="*"
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <NotFound />
+            </Suspense>
+          }
+        />
       </Route>
     </Routes>
   );

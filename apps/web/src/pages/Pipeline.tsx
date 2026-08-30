@@ -206,104 +206,109 @@ export default function Pipeline() {
               {byStage[stage]?.map((deal) => (
                 <div
                   key={deal.id}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Open ${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
-                  onClick={() => navigate(`/pipeline/${deal.id}`)}
-                  onKeyDown={(e) => {
-                    if (e.target !== e.currentTarget) return;
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      navigate(`/pipeline/${deal.id}`);
-                    }
-                  }}
-                  className="group cursor-pointer rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-all hover:border-pine/30 hover:shadow-warm-md focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
+                  className="group relative rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-all hover:border-pine/30 hover:shadow-warm-md"
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-[12px] font-semibold text-ink-2">
-                        {deal.brand?.name ?? "Unknown brand"}
-                      </p>
-                      <p className="mt-0.5 truncate text-[13px] font-medium text-ink">
-                        {deal.title}
-                      </p>
-                    </div>
-                    <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-3 opacity-0 transition-opacity group-hover:opacity-100" />
-                  </div>
+                  {/* Primary open action — stretched under the card; nested controls sit above it */}
+                  <button
+                    type="button"
+                    aria-label={`Open ${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
+                    onClick={() => navigate(`/pipeline/${deal.id}`)}
+                    className="absolute inset-0 z-0 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
+                  />
 
-                  <div className="mt-2 flex items-center gap-3">
-                    <div className="flex items-center gap-1 text-[12px] font-medium text-ink-2">
-                      <DollarSign className="h-3 w-3 text-ink-3" />
-                      {formatCents(deal.valueCents)}
-                    </div>
-                    {deal.platforms && deal.platforms.length > 0 && (
-                      <div className="flex gap-1">
-                        {deal.platforms.map((p) => (
-                          <span
-                            key={p}
-                            className={cn(
-                              "text-[10px] font-semibold uppercase tracking-wider",
-                              p === "twitch" && "text-twitch",
-                              p === "youtube" && "text-youtube",
-                              p === "kick" && "text-kick",
-                              p === "tiktok" && "text-ink-3"
-                            )}
-                          >
-                            {p}
-                          </span>
-                        ))}
+                  {/* Non-interactive card body — clicks pass through to the stretched button */}
+                  <div className="pointer-events-none relative z-10">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-[12px] font-semibold text-ink-2">
+                          {deal.brand?.name ?? "Unknown brand"}
+                        </p>
+                        <p className="mt-0.5 truncate text-[13px] font-medium text-ink">
+                          {deal.title}
+                        </p>
                       </div>
+                      <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-3 opacity-0 transition-opacity group-hover:opacity-100" />
+                    </div>
+
+                    <div className="mt-2 flex items-center gap-3">
+                      <div className="flex items-center gap-1 text-[12px] font-medium text-ink-2">
+                        <DollarSign className="h-3 w-3 text-ink-3" />
+                        {formatCents(deal.valueCents)}
+                      </div>
+                      {deal.platforms && deal.platforms.length > 0 && (
+                        <div className="flex gap-1">
+                          {deal.platforms.map((p) => (
+                            <span
+                              key={p}
+                              className={cn(
+                                "text-[10px] font-semibold uppercase tracking-wider",
+                                p === "twitch" && "text-twitch",
+                                p === "youtube" && "text-youtube",
+                                p === "kick" && "text-kick",
+                                p === "tiktok" && "text-ink-3"
+                              )}
+                            >
+                              {p}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {deal.notes && (
+                      <p className="mt-1.5 line-clamp-2 text-[11px] leading-4 text-ink-3">
+                        {deal.notes}
+                      </p>
                     )}
                   </div>
 
-                  {deal.notes && (
-                    <p className="mt-1.5 line-clamp-2 text-[11px] leading-4 text-ink-3">
-                      {deal.notes}
-                    </p>
-                  )}
-
-                  {/* Stage mover */}
-                  {movingDealId === deal.id ? (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {dealStages
-                        .filter((s) => s !== deal.stage)
-                        .map((s) => (
-                          <button
-                            key={s}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              updateStage.mutate({ id: deal.id, stage: s });
-                              setMovingDealId(null);
-                            }}
-                            className={cn(
-                              "rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
-                              stageColors[s]
-                            )}
-                          >
-                            {stageLabels[s]}
-                          </button>
-                        ))}
+                  {/* Stage mover — interactive controls above the stretched button */}
+                  <div className="relative z-20">
+                    {movingDealId === deal.id ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {dealStages
+                          .filter((s) => s !== deal.stage)
+                          .map((s) => (
+                            <button
+                              key={s}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateStage.mutate({ id: deal.id, stage: s });
+                                setMovingDealId(null);
+                              }}
+                              className={cn(
+                                "rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
+                                stageColors[s]
+                              )}
+                            >
+                              {stageLabels[s]}
+                            </button>
+                          ))}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMovingDealId(null);
+                          }}
+                          className="rounded px-1.5 py-0.5 text-[10px] text-ink-3 hover:bg-surface-subtle"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setMovingDealId(null);
+                          setMovingDealId(deal.id);
                         }}
-                        className="rounded px-1.5 py-0.5 text-[10px] text-ink-3 hover:bg-surface-subtle"
+                        className="mt-2 rounded text-[11px] font-medium text-pine opacity-0 transition-opacity hover:text-pine-hover group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
                       >
-                        Cancel
+                        Move…
                       </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setMovingDealId(deal.id);
-                      }}
-                      className="mt-2 text-[11px] font-medium text-pine opacity-0 transition-opacity hover:text-pine-hover group-hover:opacity-100"
-                    >
-                      Move…
-                    </button>
-                  )}
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -345,6 +350,56 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
   const [paymentTerm, setPaymentTerm] = useState<"net_15" | "net_30" | "net_45">("net_30");
   const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
+
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  // Focus trap + Escape-to-close (WCAG 2.1 AA). No Radix in the bundle, so this
+  // is a minimal manual trap: focus the dialog on open, cycle Tab within it, and
+  // restore focus to the previously-focused element on close. Mount-once — does
+  // not re-fire on parent refetch.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+
+    const focusableSelector =
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+    const getFocusable = () =>
+      Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector));
+
+    dialog.focus();
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const focusable = getFocusable();
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
+    dialog.addEventListener("keydown", handleKeyDown);
+    return () => {
+      dialog.removeEventListener("keydown", handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, []);
 
   function togglePlatform(p: string) {
     setSelectedPlatforms((prev) =>
@@ -398,10 +453,18 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-xl border border-hairline bg-surface shadow-lg">
+      <div className="absolute inset-0" onClick={onClose} aria-hidden="true" />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-deal-title"
+        tabIndex={-1}
+        className="relative w-full max-w-lg rounded-xl border border-hairline bg-surface shadow-lg focus:outline-none"
+      >
         <div className="flex items-center justify-between border-b border-hairline px-4 py-3">
-          <h3 className="text-[15px] font-semibold text-ink">New deal</h3>
-          <button onClick={onClose} className="text-ink-3 hover:text-ink">
+          <h3 id="new-deal-title" className="text-[15px] font-semibold text-ink">New deal</h3>
+          <button type="button" onClick={onClose} aria-label="Close" className="text-ink-3 hover:text-ink">
             <X className="h-4 w-4" />
           </button>
         </div>

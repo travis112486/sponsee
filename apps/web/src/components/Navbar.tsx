@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { resolveTopbarPage } from "@/lib/route-titles";
 import { trpc } from "@/trpc";
 import { planLabels, planPricesCents } from "@sponsee/shared";
 
@@ -28,14 +29,6 @@ const navItems = [
   { to: "/calendar", label: "Calendar", icon: Calendar },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
-
-const pageTitles: Record<string, { title: string; crumb?: string }> = {
-  "/": { title: "Dashboard" },
-  "/pipeline": { title: "Pipeline" },
-  "/payments": { title: "Payments" },
-  "/calendar": { title: "Calendar" },
-  "/settings": { title: "Settings" },
-};
 
 function formatPaletteCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -74,17 +67,17 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     }
   }, [open]);
 
+  // Escape closes the palette. The ⌘K toggle is owned exclusively by Topbar;
+  // registering it here too would fire on the same keypress and immediately
+  // re-close the just-opened palette (SPO-25).
   useEffect(() => {
+    if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        onClose();
-      }
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -162,6 +155,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search deals, brands, invoices"
         className="w-full max-w-[560px] overflow-hidden rounded-[10px] border border-hairline bg-surface shadow-warm-lg"
         onClick={(e) => e.stopPropagation()}
       >
@@ -322,7 +318,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
-  const page = pageTitles[location.pathname] ?? { title: "Dashboard" };
+  const page = resolveTopbarPage(location.pathname);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -392,6 +388,8 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
             }}
             className="relative rounded-lg p-2 text-ink-2 transition-colors hover:bg-surface-subtle"
             aria-label="Notifications"
+            aria-haspopup="true"
+            aria-expanded={bellOpen}
           >
             <Bell className="h-4 w-4" />
             <span className="absolute right-1.5 top-1.5 flex h-2 w-2 items-center justify-center rounded-full bg-brick text-[0px]" />
@@ -417,6 +415,9 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
               setBellOpen(false);
             }}
             className="flex items-center gap-1 rounded-lg p-1 transition-colors hover:bg-surface-subtle"
+            aria-label="Account menu"
+            aria-haspopup="true"
+            aria-expanded={avatarOpen}
           >
             <img
               src={user?.image || "/pixelpanda-avatar.png"}

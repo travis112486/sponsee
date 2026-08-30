@@ -100,6 +100,7 @@ export default function Dashboard() {
     (i) => i.dueAt && new Date(i.dueAt) < new Date()
   );
   const outstanding = openInvoices.reduce((s, i) => s + i.amountCents, 0);
+  const overdueAmountCents = overdueInvoices.reduce((s, i) => s + i.amountCents, 0);
 
   const stageCounts = Object.fromEntries(
     dealStages.map((s) => [
@@ -150,6 +151,28 @@ export default function Dashboard() {
         />
       </div>
 
+      {/* Overdue callout — money-at-risk reads before operational detail (P-01) */}
+      {overdueInvoices.length > 0 && (
+        <div className="rounded-xl border border-brick/20 bg-brick-tint/40 p-4">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-brick" />
+            <h3 className="text-[13px] font-semibold text-brick">
+              {overdueInvoices.length} overdue invoice{overdueInvoices.length > 1 ? "s" : ""}
+            </h3>
+          </div>
+          <p className="mt-1 text-[12.5px] text-ink-2">
+            {formatCents(overdueAmountCents)} at risk across{" "}
+            {overdueInvoices.length} unpaid invoice{overdueInvoices.length > 1 ? "s" : ""}
+          </p>
+          <button
+            onClick={() => navigate("/payments")}
+            className="mt-2 text-[12px] font-medium text-brick underline-offset-2 hover:underline"
+          >
+            Review payments
+          </button>
+        </div>
+      )}
+
       {/* Stage breakdown */}
       <div className="rounded-xl border border-hairline bg-surface p-4">
         <h3 className="text-[13px] font-semibold text-ink">Pipeline stages</h3>
@@ -186,30 +209,23 @@ export default function Dashboard() {
         {activeDeals.length > 0 ? (
           <div className="mt-3 space-y-2">
             {activeDeals.slice(0, 5).map((deal) => (
-              <div
+              <button
                 key={deal.id}
-                role="button"
-                tabIndex={0}
+                type="button"
                 aria-label={`Open ${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
                 onClick={() => navigate(`/pipeline/${deal.id}`)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    navigate(`/pipeline/${deal.id}`);
-                  }
-                }}
-                className="flex cursor-pointer items-center justify-between rounded-lg border border-hairline bg-surface-subtle px-3 py-2 transition-colors hover:border-pine/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
+                className="flex w-full cursor-pointer items-center justify-between rounded-lg border border-hairline bg-surface-subtle px-3 py-2 text-left transition-colors hover:border-pine/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
               >
-                <div>
-                  <p className="text-[13px] font-medium text-ink">{deal.title}</p>
-                  <p className="text-[11px] text-ink-3">
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-medium text-ink">{deal.title}</span>
+                  <span className="block text-[11px] text-ink-3">
                     {deal.brand?.name} · {stageLabels[deal.stage]}
-                  </p>
-                </div>
-                <p className="text-[13px] font-semibold text-ink">
+                  </span>
+                </span>
+                <span className="text-[13px] font-semibold text-ink">
                   {formatCents(deal.valueCents)}
-                </p>
-              </div>
+                </span>
+              </button>
             ))}
           </div>
         ) : (
