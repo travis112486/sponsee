@@ -34,13 +34,13 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-paper px-4">
-      <div className="w-full max-w-[380px]">
-        <div className="mb-8 text-center">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-paper px-4 py-10">
+      <div className="w-full max-w-[420px] rounded-2xl border border-hairline bg-surface px-6 py-8 shadow-warm-md sm:px-8">
+        <div className="mb-7 text-center">
           <div className="mb-4 flex justify-center">
             <img src="/logo.svg" alt="Sponsee" className="h-10 w-10" />
           </div>
-          <h1 className="text-[22px] font-semibold tracking-[-0.01em] text-ink">
+          <h1 className="font-serif text-[27px] leading-tight tracking-[-0.01em] text-ink">
             Sign in to Sponsee
           </h1>
           <p className="mt-1.5 text-[13px] text-ink-3">
@@ -49,7 +49,7 @@ export default function LoginPage() {
         </div>
 
         {sent ? (
-          <div className="rounded-[10px] border border-hairline bg-surface p-5 text-center">
+          <div className="rounded-[10px] border border-hairline bg-surface-subtle p-5 text-center">
             <h2 className="text-[15px] font-semibold text-ink">Check your email</h2>
             <p className="mt-2 text-[13px] text-ink-3">
               We sent a magic link to <span className="font-medium text-ink">{email}</span>.

@@ -360,11 +360,11 @@ function StatCard({
   accent: string;
 }) {
   return (
-    <div className="rounded-xl border border-hairline bg-surface p-3">
+    <div className="rounded-xl border border-hairline bg-surface p-4 shadow-warm">
       <p className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
         {label}
       </p>
-      <p className={cn("mt-1 text-[18px] font-semibold", accent)}>{value}</p>
+      <p className={cn("mt-2 font-serif text-[20px] leading-none", accent)}>{value}</p>
     </div>
   );
 }
@@ -385,11 +385,11 @@ function InvoiceChasePanel({ invoiceId }: { invoiceId: string }) {
   const utils = trpc.useUtils();
 
   return (
-    <div className="mx-4 mb-3 rounded-lg border border-hairline bg-surface-subtle p-3">
+    <div className="mx-4 mb-4 rounded-lg border border-hairline bg-surface-subtle p-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Mail className="h-3.5 w-3.5 text-ink-3" />
-          <span className="text-[12px] font-medium text-ink">
+          <span className="text-[13px] font-semibold text-ink">
             Chase sequence
           </span>
           {state && (
@@ -426,11 +426,11 @@ function InvoiceChasePanel({ invoiceId }: { invoiceId: string }) {
       </div>
 
       {events && events.length > 0 ? (
-        <div className="mt-2 space-y-1">
+        <div className="mt-3 space-y-1.5">
           {events.map((ev) => (
             <div
               key={ev.id}
-              className="flex items-center justify-between rounded bg-surface px-2 py-1.5"
+              className="flex items-center justify-between rounded-md border border-hairline bg-surface px-2.5 py-2"
             >
               <div>
                 <p className="text-[11px] font-medium text-ink">

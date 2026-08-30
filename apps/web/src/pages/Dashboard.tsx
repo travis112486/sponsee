@@ -282,18 +282,18 @@ function KpiCard({
   return (
     <button
       onClick={onClick}
-      className="rounded-xl border border-hairline bg-surface p-3 text-left transition-colors hover:border-pine/30"
+      className="min-h-[112px] rounded-xl border border-hairline bg-surface p-4 text-left shadow-warm transition-all hover:border-pine/30 hover:shadow-warm-md"
     >
-      <div className="flex items-center gap-1.5">
-        <Icon className={cn("h-3.5 w-3.5", accent ?? "text-ink-3")} />
+      <div className="flex items-center gap-2">
+        <Icon className={cn("h-4 w-4", accent ?? "text-pine")} />
         <span className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
           {label}
         </span>
       </div>
-      <p className={cn("mt-1 text-[18px] font-semibold", accent ?? "text-ink")}>
+      <p className={cn("mt-2 font-serif text-[22px] leading-none", accent ?? "text-ink")}>
         {value}
       </p>
-      <p className="text-[11px] text-ink-3">{sub}</p>
+      <p className="mt-1.5 text-[11px] text-ink-3">{sub}</p>
     </button>
   );
 }
