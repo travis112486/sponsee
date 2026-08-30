@@ -5,6 +5,7 @@ import { stageLabels, platforms, deliverableStatuses, benchmarkDeliverableTypes 
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { BenchmarkBand } from "@/components/BenchmarkBand";
+import { ContractCard } from "@/components/ContractCard";
 import {
   ArrowLeft,
   Check,
@@ -427,6 +428,9 @@ export default function DealDetail() {
               </p>
             )}
           </div>
+
+          {/* Contract */}
+          <ContractCard dealId={deal.id} />
         </div>
 
         {/* Right column */}
