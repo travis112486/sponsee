@@ -578,6 +578,53 @@ describe("settings router tenant isolation", () => {
       expect(row.ccv).toBe(200);
     });
 
+    it("returns CONFLICT when the id path reclassifies a row onto an existing platform", async () => {
+      // Creator A already has a twitch row (platformAId). Add a youtube row, then
+      // try to move the twitch row onto "youtube" — this collides with the
+      // (creatorId, platform) unique index, which must surface as CONFLICT, not
+      // an unhandled Postgres error (SPO-136).
+      await db
+        .insert(schema.creatorPlatforms)
+        .values({ creatorId: creatorAId, platform: "youtube", ccv: 150 });
+
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      await expect(
+        caller.upsertPlatform({
+          id: platformAId,
+          platform: "youtube",
+          ccv: 999,
+        })
+      ).rejects.toSatisfy((err: TRPCError) => err.code === "CONFLICT");
+
+      // The twitch row keeps its identity and its data — no silent reclassification.
+      const [twitch] = await db
+        .select()
+        .from(schema.creatorPlatforms)
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+      expect(twitch.platform).toBe("twitch");
+      expect(twitch.ccv).toBe(100);
+    });
+
+    it("returns CONFLICT when the id path reclassifies a row onto a new platform", async () => {
+      // Even when the target platform doesn't collide, changing an existing row's
+      // platform is not a meaningful edit — it must CONFLICT, not overwrite.
+      const caller = settingsRouter.createCaller(mockCtx(creatorAId));
+      await expect(
+        caller.upsertPlatform({
+          id: platformAId,
+          platform: "kick",
+          ccv: 999,
+        })
+      ).rejects.toSatisfy((err: TRPCError) => err.code === "CONFLICT");
+
+      const [twitch] = await db
+        .select()
+        .from(schema.creatorPlatforms)
+        .where(eq(schema.creatorPlatforms.id, platformAId));
+      expect(twitch.platform).toBe("twitch");
+      expect(twitch.ccv).toBe(100);
+    });
+
     it("keeps sync state when saving with an unchanged handle", async () => {
       // The panel sends `handle` on every save; an edit that doesn't change it
       // (e.g. updating CCV) must not wipe the row's sync state.
