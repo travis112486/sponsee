@@ -288,7 +288,7 @@ export const contracts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("contracts_deal_idx").on(t.dealId)]
+  (t) => [uniqueIndex("contracts_deal_idx").on(t.dealId)]
 );
 
 // Invoices
