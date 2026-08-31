@@ -268,6 +268,13 @@ export const proofs = pgTable(
     kind: proofKindEnum("kind").notNull(),
     url: text("url"),
     note: text("note"),
+    // File-backed evidence (SPO-157): the object key in the storage bucket,
+    // plus the metadata needed to render/download it without re-reading the
+    // bucket. `url` stays nullable so link evidence keeps working unchanged.
+    storageKey: text("storage_key"),
+    mimeType: text("mime_type"),
+    sizeBytes: integer("size_bytes"),
+    originalFilename: text("original_filename"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("proofs_deal_idx").on(t.dealId)]
