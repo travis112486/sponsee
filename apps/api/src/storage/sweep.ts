@@ -14,9 +14,21 @@ export const STORAGE_ORPHAN_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
 
 const DEAL_ID_FROM_KEY = /^creators\/[^/]+\/deals\/([^/]+)\//;
 
+/**
+ * `deals.id` is a `uuid` column, so a captured segment that isn't one would
+ * fail the `inArray` query below — and since that query batches every
+ * candidate id from the page in one call, a single bad key would throw for
+ * the whole page instead of just that key. Keys are always server-generated
+ * via `buildObjectKey` (see keys.ts), but the bucket can still contain a
+ * hand-uploaded object or a leftover from a migration/manual test whose path
+ * merely resembles the convention, so this can't be assumed away.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface StorageSweepResult {
   scanned: number;
   deleted: number;
+  skippedUnrecognized: number;
   skippedUnconfigured: boolean;
 }
 
@@ -48,7 +60,7 @@ export async function runStorageOrphanSweep(
 ): Promise<StorageSweepResult> {
   const config = getStorageConfig(env);
   if (!config) {
-    return { scanned: 0, deleted: 0, skippedUnconfigured: true };
+    return { scanned: 0, deleted: 0, skippedUnrecognized: 0, skippedUnconfigured: true };
   }
 
   const client = buildS3Client(config);
@@ -56,6 +68,7 @@ export async function runStorageOrphanSweep(
 
   let scanned = 0;
   let deleted = 0;
+  let skippedUnrecognized = 0;
   let continuationToken: string | undefined;
 
   do {
@@ -73,7 +86,12 @@ export async function runStorageOrphanSweep(
     const dealIdByKey = new Map<string, string>();
     for (const obj of objects) {
       const match = obj.Key ? DEAL_ID_FROM_KEY.exec(obj.Key) : null;
-      if (match) dealIdByKey.set(obj.Key!, match[1]);
+      const dealId = match?.[1];
+      if (dealId && UUID_PATTERN.test(dealId)) {
+        dealIdByKey.set(obj.Key!, dealId);
+      } else if (obj.Key) {
+        skippedUnrecognized++;
+      }
     }
 
     if (dealIdByKey.size > 0) {
@@ -102,5 +120,5 @@ export async function runStorageOrphanSweep(
     continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
   } while (continuationToken);
 
-  return { scanned, deleted, skippedUnconfigured: false };
+  return { scanned, deleted, skippedUnrecognized, skippedUnconfigured: false };
 }
