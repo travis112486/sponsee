@@ -64,6 +64,13 @@
       "when": 1788127076621,
       "tag": "0008_thick_matthew_murdock",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788147863189,
+      "tag": "0009_illegal_malice",
+      "breakpoints": true
     }
   ]
 }

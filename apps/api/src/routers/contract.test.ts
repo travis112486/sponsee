@@ -1,11 +1,26 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { eq, sql } from "drizzle-orm";
-import { contractRouter } from "./contract.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
+import { buildObjectKey } from "../storage/index.js";
+import { contractRouter } from "./contract.js";
+
+// deleteObject is the one storage export that actually reaches the network
+// (S3Client#send); every other export used here (buildObjectKey,
+// keyBelongsToDeal, extensionFromKey, mimeTypeForExtension, createDownloadUrl
+// via getSignedUrl) is a pure/local computation, so only this one needs
+// mocking to keep the suite offline.
+const storageMocks = vi.hoisted(() => ({
+  deleteObject: vi.fn(async () => {}),
+}));
+
+vi.mock("../storage/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../storage/index.js")>();
+  return { ...actual, deleteObject: storageMocks.deleteObject };
+});
 
 // ── Schema SQL (shared with every other PGlite suite via test-utils/schema-sql.ts;
 // fileParallelism: false / maxWorkers: 1 in scripts/vitest-api.config.ts (SPO-86)
@@ -86,6 +101,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await cleanTables();
   await seed();
+  storageMocks.deleteObject.mockClear();
 });
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -101,6 +117,53 @@ describe("contract router", () => {
     it("rejects a deal owned by another creator", async () => {
       const caller = contractRouter.createCaller(mockCtx(creatorAId));
       await expect(caller.getByDeal({ dealId: dealBId })).rejects.toThrowError(TRPCError);
+    });
+
+    describe("with an uploaded PDF", () => {
+      afterEach(() => {
+        vi.unstubAllEnvs();
+      });
+
+      it("degrades to a null viewUrl when storage isn't configured", async () => {
+        vi.stubEnv("STORAGE_ENDPOINT", "");
+        vi.stubEnv("STORAGE_BUCKET", "");
+        vi.stubEnv("STORAGE_REGION", "");
+        vi.stubEnv("STORAGE_ACCESS_KEY_ID", "");
+        vi.stubEnv("STORAGE_SECRET_ACCESS_KEY", "");
+
+        const caller = contractRouter.createCaller(mockCtx(creatorAId));
+        const storageKey = buildObjectKey({
+          creatorId: creatorAId,
+          dealId: dealAId,
+          scope: "contracts",
+          extension: "pdf",
+        });
+        await caller.upsert({ dealId: dealAId, storageKey, sizeBytes: 100 });
+
+        const result = await caller.getByDeal({ dealId: dealAId });
+        expect(result?.viewUrl).toBeNull();
+      });
+
+      it("returns a short-TTL presigned GET when storage is configured", async () => {
+        vi.stubEnv("STORAGE_ENDPOINT", "http://localhost:9000");
+        vi.stubEnv("STORAGE_BUCKET", "sponsee-test");
+        vi.stubEnv("STORAGE_REGION", "auto");
+        vi.stubEnv("STORAGE_ACCESS_KEY_ID", "test-access-key");
+        vi.stubEnv("STORAGE_SECRET_ACCESS_KEY", "test-secret-key");
+
+        const caller = contractRouter.createCaller(mockCtx(creatorAId));
+        const storageKey = buildObjectKey({
+          creatorId: creatorAId,
+          dealId: dealAId,
+          scope: "contracts",
+          extension: "pdf",
+        });
+        await caller.upsert({ dealId: dealAId, storageKey, sizeBytes: 100 });
+
+        const result = await caller.getByDeal({ dealId: dealAId });
+        expect(result?.viewUrl).toMatch(/^http:\/\/localhost:9000\//);
+        expect(new URL(result!.viewUrl!).pathname).toContain(storageKey);
+      });
     });
   });
 
@@ -187,6 +250,141 @@ describe("contract router", () => {
       await expect(caller.upsert({ dealId: dealBId, bodyText: "sneaky" })).rejects.toThrowError(
         TRPCError
       );
+    });
+  });
+
+  describe("upsert — file upload", () => {
+    it("accepts an uploaded PDF and stores its metadata", async () => {
+      const caller = contractRouter.createCaller(mockCtx(creatorAId));
+      const storageKey = buildObjectKey({
+        creatorId: creatorAId,
+        dealId: dealAId,
+        scope: "contracts",
+        extension: "pdf",
+      });
+
+      const contract = await caller.upsert({
+        dealId: dealAId,
+        storageKey,
+        sizeBytes: 4096,
+        originalFilename: "Master Services Agreement.pdf",
+      });
+
+      expect(contract.storageKey).toBe(storageKey);
+      expect(contract.mimeType).toBe("application/pdf");
+      expect(contract.sizeBytes).toBe(4096);
+      expect(contract.originalFilename).toBe("Master Services Agreement.pdf");
+      expect(contract.fileUrl).toBeNull();
+
+      const events = await activityFor(contract.id);
+      expect(events[0].payload).toMatchObject({ action: "attached", hasFile: true, hasText: false });
+    });
+
+    it("rejects a non-PDF upload", async () => {
+      const caller = contractRouter.createCaller(mockCtx(creatorAId));
+      const storageKey = buildObjectKey({
+        creatorId: creatorAId,
+        dealId: dealAId,
+        scope: "contracts",
+        extension: "png",
+      });
+
+      await expect(
+        caller.upsert({ dealId: dealAId, storageKey, sizeBytes: 1024 })
+      ).rejects.toThrowError(TRPCError);
+
+      const all = await db.select().from(schema.contracts).where(eq(schema.contracts.dealId, dealAId));
+      expect(all).toHaveLength(0);
+    });
+
+    it("rejects a storage key scoped to another creator/deal", async () => {
+      const caller = contractRouter.createCaller(mockCtx(creatorAId));
+      const foreignKey = buildObjectKey({
+        creatorId: creatorBId,
+        dealId: dealBId,
+        scope: "contracts",
+        extension: "pdf",
+      });
+
+      await expect(
+        caller.upsert({ dealId: dealAId, storageKey: foreignKey, sizeBytes: 1024 })
+      ).rejects.toThrowError(TRPCError);
+
+      const all = await db.select().from(schema.contracts).where(eq(schema.contracts.dealId, dealAId));
+      expect(all).toHaveLength(0);
+    });
+
+    it("rejects a storage key for the right creator but the wrong deal", async () => {
+      const caller = contractRouter.createCaller(mockCtx(creatorAId));
+      const otherDealKey = buildObjectKey({
+        creatorId: creatorAId,
+        dealId: dealBId,
+        scope: "contracts",
+        extension: "pdf",
+      });
+
+      await expect(
+        caller.upsert({ dealId: dealAId, storageKey: otherDealKey, sizeBytes: 1024 })
+      ).rejects.toThrowError(TRPCError);
+    });
+
+    it("deletes the superseded object when a new PDF replaces an existing upload", async () => {
+      const caller = contractRouter.createCaller(mockCtx(creatorAId));
+      const firstKey = buildObjectKey({
+        creatorId: creatorAId,
+        dealId: dealAId,
+        scope: "contracts",
+        extension: "pdf",
+      });
+      await caller.upsert({ dealId: dealAId, storageKey: firstKey, sizeBytes: 100 });
+
+      const secondKey = buildObjectKey({
+        creatorId: creatorAId,
+        dealId: dealAId,
+        scope: "contracts",
+        extension: "pdf",
+      });
+      const contract = await caller.upsert({ dealId: dealAId, storageKey: secondKey, sizeBytes: 200 });
+
+      expect(contract.storageKey).toBe(secondKey);
+      expect(storageMocks.deleteObject).toHaveBeenCalledTimes(1);
+      expect(storageMocks.deleteObject).toHaveBeenCalledWith(firstKey);
+
+      const all = await db.select().from(schema.contracts).where(eq(schema.contracts.dealId, dealAId));
+      expect(all).toHaveLength(1);
+    });
+
+    it("deletes the old object when a PDF upload is replaced by a pasted link", async () => {
+      const caller = contractRouter.createCaller(mockCtx(creatorAId));
+      const storageKey = buildObjectKey({
+        creatorId: creatorAId,
+        dealId: dealAId,
+        scope: "contracts",
+        extension: "pdf",
+      });
+      await caller.upsert({ dealId: dealAId, storageKey, sizeBytes: 100 });
+
+      const contract = await caller.upsert({
+        dealId: dealAId,
+        fileUrl: "https://drive.google.com/file/d/abc/contract.pdf",
+      });
+
+      expect(contract.storageKey).toBeNull();
+      expect(contract.fileUrl).toBe("https://drive.google.com/file/d/abc/contract.pdf");
+      expect(storageMocks.deleteObject).toHaveBeenCalledTimes(1);
+      expect(storageMocks.deleteObject).toHaveBeenCalledWith(storageKey);
+    });
+
+    it("does not call deleteObject when there was nothing to replace", async () => {
+      const caller = contractRouter.createCaller(mockCtx(creatorAId));
+      const storageKey = buildObjectKey({
+        creatorId: creatorAId,
+        dealId: dealAId,
+        scope: "contracts",
+        extension: "pdf",
+      });
+      await caller.upsert({ dealId: dealAId, storageKey, sizeBytes: 100 });
+      expect(storageMocks.deleteObject).not.toHaveBeenCalled();
     });
   });
 
@@ -301,6 +499,22 @@ describe("contract router", () => {
         .from(schema.contracts)
         .where(eq(schema.contracts.dealId, dealBId));
       expect(still).toHaveLength(1);
+    });
+
+    it("deletes the uploaded object when removing a file-backed contract", async () => {
+      const caller = contractRouter.createCaller(mockCtx(creatorAId));
+      const storageKey = buildObjectKey({
+        creatorId: creatorAId,
+        dealId: dealAId,
+        scope: "contracts",
+        extension: "pdf",
+      });
+      await caller.upsert({ dealId: dealAId, storageKey, sizeBytes: 100 });
+
+      await caller.remove({ dealId: dealAId });
+
+      expect(storageMocks.deleteObject).toHaveBeenCalledTimes(1);
+      expect(storageMocks.deleteObject).toHaveBeenCalledWith(storageKey);
     });
   });
 });
