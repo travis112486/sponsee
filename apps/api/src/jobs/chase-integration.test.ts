@@ -154,10 +154,25 @@ async function cleanTables() {
   await db.delete(schema.creatorPlatforms);
   await db.delete(schema.memberships);
   await db.delete(schema.creators);
+  await db.delete(schema.user);
 }
 
 async function seedFullFlow() {
   const [creator] = await db.insert(schema.creators).values({ displayName: "Streamer One" }).returning();
+
+  // The owner membership is what the background rescue paths read the creator's
+  // reply-to address from — mockCtx() hands the same user to the session-backed
+  // router path, so both routes resolve to one address.
+  await db.insert(schema.user).values({
+    id: `user-${creator.id}`,
+    name: "Test Creator",
+    email: "creator@example.com",
+  });
+  await db.insert(schema.memberships).values({
+    userId: `user-${creator.id}`,
+    creatorId: creator.id,
+    role: "owner",
+  });
 
   const [brand] = await db
     .insert(schema.brands)
@@ -1050,6 +1065,47 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(jobName).toBe("chase-send");
     expect(jobArgs.chaseEventId).toBe(event.id);
     expect(jobArgs.invoiceId).toBe(invoice.id);
+
+    // A rescued send must still tell the brand to reply to the creator, not to
+    // the shared chase inbox the mail goes out from.
+    expect(jobArgs.replyToEmail).toBe("creator@example.com");
+    expect(jobArgs.replyToEmail).not.toBe(jobArgs.fromEmail);
+  });
+
+  it("stranded-approved rescue falls back to the from address and logs when no owner email exists", async () => {
+    const { creator, invoice } = await seedFullFlow();
+    await runChaseTick();
+
+    // Creator with no resolvable owner (membership without a user row is the
+    // same dead end as no membership at all, since the email lives on `user`).
+    await db.delete(schema.memberships).where(eq(schema.memberships.creatorId, creator.id));
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+
+    await db
+      .update(schema.chaseEvents)
+      .set({ status: "approved", updatedAt: new Date(Date.now() - 10 * 60 * 1000) })
+      .where(eq(schema.chaseEvents.id, event.id));
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const prevFrom = process.env.CHASE_FROM_EMAIL;
+    delete process.env.CHASE_FROM_EMAIL;
+    try {
+      await runChaseTick();
+
+      expect(mockBossSend).toHaveBeenCalledTimes(1);
+      const jobArgs = mockBossSend.mock.calls[0][1];
+      expect(jobArgs.replyToEmail).toBe("chase@sponsee.app");
+      expect(jobArgs.replyToEmail).toBe(jobArgs.fromEmail);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`No owner email for creator ${creator.id}`));
+    } finally {
+      warn.mockRestore();
+      if (prevFrom === undefined) delete process.env.CHASE_FROM_EMAIL;
+      else process.env.CHASE_FROM_EMAIL = prevFrom;
+    }
   });
 
   it("runChaseTick rescues stranded sending events -> failed + job -> sent without duplicate", async () => {
@@ -1092,6 +1148,8 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(mockBossSend).toHaveBeenCalledTimes(1);
     const jobArgs = mockBossSend.mock.calls[0][1];
     expect(jobArgs.chaseEventId).toBe(event.id);
+    expect(jobArgs.replyToEmail).toBe("creator@example.com");
+    expect(jobArgs.replyToEmail).not.toBe(jobArgs.fromEmail);
 
     // Now simulate the retry worker succeeding (Postmark path)
     const prevProvider = process.env.EMAIL_PROVIDER;
