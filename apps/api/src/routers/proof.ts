@@ -166,13 +166,6 @@ export const proofRouter = createTRPCRouter({
 
       await ctx.db.delete(proofs).where(eq(proofs.id, input.id));
 
-      // Removing the proof removes the object too, not just the row (SPO-157).
-      // The row delete above succeeds first (see delete.ts: the orphan sweep is
-      // the backstop if this object delete fails).
-      if (owned.storageKey) {
-        await deleteObject(owned.storageKey);
-      }
-
       await ctx.db.insert(activityEvents).values({
         creatorId: ctx.creatorId,
         actor: "creator",
@@ -186,6 +179,22 @@ export const proofRouter = createTRPCRouter({
           deliverableId: owned.deliverableId,
         },
       });
+
+      // Removing the proof removes the object too, not just the row (SPO-157).
+      // The row delete above is the user-visible contract and has already
+      // committed, so this object delete is best-effort: if it throws (a
+      // transient S3/R2 error, or storage not configured) we log and move on —
+      // the orphan sweep is the backstop that reclaims the object.
+      if (owned.storageKey) {
+        try {
+          await deleteObject(owned.storageKey);
+        } catch (err) {
+          console.warn(
+            `[proof.delete] Failed to delete object ${owned.storageKey}; orphan sweep will reclaim it:`,
+            (err as Error).message,
+          );
+        }
+      }
 
       return { success: true };
     }),

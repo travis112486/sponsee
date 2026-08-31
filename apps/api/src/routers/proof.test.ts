@@ -243,5 +243,42 @@ describe("proof router", () => {
       await caller.delete({ id: proof.id });
       expect(vi.mocked(deleteObject)).not.toHaveBeenCalled();
     });
+
+    it("resolves, deletes the row, and writes the activity event when deleteObject throws", async () => {
+      const key = keyFor(creatorAId, dealAId);
+      vi.mocked(deleteObject).mockRejectedValue(new Error("S3 throttled"));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const caller = proofRouter.createCaller(mockCtx(creatorAId));
+      const proof = await caller.create({
+        dealId: dealAId,
+        kind: "file",
+        storageKey: key,
+        mimeType: "image/png",
+        sizeBytes: 2048,
+      });
+
+      const result = await caller.delete({ id: proof.id });
+      expect(result).toEqual({ success: true });
+
+      const remaining = await db
+        .select()
+        .from(schema.proofs)
+        .where(eq(schema.proofs.id, proof.id));
+      expect(remaining).toHaveLength(0);
+
+      const events = await db
+        .select()
+        .from(schema.activityEvents)
+        .where(eq(schema.activityEvents.entityId, proof.id));
+      expect(events.map((e) => e.payload?.action)).toContain("proof_removed");
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(key),
+        expect.any(String),
+      );
+
+      warn.mockRestore();
+    });
   });
 });
