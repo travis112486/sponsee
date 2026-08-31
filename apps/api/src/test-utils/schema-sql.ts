@@ -236,6 +236,10 @@ CREATE TABLE proofs (
   kind VARCHAR(32) NOT NULL,
   url TEXT,
   note TEXT,
+  storage_key TEXT,
+  mime_type TEXT,
+  size_bytes INTEGER,
+  original_filename TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

@@ -25,8 +25,16 @@ import {
   Plus,
   Trash2,
   Link2,
+  Upload,
+  ExternalLink,
 } from "lucide-react";
 import QueryError from "@/components/QueryError";
+import {
+  evidenceFileError,
+  evidenceFileErrorMessage,
+  uploadToPresignedUrl,
+  EVIDENCE_ACCEPT,
+} from "@/lib/evidence-upload";
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -125,6 +133,8 @@ export default function DealDetail() {
     },
   });
 
+  const createUploadUrl = trpc.storage.createUploadUrl.useMutation();
+
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>("");
   const [showAddDeliverable, setShowAddDeliverable] = useState(false);
@@ -136,6 +146,10 @@ export default function DealDetail() {
   const [proofKind, setProofKind] = useState<ProofKind>("clip");
   const [proofUrl, setProofUrl] = useState("");
   const [proofNote, setProofNote] = useState("");
+  // Per-deliverable in-flight file upload, for inline progress/status display.
+  const [fileUploads, setFileUploads] = useState<
+    Record<string, { filename: string; progress: number }>
+  >({});
 
   if (isLoading) {
     return (
@@ -196,6 +210,63 @@ export default function DealDetail() {
       url: url || undefined,
       note: note || undefined,
     });
+  }
+
+  async function handleEvidenceFile(deliverableId: string, file: File) {
+    if (!id) return;
+
+    const error = evidenceFileError(file);
+    if (error) {
+      toast(evidenceFileErrorMessage(error));
+      return;
+    }
+
+    setFileUploads((prev) => ({ ...prev, [deliverableId]: { filename: file.name, progress: 0 } }));
+    try {
+      // 1) Presign a PUT for this exact object (MIME + size are signed in).
+      const presigned = await createUploadUrl.mutateAsync({
+        dealId: id,
+        scope: "proofs",
+        filename: file.name,
+        mimeType: file.type,
+        sizeBytes: file.size,
+      });
+
+      // 2) Upload straight from the browser — no round-trip through our API.
+      await uploadToPresignedUrl({
+        url: presigned.url,
+        contentType: file.type,
+        body: file,
+        onProgress: (fraction) => {
+          setFileUploads((prev) =>
+            prev[deliverableId]
+              ? { ...prev, [deliverableId]: { ...prev[deliverableId], progress: Math.round(fraction * 100) } }
+              : prev
+          );
+        },
+      });
+
+      // 3) Record the proof with the key the server signed — it re-checks the
+      //    key belongs to this creator + deal before accepting it. addProof
+      //    toasts its own failures, so swallow the rejection here.
+      await addProof.mutateAsync({
+        dealId: id,
+        deliverableId,
+        kind: "file",
+        storageKey: presigned.key,
+        mimeType: file.type,
+        sizeBytes: file.size,
+        originalFilename: file.name,
+      }).catch(() => {});
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setFileUploads((prev) => {
+        const next = { ...prev };
+        delete next[deliverableId];
+        return next;
+      });
+    }
   }
 
   function handleAddDeliverable(e: React.FormEvent) {
@@ -411,6 +482,7 @@ export default function DealDetail() {
               <div className="mt-3 space-y-2">
                 {deal.deliverables.map((d) => {
                   const evidence = proofs?.filter((p) => p.deliverableId === d.id) ?? [];
+                  const upload = fileUploads[d.id];
                   return (
                   <div
                     key={d.id}
@@ -504,7 +576,7 @@ export default function DealDetail() {
                             onChange={(e) => setProofKind(e.target.value as ProofKind)}
                             className="rounded-lg border border-hairline bg-surface px-3 py-1.5 text-[12px] text-ink outline-none focus:border-pine"
                           >
-                            {proofKinds.map((k) => (
+                            {proofKinds.filter((k) => k !== "file").map((k) => (
                               <option key={k} value={k}>
                                 {proofKindLabels[k]}
                               </option>
@@ -523,6 +595,52 @@ export default function DealDetail() {
                           placeholder="Note (optional — e.g. timestamps, context)"
                           className="w-full rounded-lg border border-hairline bg-surface px-3 py-1.5 text-[12px] text-ink outline-none focus:border-pine"
                         />
+
+                        {/* File evidence: drag a screenshot/PDF, or click to browse */}
+                        <div className="relative">
+                          <input
+                            id={`evidence-file-${d.id}`}
+                            type="file"
+                            accept={EVIDENCE_ACCEPT}
+                            className="sr-only"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleEvidenceFile(d.id, file);
+                              e.target.value = "";
+                            }}
+                          />
+                          <label
+                            htmlFor={`evidence-file-${d.id}`}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const file = e.dataTransfer.files?.[0];
+                              if (file) handleEvidenceFile(d.id, file);
+                            }}
+                            className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-hairline bg-surface-subtle px-3 py-3 text-center transition-colors hover:border-pine"
+                          >
+                            <Upload className="h-4 w-4 text-ink-3" />
+                            <span className="text-[12px] text-ink-2">
+                              Drop a screenshot or PDF here, or{" "}
+                              <span className="font-medium text-pine">browse</span>
+                            </span>
+                          </label>
+                        </div>
+
+                        {upload && (
+                          <div className="flex items-center gap-2">
+                            <div className="h-1 flex-1 overflow-hidden rounded bg-hairline">
+                              <div
+                                className="h-full bg-pine transition-all"
+                                style={{ width: `${upload.progress}%` }}
+                              />
+                            </div>
+                            <span className="shrink-0 text-[11px] text-ink-3">
+                              {upload.filename} · {upload.progress}%
+                            </span>
+                          </div>
+                        )}
+
                         <div className="flex justify-end gap-2">
                           <button
                             type="button"
@@ -657,18 +775,36 @@ export default function DealDetail() {
   );
 }
 
+type EvidenceProof = {
+  id: string;
+  kind: string;
+  url: string | null;
+  note: string | null;
+  createdAt: string | Date;
+  storageKey: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  originalFilename: string | null;
+  signedUrl?: string | null;
+};
+
 function EvidenceRow({
   proof,
   onRemove,
 }: {
-  proof: { id: string; kind: string; url: string | null; note: string | null; createdAt: string | Date };
+  proof: EvidenceProof;
   onRemove: () => void;
 }) {
+  const isFile = Boolean(proof.storageKey);
+  const signedUrl = proof.signedUrl ?? null;
+  const isImage = proof.mimeType?.startsWith("image/") ?? false;
+  const isPdf = proof.mimeType === "application/pdf";
+
   return (
     <div className="flex items-start justify-between gap-2 rounded px-1 py-0.5">
-      <div className="flex min-w-0 items-start gap-1.5">
-        <Link2 className="mt-0.5 h-3 w-3 shrink-0 text-ink-3" />
-        <div className="min-w-0">
+      <div className="flex min-w-0 flex-1 items-start gap-1.5">
+        {!isFile && <Link2 className="mt-0.5 h-3 w-3 shrink-0 text-ink-3" />}
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-ink-3">
               {proofKindLabels[proof.kind as ProofKind] ?? proof.kind}
@@ -682,10 +818,52 @@ function EvidenceRow({
               >
                 {proof.url.replace(/^https?:\/\//, "")}
               </a>
+            ) : isFile ? (
+              <span className="truncate text-[12px] text-ink-2">
+                {proof.originalFilename ?? "File"}
+              </span>
             ) : (
               <span className="text-[12px] text-ink-2">Note</span>
             )}
           </div>
+
+          {isFile && signedUrl && isImage && (
+            <a
+              href={signedUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 block w-fit"
+            >
+              <img
+                src={signedUrl}
+                alt={proof.originalFilename ?? "Evidence"}
+                className="max-h-40 w-auto max-w-full rounded-md border border-hairline"
+              />
+            </a>
+          )}
+
+          {isFile && signedUrl && isPdf && (
+            <object
+              data={signedUrl}
+              type="application/pdf"
+              className="mt-1 h-64 w-full rounded-md border border-hairline"
+            >
+              <a
+                href={signedUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 p-3 text-[13px] text-pine hover:underline"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open PDF
+              </a>
+            </object>
+          )}
+
+          {isFile && !signedUrl && (
+            <p className="mt-0.5 text-[11.5px] text-ink-3">File preview unavailable</p>
+          )}
+
           {proof.note && (
             <p className="mt-0.5 text-[11.5px] leading-4 text-ink-2">{proof.note}</p>
           )}
