@@ -52,9 +52,9 @@ export async function registerJobs(): Promise<void> {
   // (not instead of) the app-initiated deleteObject call sites. No-ops until
   // storage is configured.
   boss.work(STORAGE_SWEEP_JOB, async () => {
-    const { scanned, deleted, skippedUnconfigured } = await runStorageOrphanSweep();
+    const { scanned, deleted, skippedUnrecognized, skippedUnconfigured } = await runStorageOrphanSweep();
     if (skippedUnconfigured) return;
-    console.log(`[storage-sweep] scanned=${scanned} deleted=${deleted}`);
+    console.log(`[storage-sweep] scanned=${scanned} deleted=${deleted} skippedUnrecognized=${skippedUnrecognized}`);
   });
 
   // Schedule recurring
