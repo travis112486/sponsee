@@ -12,6 +12,20 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import QueryError from "@/components/QueryError";
+import {
+  DndContext,
+  DragOverlay,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  useDraggable,
+  useDroppable,
+  type DragEndEvent,
+  type DragOverEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import { CSS } from "@dnd-kit/utilities";
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -58,19 +72,290 @@ function useHorizontalScrollEdges<T extends HTMLElement>() {
   return { ref, atStart, atEnd };
 }
 
+/* ------------------------------------------------------------------ */
+/*  Drag-and-drop (SPO-52, re-landed for SPO-103)                      */
+/* ------------------------------------------------------------------ */
+
+type PipelineDeal = {
+  id: string;
+  title: string;
+  stage: DealStage;
+  valueCents: number;
+  brand?: { name?: string | null } | null;
+  platforms?: readonly string[] | null;
+  notes?: string | null;
+};
+
+/** Presentational card content — shared by the live card and the drag overlay. */
+function DealCardBody({ deal }: { deal: PipelineDeal }) {
+  return (
+    <>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-[12px] font-semibold text-ink-2">
+            {deal.brand?.name ?? "Unknown brand"}
+          </p>
+          <p className="mt-0.5 line-clamp-2 text-[13px] font-medium leading-[18px] text-ink">
+            {deal.title}
+          </p>
+        </div>
+        <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-3 opacity-0 transition-opacity group-hover:opacity-100" />
+      </div>
+
+      <div className="mt-2 flex items-center gap-3">
+        <div className="flex items-center gap-1 text-[12px] font-medium text-ink-2">
+          <DollarSign className="h-3 w-3 text-ink-3" />
+          {formatCents(deal.valueCents)}
+        </div>
+        {deal.platforms && deal.platforms.length > 0 && (
+          <div className="flex gap-1">
+            {deal.platforms.map((p) => (
+              <span
+                key={p}
+                className={cn(
+                  "text-[10px] font-semibold uppercase tracking-wider",
+                  p === "twitch" && "text-twitch",
+                  p === "youtube" && "text-youtube",
+                  p === "kick" && "text-kick",
+                  p === "tiktok" && "text-ink-3"
+                )}
+              >
+                {p}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {deal.notes && (
+        <p className="mt-1.5 line-clamp-2 text-[11px] leading-4 text-ink-3">{deal.notes}</p>
+      )}
+    </>
+  );
+}
+
+/**
+ * A stage column that accepts dropped cards. `id` is the stage key, so
+ * `over.id` in handleDragEnd is directly the destination stage.
+ */
+function DroppableStageColumn({
+  stage,
+  isOver,
+  children,
+}: {
+  stage: DealStage;
+  isOver: boolean;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef } = useDroppable({ id: stage });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "flex w-[260px] shrink-0 flex-col rounded-xl border transition-colors",
+        isOver ? "border-pine bg-pine-tint/40" : "border-hairline bg-surface-subtle"
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Draggable deal card. The whole card is the drag handle (the founder's
+ * mockup let you grab a card anywhere), while the SPO-25 accessibility
+ * contract is preserved: the card itself is not a button, the stretched
+ * `Open …` button remains the keyboard/screen-reader path to the deal, and
+ * `Move…` remains the non-pointer way to change stage.
+ */
+function DraggableDealCard({
+  deal,
+  isMoving,
+  onStartMove,
+  onCancelMove,
+  onMoveTo,
+  onOpen,
+}: {
+  deal: PipelineDeal;
+  isMoving: boolean;
+  onStartMove: () => void;
+  onCancelMove: () => void;
+  onMoveTo: (stage: DealStage) => void;
+  onOpen: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: deal.id,
+    data: { sourceStage: deal.stage },
+  });
+
+  // A pointer-up that ends a drag also fires a `click` on the stretched open
+  // button. Without this latch, every drop would navigate into the deal.
+  const draggedRef = useRef(false);
+  useEffect(() => {
+    if (isDragging) draggedRef.current = true;
+  }, [isDragging]);
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      // dnd-kit's attributes set role="button"/tabIndex=0; the card must stay a
+      // plain grouping element so the nested open button is the only button.
+      role="group"
+      tabIndex={-1}
+      aria-roledescription="Draggable deal card"
+      style={
+        transform
+          ? { transform: CSS.Translate.toString(transform), zIndex: 50 }
+          : undefined
+      }
+      className={cn(
+        "group relative min-h-[118px] cursor-grab touch-manipulation rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-shadow hover:border-pine/30 hover:shadow-warm-md active:cursor-grabbing",
+        isDragging && "opacity-40"
+      )}
+    >
+      {/* Primary open action — stretched under the card; nested controls sit above it */}
+      <button
+        type="button"
+        aria-label={`Open ${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
+        onClick={() => {
+          if (draggedRef.current) {
+            draggedRef.current = false;
+            return;
+          }
+          onOpen();
+        }}
+        className="absolute inset-0 z-0 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
+      />
+
+      {/* Non-interactive card body — clicks pass through to the stretched button */}
+      <div className="pointer-events-none relative z-10">
+        <DealCardBody deal={deal} />
+      </div>
+
+      {/* Stage mover — interactive controls above the stretched button */}
+      <div className="relative z-20">
+        {isMoving ? (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {dealStages
+              .filter((s) => s !== deal.stage)
+              .map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMoveTo(s);
+                  }}
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
+                    stageColors[s]
+                  )}
+                >
+                  {stageLabels[s]}
+                </button>
+              ))}
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCancelMove();
+              }}
+              className="rounded px-1.5 py-0.5 text-[10px] text-ink-3 hover:bg-surface-subtle"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartMove();
+            }}
+            className="mt-2 rounded text-[11px] font-medium text-pine opacity-0 transition-opacity hover:text-pine-hover group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
+          >
+            Move…
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Pipeline() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const utils = trpc.useUtils();
   const { data: deals, isLoading, isError, refetch } = trpc.deals.list.useQuery();
+  // Optimistic so a dropped card lands in its new column immediately rather
+  // than snapping back until the round-trip finishes.
   const updateStage = trpc.deals.updateStage.useMutation({
+    onMutate: async (vars) => {
+      await utils.deals.list.cancel();
+      const previousDeals = utils.deals.list.getData();
+      utils.deals.list.setData(undefined, (old) =>
+        old?.map((d) => (d.id === vars.id ? { ...d, stage: vars.stage } : d))
+      );
+      return { previousDeals };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previousDeals) {
+        utils.deals.list.setData(undefined, context.previousDeals);
+      }
+      toast.error("Couldn't move that deal — put it back where it was");
+    },
     onSuccess: () => {
-      utils.deals.list.invalidate();
       toast("Deal moved");
+    },
+    onSettled: () => {
+      utils.deals.list.invalidate();
     },
   });
 
   const [movingDealId, setMovingDealId] = useState<string | null>(null);
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [overStage, setOverStage] = useState<DealStage | null>(null);
+
+  // Mouse drags start after a 4px nudge so a plain click still opens the deal.
+  // Touch waits 180ms so vertical scrolling over a column doesn't grab a card.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } })
+  );
+
+  function handleDragStart(event: DragStartEvent) {
+    setActiveDragId(String(event.active.id));
+    setMovingDealId(null);
+  }
+
+  function handleDragOver(event: DragOverEvent) {
+    setOverStage(event.over ? (String(event.over.id) as DealStage) : null);
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    setActiveDragId(null);
+    setOverStage(null);
+    if (!over) return;
+
+    const dealId = String(active.id);
+    const nextStage = String(over.id) as DealStage;
+    const deal = deals?.find((d) => d.id === dealId);
+    if (!deal || deal.stage === nextStage) return;
+
+    updateStage.mutate({ id: dealId, stage: nextStage });
+  }
+
+  function handleDragCancel() {
+    setActiveDragId(null);
+    setOverStage(null);
+  }
   // Sourced from the URL (not local state) so CommandPalette's "New deal"
   // action (?new=1) opens the modal even when Pipeline is already mounted.
   const showNewDeal = searchParams.get("new") === "1";
@@ -118,6 +403,8 @@ export default function Pipeline() {
     dealStages.map((s) => [s, deals?.filter((d) => d.stage === s) ?? []])
   ) as Record<DealStage, typeof deals>;
 
+  const activeDeal = activeDragId ? deals?.find((d) => d.id === activeDragId) ?? null : null;
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -138,6 +425,13 @@ export default function Pipeline() {
       </div>
 
       {/* Board */}
+      <DndContext
+        sensors={sensors}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
       <div className="relative">
         {!atStart && (
           <button
@@ -174,10 +468,7 @@ export default function Pipeline() {
           className="board-scroll flex gap-3 overflow-x-auto pb-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1 rounded-lg"
         >
         {dealStages.map((stage) => (
-          <div
-            key={stage}
-            className="flex w-[260px] shrink-0 flex-col rounded-xl border border-hairline bg-surface-subtle"
-          >
+          <DroppableStageColumn key={stage} stage={stage} isOver={overStage === stage}>
             {/* Column header */}
             <div className="flex items-center justify-between px-3 py-2.5">
               <div className="flex items-center gap-2">
@@ -204,118 +495,34 @@ export default function Pipeline() {
             {/* Cards */}
             <div className="flex flex-1 flex-col gap-2 px-2 pb-2">
               {byStage[stage]?.map((deal) => (
-                <div
+                <DraggableDealCard
                   key={deal.id}
-                  className="group relative min-h-[118px] rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-all hover:border-pine/30 hover:shadow-warm-md"
-                >
-                  {/* Primary open action — stretched under the card; nested controls sit above it */}
-                  <button
-                    type="button"
-                    aria-label={`Open ${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
-                    onClick={() => navigate(`/pipeline/${deal.id}`)}
-                    className="absolute inset-0 z-0 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
-                  />
-
-                  {/* Non-interactive card body — clicks pass through to the stretched button */}
-                  <div className="pointer-events-none relative z-10">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-[12px] font-semibold text-ink-2">
-                          {deal.brand?.name ?? "Unknown brand"}
-                        </p>
-                        <p className="mt-0.5 line-clamp-2 text-[13px] font-medium leading-[18px] text-ink">
-                          {deal.title}
-                        </p>
-                      </div>
-                      <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-3 opacity-0 transition-opacity group-hover:opacity-100" />
-                    </div>
-
-                    <div className="mt-2 flex items-center gap-3">
-                      <div className="flex items-center gap-1 text-[12px] font-medium text-ink-2">
-                        <DollarSign className="h-3 w-3 text-ink-3" />
-                        {formatCents(deal.valueCents)}
-                      </div>
-                      {deal.platforms && deal.platforms.length > 0 && (
-                        <div className="flex gap-1">
-                          {deal.platforms.map((p) => (
-                            <span
-                              key={p}
-                              className={cn(
-                                "text-[10px] font-semibold uppercase tracking-wider",
-                                p === "twitch" && "text-twitch",
-                                p === "youtube" && "text-youtube",
-                                p === "kick" && "text-kick",
-                                p === "tiktok" && "text-ink-3"
-                              )}
-                            >
-                              {p}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {deal.notes && (
-                      <p className="mt-1.5 line-clamp-2 text-[11px] leading-4 text-ink-3">
-                        {deal.notes}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Stage mover — interactive controls above the stretched button */}
-                  <div className="relative z-20">
-                    {movingDealId === deal.id ? (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {dealStages
-                          .filter((s) => s !== deal.stage)
-                          .map((s) => (
-                            <button
-                              key={s}
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                updateStage.mutate({ id: deal.id, stage: s });
-                                setMovingDealId(null);
-                              }}
-                              className={cn(
-                                "rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
-                                stageColors[s]
-                              )}
-                            >
-                              {stageLabels[s]}
-                            </button>
-                          ))}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setMovingDealId(null);
-                          }}
-                          className="rounded px-1.5 py-0.5 text-[10px] text-ink-3 hover:bg-surface-subtle"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setMovingDealId(deal.id);
-                        }}
-                        className="mt-2 rounded text-[11px] font-medium text-pine opacity-0 transition-opacity hover:text-pine-hover group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
-                      >
-                        Move…
-                      </button>
-                    )}
-                  </div>
-                </div>
+                  deal={deal}
+                  isMoving={movingDealId === deal.id}
+                  onStartMove={() => setMovingDealId(deal.id)}
+                  onCancelMove={() => setMovingDealId(null)}
+                  onMoveTo={(s) => {
+                    updateStage.mutate({ id: deal.id, stage: s });
+                    setMovingDealId(null);
+                  }}
+                  onOpen={() => navigate(`/pipeline/${deal.id}`)}
+                />
               ))}
             </div>
-          </div>
+          </DroppableStageColumn>
         ))}
         </div>
       </div>
+
+      {/* Follows the cursor so the card being dragged stays legible over other columns */}
+      <DragOverlay dropAnimation={null}>
+        {activeDeal && (
+          <div className="group w-[244px] rotate-[1.5deg] cursor-grabbing rounded-lg border border-pine/40 bg-surface p-3 shadow-warm-lg">
+            <DealCardBody deal={activeDeal} />
+          </div>
+        )}
+      </DragOverlay>
+      </DndContext>
 
       {showNewDeal && <NewDealModal onClose={closeNewDeal} />}
     </div>
