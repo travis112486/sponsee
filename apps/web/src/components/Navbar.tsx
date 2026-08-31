@@ -368,19 +368,13 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
         <Search className="h-4 w-4" />
       </button>
 
+      {/* No "Go Live" control here by design (SPO-152). Sponsee never starts a
+          stream, and a live/offline chip would only tell the streamer something
+          they already know. Live status earns its keep in the pricing loop, not
+          the topbar — see SPO-159 (sample real CCV to feed the CPVH calculator).
+          A button that always claimed "You're not live right now" was worse than
+          no button. */}
       <div className="ml-auto flex items-center gap-2">
-        {/* Go Live */}
-        <button
-          onClick={() => toast("You're not live right now")}
-          className="flex h-8 items-center gap-2 rounded-lg border border-pine px-3 text-[13px] font-medium text-pine transition-all duration-120 hover:bg-pine-tint active:scale-[0.97]"
-        >
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute h-full w-full animate-ping rounded-full bg-pine opacity-60" />
-            <span className="relative h-1.5 w-1.5 rounded-full bg-pine" />
-          </span>
-          <span className="hidden sm:inline">Go Live</span>
-        </button>
-
         {/* Bell */}
         <div className="relative">
           <button
