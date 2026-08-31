@@ -252,9 +252,9 @@ CREATE TABLE contracts (
   body_text TEXT,
   file_url TEXT,
   storage_key TEXT,
-  mime_type VARCHAR(255),
+  mime_type TEXT,
   size_bytes INTEGER,
-  original_filename VARCHAR(255),
+  original_filename TEXT,
   signed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
