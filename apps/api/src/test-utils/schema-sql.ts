@@ -251,6 +251,10 @@ CREATE TABLE contracts (
   status VARCHAR(32) NOT NULL DEFAULT 'draft',
   body_text TEXT,
   file_url TEXT,
+  storage_key TEXT,
+  mime_type VARCHAR(255),
+  size_bytes INTEGER,
+  original_filename VARCHAR(255),
   signed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
