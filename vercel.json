@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "git diff --quiet \"${VERCEL_GIT_PREVIOUS_SHA:-HEAD^1}\" HEAD -- apps/web packages/shared package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json vercel.json",
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://sponsee.onrender.com/api/:path*" },
     { "source": "/((?!assets/).*)", "destination": "/index.html" }
