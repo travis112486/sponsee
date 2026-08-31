@@ -32,13 +32,18 @@ export async function registerJobs(): Promise<void> {
     }
   });
 
-  // Chase-send handler: durable, retryable email dispatch
-  boss.work(CHASE_SEND_JOB, async (job: any) => {
-    try {
-      await sendChaseEmail(job.data as Parameters<typeof sendChaseEmail>[0]);
-    } catch (err) {
-      console.error(`[chase-send] Failed for event ${job.data?.chaseEventId}:`, (err as Error).message);
-      throw err; // pg-boss will retry according to retryLimit/retryDelay
+  // Chase-send handler: durable, retryable email dispatch.
+  // pg-boss v12 delivers a *batch* of jobs to a work handler — the callback
+  // receives `Job[]`, never a single `Job`. Reading `job.data` off the array
+  // silently yields `undefined` and crashes every send (SPO-186).
+  boss.work(CHASE_SEND_JOB, async (jobs: any[]) => {
+    for (const job of jobs) {
+      try {
+        await sendChaseEmail(job.data as Parameters<typeof sendChaseEmail>[0]);
+      } catch (err) {
+        console.error(`[chase-send] Failed for event ${job.data?.chaseEventId}:`, (err as Error).message);
+        throw err; // pg-boss will retry according to retryLimit/retryDelay
+      }
     }
   });
 
