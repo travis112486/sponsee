@@ -1081,6 +1081,48 @@ describe("stripe webhook", () => {
     expect(getDealSlotLimit(updated!.plan, updated!.subscriptionStatus)).toBe(planDealSlots.pro);
   });
 
+  // SPO-190 coupling point 2: the webhook endpoint carries its own API version
+  // pin, so it can move to basil independently of the SDK. When it does, the
+  // subscription id moves off the top level and onto
+  // `parent.subscription_details` — and a handler that only reads the old
+  // location just stops updating anyone, with no error to notice. The two tests
+  // above cover the acacia shape we are delivered today; this one covers the
+  // shape we would be delivered the day someone bumps the endpoint pin.
+  it("finds the subscription on a basil-shaped invoice (parent.subscription_details)", async () => {
+    const { creator } = await createUserAndCreator("basil-invoice@example.com", "pro");
+    await db
+      .update(schema.creators)
+      .set({ stripeSubscriptionId: "sub_basil_invoice", subscriptionStatus: "past_due" })
+      .where(eq(schema.creators.id, creator.id));
+
+    mockStripeWebhooks.constructEvent.mockReturnValue({
+      type: "invoice.payment_succeeded",
+      data: {
+        // No top-level `subscription` — only basil's nested location.
+        object: {
+          id: "in_basil",
+          parent: { subscription_details: { subscription: "sub_basil_invoice" } },
+        },
+      },
+    });
+    mockStripeSubscriptions.retrieve.mockResolvedValue({
+      id: "sub_basil_invoice",
+      status: "active",
+      metadata: { creatorId: creator.id },
+      items: { data: [{ price: { id: "price_test_pro" } }] },
+    });
+
+    expect((await postWebhook()).status).toBe(200);
+    expect(mockStripeSubscriptions.retrieve).toHaveBeenCalledWith("sub_basil_invoice");
+
+    const [updated] = await db
+      .select()
+      .from(schema.creators)
+      .where(eq(schema.creators.id, creator.id));
+
+    expect(updated?.subscriptionStatus).toBe("active");
+  });
+
   // ── Out-of-order / replayed delivery (SPO-87 MEDIUM-1) ─────────────────────
 
   it("does not resurrect a canceled subscription when a stale active update lands late", async () => {

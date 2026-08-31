@@ -49,6 +49,33 @@ function currentPeriodEndFromSubscription(subscription: Stripe.Subscription): Da
 }
 
 /**
+ * Read the subscription id off an invoice, in either API-version shape.
+ *
+ * The webhook endpoint (`we_1UAdNfB1QieISYczbZ91rjhS`) carries its *own* API
+ * version pin — today 2025-02-24.acacia — independently of the SDK's
+ * `apiVersion` in stripe.ts, so *delivered* payloads stay acacia-shaped with
+ * `subscription` at the top level even now that the SDK is on basil. But that
+ * pin is an account setting anyone can change in the Stripe dashboard, and
+ * basil moved the field to `parent.subscription_details.subscription`. Reading
+ * both is what keeps this branch from silently becoming a no-op the day the
+ * endpoint pin is bumped — a failure with no exception and no test to catch it
+ * (SPO-190 coupling point 2).
+ */
+function subscriptionIdFromInvoice(
+  invoice: Stripe.Invoice & { subscription?: string | Stripe.Subscription | null }
+): string | null {
+  const acacia = invoice.subscription;
+  if (typeof acacia === "string") return acacia;
+  if (acacia && typeof acacia === "object") return acacia.id;
+
+  const basil = invoice.parent?.subscription_details?.subscription;
+  if (typeof basil === "string") return basil;
+  if (basil && typeof basil === "object") return basil.id;
+
+  return null;
+}
+
+/**
  * Find the creator this subscription belongs to.
  *
  * Prefer the metadata we stamped at checkout, but verify the row actually
@@ -224,17 +251,10 @@ export function registerStripeWebhook(app: Hono) {
         }
         case "invoice.payment_failed":
         case "invoice.payment_succeeded": {
-          // The webhook endpoint (we_1UAdAeB1QieISYczbZ91rjhS) is pinned at
-          // 2025-02-24.acacia independently of the SDK's apiVersion above, so the
-          // *delivered* payload stays acacia-shaped: `subscription` sits at the
-          // top level, not on basil's `invoice.parent.subscription_details`. Cast
-          // past the (now basil) SDK type rather than the runtime field (SPO-190)
-          // — read `invoice.parent...` instead only if the endpoint's own pin is
-          // ever bumped to match.
           const invoice = event.data.object as Stripe.Invoice & {
             subscription?: string | Stripe.Subscription | null;
           };
-          const subId = invoice.subscription;
+          const subId = subscriptionIdFromInvoice(invoice);
           if (subId && typeof subId === "string") {
             const sub = await stripe.subscriptions.retrieve(subId);
             await updateCreatorFromSubscription(sub);
