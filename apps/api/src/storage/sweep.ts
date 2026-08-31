@@ -56,7 +56,8 @@ export interface StorageSweepResult {
  * this module.
  */
 export async function runStorageOrphanSweep(
-  env: Record<string, string | undefined> = process.env
+  env: Record<string, string | undefined> = process.env,
+  options: { graceMs?: number } = {}
 ): Promise<StorageSweepResult> {
   const config = getStorageConfig(env);
   if (!config) {
@@ -64,7 +65,11 @@ export async function runStorageOrphanSweep(
   }
 
   const client = buildS3Client(config);
-  const cutoff = Date.now() - STORAGE_ORPHAN_GRACE_PERIOD_MS;
+  // `graceMs` is only ever overridden by tests — real integration tests can't
+  // wait out a 24h grace period for a real orphan to become sweepable, and
+  // faking `LastModified` isn't possible against a real S3 server (it's
+  // server-assigned). Production always uses the real constant.
+  const cutoff = Date.now() - (options.graceMs ?? STORAGE_ORPHAN_GRACE_PERIOD_MS);
 
   let scanned = 0;
   let deleted = 0;

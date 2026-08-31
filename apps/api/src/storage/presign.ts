@@ -34,10 +34,17 @@ export interface PresignedUpload {
 
 /**
  * Presigns a PUT for a brand-new object. Validates the MIME allowlist and
- * size cap *before* signing (so a rejected request never reaches the bucket),
- * then signs `ContentType`/`ContentLength` into the URL — S3 requires the
- * PUT's actual headers to match what was signed, so this is what makes the
- * size cap and MIME type stick rather than being advisory.
+ * size cap *before* signing (so a rejected request never reaches the bucket).
+ * `ContentLength` is genuinely wire-enforced — verified against a real S3
+ * server in storage.e2e.test.ts, MinIO rejects a PUT whose actual body size
+ * disagrees with the signed length — so the size cap sticks rather than being
+ * advisory. `ContentType`, despite being passed into the signed command, is
+ * *not* part of the default signature (`@aws-sdk/s3-request-presigner` only
+ * signs `content-length`/`host`; also verified in that same suite), so a
+ * client can swap it on the actual PUT. That's still safe: `createDownloadUrl`
+ * below never trusts whatever Content-Type ends up stored — it always derives
+ * the response type from the key's own extension, decided server-side before
+ * the PUT ever happened.
  */
 export async function createUploadUrl(params: CreateUploadUrlParams): Promise<PresignedUpload> {
   const config = getStorageConfig(params.env);

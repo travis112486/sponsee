@@ -10,6 +10,7 @@
     "typecheck": "turbo run typecheck",
     "test": "vitest run --config=scripts/vitest-api.config.ts && vitest run --config=scripts/vitest-web.config.ts",
     "test:watch": "vitest",
+    "test:storage-e2e": "vitest run --config=scripts/vitest-storage-e2e.config.ts",
     "db:generate": "turbo run db:generate",
     "db:migrate": "turbo run db:migrate",
     "db:push": "turbo run db:push",
