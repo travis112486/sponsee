@@ -16,7 +16,11 @@ export default defineConfig({
       // has no runner of its own — without this line they go untested.
       "apps/marketing/api/**/*.{test,spec}.{ts,tsx}",
     ],
-    exclude: ["**/node_modules/**", "**/dist/**", "**/.turbo/**"],
+    // storage.e2e.test.ts needs a real S3-compatible server (MinIO) and is
+    // deliberately not part of the default suite — see scripts/vitest-storage-e2e.config.ts
+    // and the `storage-e2e` CI job. Keep this exclude in step with
+    // apps/api/vitest.config.ts's own copy (see SPO-86 / that file's comment).
+    exclude: ["**/node_modules/**", "**/dist/**", "**/.turbo/**", "**/*.e2e.test.ts"],
     setupFiles: ["scripts/vitest-setup.ts"],
     fileParallelism: false,
     maxWorkers: 1,

@@ -18,6 +18,8 @@ export default defineConfig({
     fileParallelism: false,
     maxWorkers: 1,
     setupFiles: ["./src/test-utils/vitest-setup.ts"],
-    exclude: ["node_modules/**", "dist/**"],
+    // Keep this exclude in step with scripts/vitest-api.config.ts — see that
+    // file's comment on storage.e2e.test.ts (needs a real MinIO, SPO-171).
+    exclude: ["node_modules/**", "dist/**", "**/*.e2e.test.ts"],
   },
 });

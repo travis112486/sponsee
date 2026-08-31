@@ -91,6 +91,53 @@ jobs:
       # they exercise.
       - run: pnpm test
 
+  # SPO-171: wire-level proof the storage module works against a real S3
+  # server. Separate job (not folded into `test`) because it needs MinIO and
+  # is the one suite here that must never silently no-op if that's missing —
+  # see storage.e2e.test.ts's header comment.
+  storage-e2e:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter "./packages/*" build
+      # `services:` only starts a container's default CMD with no way to pass
+      # arguments, and minio/minio's image needs `server /data` as its
+      # command — so this starts it directly instead, the same way the
+      # Mailpit step above installs and backgrounds a binary rather than
+      # using a service container.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 -p 9001:9001 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data --console-address ":9001"
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/ready >/dev/null; then
+              echo "MinIO ready on :9000"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MinIO did not become ready on :9000 within 30s" >&2
+          docker logs minio >&2
+          exit 1
+      - run: pnpm test:storage-e2e
+        env:
+          STORAGE_ENDPOINT: http://localhost:9000
+          STORAGE_BUCKET: sponsee-storage-e2e
+          STORAGE_REGION: us-east-1
+          STORAGE_ACCESS_KEY_ID: minioadmin
+          STORAGE_SECRET_ACCESS_KEY: minioadmin
+
   db-check:
     runs-on: ubuntu-latest
     needs: lint-and-typecheck
