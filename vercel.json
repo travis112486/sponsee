@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "if git diff --quiet \"${VERCEL_GIT_PREVIOUS_SHA:-HEAD^1}\" HEAD -- apps/web packages/shared package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json vercel.json; then echo \"Skipping build: no changes to web inputs\"; exit 0; else echo \"Building: web inputs changed\"; exit 1; fi",
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://sponsee.onrender.com/api/:path*" },
     { "source": "/((?!assets/).*)", "destination": "/index.html" }
