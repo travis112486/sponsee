@@ -118,9 +118,10 @@ export const defaultChaseTemplates: Array<{
   },
 ];
 
-// Proof kinds — v1 evidence is links + notes only; "file" exists in the DB
-// enum but stays out of this list until storage infra lands (Phase B).
-export const proofKinds = ["vod", "clip", "chat", "overlay", "link"] as const;
+// Proof kinds. "file" is the drag-in-a-screenshot path (SPO-157); the rest are
+// links/notes that stay as URLs (VODs, clips, chat logs, overlays) rather than
+// re-hosted files.
+export const proofKinds = ["vod", "clip", "chat", "overlay", "link", "file"] as const;
 export type ProofKind = (typeof proofKinds)[number];
 
 export const proofKindLabels: Record<ProofKind, string> = {
@@ -129,6 +130,7 @@ export const proofKindLabels: Record<ProofKind, string> = {
   chat: "Chat log",
   overlay: "Overlay",
   link: "Link",
+  file: "File",
 };
 
 // Activity entity kinds

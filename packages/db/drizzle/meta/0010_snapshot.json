@@ -1,6 +1,6 @@
 {
-  "id": "c4a2fe27-a36d-419e-b70a-c1e53515a326",
-  "prevId": "63a45cd1-a5cc-4243-b19c-7754e3ef5c9e",
+  "id": "0f15fd74-6041-4ad9-88ad-f7a2f3b3319f",
+  "prevId": "c4a2fe27-a36d-419e-b70a-c1e53515a326",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -930,6 +930,30 @@
         "file_url": {
           "name": "file_url",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "storage_key": {
+          "name": "storage_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mime_type": {
+          "name": "mime_type",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "size_bytes": {
+          "name": "size_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "original_filename": {
+          "name": "original_filename",
+          "type": "varchar(255)",
           "primaryKey": false,
           "notNull": false
         },
