@@ -1,7 +1,10 @@
+import type { Job } from "pg-boss";
 import { getBoss } from "./boss.js";
 import { runChaseTick, sendChaseEmail } from "./chase-tick.js";
 import { runPlatformSync } from "./platform-sync.js";
 import { runStorageOrphanSweep } from "../storage/sweep.js";
+
+type ChaseSendPayload = Parameters<typeof sendChaseEmail>[0];
 
 const CHASE_CRON = "0/15 * * * *"; // Every 15 minutes
 const CHASE_TICK_JOB = "chase-tick";
@@ -35,11 +38,13 @@ export async function registerJobs(): Promise<void> {
   // Chase-send handler: durable, retryable email dispatch.
   // pg-boss v12 delivers a *batch* of jobs to a work handler — the callback
   // receives `Job[]`, never a single `Job`. Reading `job.data` off the array
-  // silently yields `undefined` and crashes every send (SPO-186).
-  boss.work(CHASE_SEND_JOB, async (jobs: any[]) => {
+  // silently yields `undefined` and crashes every send (SPO-186). The explicit
+  // ReqData generic keeps `job.data` typed, so the compiler rejects any future
+  // regression to reading `.data` off the batch itself.
+  boss.work<ChaseSendPayload>(CHASE_SEND_JOB, async (jobs: Job<ChaseSendPayload>[]) => {
     for (const job of jobs) {
       try {
-        await sendChaseEmail(job.data as Parameters<typeof sendChaseEmail>[0]);
+        await sendChaseEmail(job.data);
       } catch (err) {
         console.error(`[chase-send] Failed for event ${job.data?.chaseEventId}:`, (err as Error).message);
         throw err; // pg-boss will retry according to retryLimit/retryDelay
