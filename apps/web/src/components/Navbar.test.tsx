@@ -39,6 +39,17 @@ vi.mock("@/trpc", () => ({
         useQuery: () => ({ data: activityData(), isLoading: false, isError: false }),
       },
     },
+    // Topbar reads these via useCreatorIdentity (SPO-154). The hook treats
+    // undefined data as "not resolved yet" and falls back to the auth user, so
+    // these tests exercise the same no-avatar path they did before.
+    settings: {
+      getProfile: {
+        useQuery: () => ({ data: undefined, isLoading: false, isError: false }),
+      },
+      getPlatforms: {
+        useQuery: () => ({ data: undefined, isLoading: false, isError: false }),
+      },
+    },
   },
 }));
 

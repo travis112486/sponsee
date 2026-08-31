@@ -7,7 +7,7 @@ import { trpc } from "@/trpc";
 import { authClient } from "@/lib/auth-client";
 import { toast } from "sonner";
 import { Link2, Loader2, Plus, RefreshCw, Trash2, Unplug } from "lucide-react";
-import { platforms, type Platform } from "@sponsee/shared";
+import { platforms, platformLabels, type Platform } from "@sponsee/shared";
 import QueryError from "@/components/QueryError";
 import { applyServerFieldErrors, serverErrorMessage } from "@/lib/trpc-error";
 
@@ -26,11 +26,6 @@ const SYNCABLE: ReadonlySet<string> = new Set(["twitch", "kick", "youtube"]);
 // (true Twitch subscriber counts; Kick fallback if app-token counts are gated)
 const CONNECTABLE = ["twitch", "kick"] as const;
 type ConnectablePlatform = (typeof CONNECTABLE)[number];
-
-const PLATFORM_LABEL: Record<ConnectablePlatform, string> = {
-  twitch: "Twitch",
-  kick: "Kick",
-};
 
 type PlatformForm = z.infer<typeof platformSchema>;
 
@@ -82,7 +77,7 @@ export default function PlatformsPanel() {
 
   const completeConnect = trpc.settings.completePlatformConnect.useMutation({
     onSuccess: ({ row, outcome }, variables) => {
-      const label = PLATFORM_LABEL[variables.platform];
+      const label = platformLabels[variables.platform];
       if (outcome === "synced") {
         toast.success(`${label} connected — subscriber count synced`);
       } else if (outcome === "skipped") {
@@ -129,7 +124,7 @@ export default function PlatformsPanel() {
       const detail = searchParams.get("error");
       const connectErrorToast = () =>
         toast.error(
-          `Couldn't connect ${PLATFORM_LABEL[connectError as ConnectablePlatform] ?? connectError}${detail ? `: ${detail.replace(/_/g, " ")}` : ""}`
+          `Couldn't connect ${platformLabels[connectError as Platform] ?? connectError}${detail ? `: ${detail.replace(/_/g, " ")}` : ""}`
         );
       if ((connectError === "twitch" || connectError === "kick") && detail?.startsWith("state")) {
         // A replayed OAuth callback (proxy retry, browser prefetch) burns the
@@ -159,7 +154,7 @@ export default function PlatformsPanel() {
     });
     if (error) {
       setConnecting(null);
-      toast.error(error.message || `Couldn't start the ${PLATFORM_LABEL[platform]} connect flow`);
+      toast.error(error.message || `Couldn't start the ${platformLabels[platform]} connect flow`);
     } else if (data?.url) {
       window.location.assign(data.url);
     }
@@ -268,7 +263,7 @@ export default function PlatformsPanel() {
                   <>
                     <span className="flex items-center gap-1.5 rounded-full bg-pine/10 px-3 py-1 text-[12.5px] font-medium text-pine">
                       <Link2 className="h-3.5 w-3.5" />
-                      {PLATFORM_LABEL[platform]} connected
+                      {platformLabels[platform]} connected
                       {row.handle ? ` · @${row.handle}` : ""}
                     </span>
                     <button
@@ -291,7 +286,7 @@ export default function PlatformsPanel() {
                     ) : (
                       <Link2 className="h-3.5 w-3.5" />
                     )}
-                    Connect {PLATFORM_LABEL[platform]}
+                    Connect {platformLabels[platform]}
                   </button>
                 )}
               </div>

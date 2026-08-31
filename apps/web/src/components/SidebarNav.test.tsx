@@ -12,17 +12,24 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/trpc", () => ({
-  trpc: { billing: { getSubscription: { useQuery: vi.fn() } } },
+  trpc: {
+    billing: { getSubscription: { useQuery: vi.fn() } },
+    settings: { getProfile: { useQuery: vi.fn() }, getPlatforms: { useQuery: vi.fn() } },
+  },
 }));
 
 import { trpc } from "@/trpc";
 
+const asMock = (fn: unknown) => fn as ReturnType<typeof vi.fn>;
+
 beforeEach(() => {
-  (trpc.billing.getSubscription.useQuery as ReturnType<typeof vi.fn>).mockReturnValue({
+  asMock(trpc.billing.getSubscription.useQuery).mockReturnValue({
     data: { plan: "starter", dealSlotLimit: 5, activeDealCount: 1 },
     isLoading: false,
     isError: false,
   });
+  asMock(trpc.settings.getProfile.useQuery).mockReturnValue({ data: null });
+  asMock(trpc.settings.getPlatforms.useQuery).mockReturnValue({ data: [] });
 });
 
 afterEach(() => {
