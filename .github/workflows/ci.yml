@@ -20,6 +20,11 @@ jobs:
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      # SPO-165: the Vercel ignoreCommand skips builds for commits that don't
+      # touch the web app. That is only safe while apps/web has no runtime
+      # @sponsee/api or @sponsee/db dependency — this guard fails CI if one is
+      # added, forcing the author to widen the watch list or restructure.
+      - run: node scripts/verify-web-import-guard.mjs
       - run: pnpm typecheck
 
   build:
