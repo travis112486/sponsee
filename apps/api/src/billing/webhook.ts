@@ -36,6 +36,46 @@ function tierFromSubscription(subscription: Stripe.Subscription): PlanTier | nul
 }
 
 /**
+ * Read the current period end off the subscription.
+ *
+ * As of API version 2025-03-31.basil, `current_period_end` no longer exists on
+ * Stripe.Subscription — it moved to each Stripe.SubscriptionItem (SPO-190). A
+ * subscription always has at least one item, but read defensively: a null here
+ * must not become a thrown error in a webhook handler.
+ */
+function currentPeriodEndFromSubscription(subscription: Stripe.Subscription): Date | null {
+  const seconds = subscription.items?.data?.[0]?.current_period_end;
+  return typeof seconds === "number" ? new Date(seconds * 1000) : null;
+}
+
+/**
+ * Read the subscription id off an invoice, in either API-version shape.
+ *
+ * The webhook endpoint (`we_1UAdNfB1QieISYczbZ91rjhS`) carries its *own* API
+ * version pin — today 2025-02-24.acacia — independently of the SDK's
+ * `apiVersion` in stripe.ts, so *delivered* payloads stay acacia-shaped with
+ * `subscription` at the top level even now that the SDK is on basil. But that
+ * pin is an account setting anyone can change in the Stripe dashboard, and
+ * basil moved the field to `parent.subscription_details.subscription`. Reading
+ * both is what keeps this branch from silently becoming a no-op the day the
+ * endpoint pin is bumped — a failure with no exception and no test to catch it
+ * (SPO-190 coupling point 2).
+ */
+function subscriptionIdFromInvoice(
+  invoice: Stripe.Invoice & { subscription?: string | Stripe.Subscription | null }
+): string | null {
+  const acacia = invoice.subscription;
+  if (typeof acacia === "string") return acacia;
+  if (acacia && typeof acacia === "object") return acacia.id;
+
+  const basil = invoice.parent?.subscription_details?.subscription;
+  if (typeof basil === "string") return basil;
+  if (basil && typeof basil === "object") return basil.id;
+
+  return null;
+}
+
+/**
  * Find the creator this subscription belongs to.
  *
  * Prefer the metadata we stamped at checkout, but verify the row actually
@@ -109,9 +149,7 @@ async function updateCreatorFromSubscription(subscription: Stripe.Subscription) 
     .set({
       stripeSubscriptionId: subscription.id,
       subscriptionStatus: status,
-      currentPeriodEnd: subscription.current_period_end
-        ? new Date(subscription.current_period_end * 1000)
-        : null,
+      currentPeriodEnd: currentPeriodEndFromSubscription(subscription),
       ...(planTier ? { plan: planTier } : {}),
       updatedAt: new Date(),
     })
@@ -213,8 +251,10 @@ export function registerStripeWebhook(app: Hono) {
         }
         case "invoice.payment_failed":
         case "invoice.payment_succeeded": {
-          const invoice = event.data.object as Stripe.Invoice;
-          const subId = invoice.subscription;
+          const invoice = event.data.object as Stripe.Invoice & {
+            subscription?: string | Stripe.Subscription | null;
+          };
+          const subId = subscriptionIdFromInvoice(invoice);
           if (subId && typeof subId === "string") {
             const sub = await stripe.subscriptions.retrieve(subId);
             await updateCreatorFromSubscription(sub);
