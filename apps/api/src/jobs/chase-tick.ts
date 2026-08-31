@@ -6,6 +6,8 @@ import {
   invoiceChaseState,
   chaseEvents,
   activityEvents,
+  memberships,
+  user,
 } from "@sponsee/db/schema";
 import { renderMergeTokens } from "@sponsee/shared";
 import { createEmailProvider } from "../email/index.js";
@@ -16,6 +18,32 @@ const STEP_NAMES: Record<number, string> = {
   2: "Second notice",
   3: "Final notice",
 };
+
+/**
+ * Resolve the address a brand's reply to a chase email should land in.
+ *
+ * `creators` has no email column — the address lives on the Better Auth `user`
+ * row reached through the creator's owner membership. The user-triggered send
+ * reads it off the session (see chase.ts); a background rescue has no session,
+ * so it has to be looked up. "Owner" is the same role the request context uses
+ * to resolve a creator, and the earliest one wins so two ticks over the same
+ * creator can never disagree on the reply address.
+ *
+ * Returns null when no owner email exists so the caller can fall back to the
+ * from address loudly rather than silently pointing replies at the shared
+ * chase inbox, where the creator would never see them.
+ */
+export async function resolveCreatorReplyToEmail(creatorId: string): Promise<string | null> {
+  const [owner] = await db
+    .select({ email: user.email })
+    .from(memberships)
+    .innerJoin(user, eq(memberships.userId, user.id))
+    .where(and(eq(memberships.creatorId, creatorId), eq(memberships.role, "owner")))
+    .orderBy(memberships.createdAt, memberships.userId)
+    .limit(1);
+
+  return owner?.email || null;
+}
 
 /**
  * Chase tick: finds armed invoices whose next step is due and creates
@@ -170,6 +198,23 @@ export async function runChaseTick(): Promise<number> {
     created++;
   }
 
+  // One creator can own several rescued events in a single tick, so memoize the
+  // owner lookup rather than repeating it per event.
+  const replyToByCreator = new Map<string, string | null>();
+  async function replyToFor(creatorId: string, fromEmail: string): Promise<string> {
+    if (!replyToByCreator.has(creatorId)) {
+      replyToByCreator.set(creatorId, await resolveCreatorReplyToEmail(creatorId));
+    }
+    const ownerEmail = replyToByCreator.get(creatorId) ?? null;
+    if (!ownerEmail) {
+      console.warn(
+        `[chase-tick] No owner email for creator ${creatorId}; brand replies will go to ${fromEmail} instead of the creator`
+      );
+      return fromEmail;
+    }
+    return ownerEmail;
+  }
+
   // ── Rescue: approved events that were stranded before enqueue ──
   // enqueuedAt is the durable proof that a send job reached the queue, so only
   // events missing it can actually be stranded.
@@ -194,6 +239,7 @@ export async function runChaseTick(): Promise<number> {
       if (!invoice) continue;
 
       const fromEmail = process.env.CHASE_FROM_EMAIL || "chase@sponsee.app";
+      const replyToEmail = await replyToFor(invoice.creatorId, fromEmail);
       const idempotencyKey =
         event.idempotencyKey || `invoice:${event.invoiceId}:step:${event.step}`;
 
@@ -205,7 +251,7 @@ export async function runChaseTick(): Promise<number> {
           step: event.step,
           toEmail: event.toEmail || "",
           fromEmail,
-          replyToEmail: fromEmail,
+          replyToEmail,
           subject: event.subjectSnapshot || "",
           body: event.bodySnapshot || "",
           idempotencyKey,
@@ -257,6 +303,7 @@ export async function runChaseTick(): Promise<number> {
       if (!invoice) continue;
 
       const fromEmail = process.env.CHASE_FROM_EMAIL || "chase@sponsee.app";
+      const replyToEmail = await replyToFor(invoice.creatorId, fromEmail);
       const idempotencyKey =
         event.idempotencyKey || `invoice:${event.invoiceId}:step:${event.step}`;
 
@@ -268,7 +315,7 @@ export async function runChaseTick(): Promise<number> {
           step: event.step,
           toEmail: event.toEmail || "",
           fromEmail,
-          replyToEmail: fromEmail,
+          replyToEmail,
           subject: event.subjectSnapshot || "",
           body: event.bodySnapshot || "",
           idempotencyKey,
