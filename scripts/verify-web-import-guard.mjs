@@ -15,11 +15,22 @@
  * happens, forcing the author to either widen the watch list in `vercel.json`
  * or move the import out of the web runtime.
  *
+ * SPO-170 extends the same invariant to the transitive case: `packages/shared`
+ * is on the watch list, but as a leaf. If it ever declares a `@sponsee/*`
+ * dependency (say `@sponsee/db`), then a commit touching only `packages/db`
+ * could change shared's build output while the ignore predicate skips the
+ * build — the commit touches none of the watched paths. So `packages/shared`
+ * must stay self-contained: no `@sponsee/*` entry in any of its dependency
+ * fields.
+ *
  * Rule enforced:
  *   - `@sponsee/db` may not be referenced from `apps/web/src` in any form.
  *   - `@sponsee/api` may be referenced only via type-only imports/reexports
  *     (`import type`, `export type`). A value import, side-effect import,
  *     dynamic `import()`, or multi-line import is a violation.
+ *   - `packages/shared/package.json` declares no `@sponsee/*` entry in
+ *     `dependencies`, `devDependencies`, `peerDependencies`, or
+ *     `optionalDependencies`.
  *
  * Run: node scripts/verify-web-import-guard.mjs   (exit 0 = clean, exit 1 = violation)
  */
@@ -96,17 +107,35 @@ for (const file of walk(webSrc)) {
   }
 }
 
+// SPO-170: keep `packages/shared` a leaf on the watch list. A `@sponsee/*`
+// dependency here would let a commit that only touches that dependency change
+// shared's build output while the ignoreCommand skips the build.
+const sharedPkgPath = resolve(repoRoot, "packages/shared/package.json");
+const sharedPkg = JSON.parse(readFileSync(sharedPkgPath, "utf8"));
+const DEP_FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+for (const field of DEP_FIELDS) {
+  const deps = sharedPkg[field];
+  if (!deps || typeof deps !== "object") continue;
+  for (const name of Object.keys(deps)) {
+    if (name.startsWith("@sponsee/")) {
+      violations.push(
+        `packages/shared/package.json: ${field}['${name}'] — packages/shared must stay self-contained (no @sponsee/* dependency)`,
+      );
+    }
+  }
+}
+
 if (violations.length > 0) {
   console.error(
-    "web import guard: apps/web has a runtime @sponsee/api/@sponsee/db dependency",
+    "web import guard: watch-list invariant broken (apps/web runtime dependency or packages/shared @sponsee/* dependency)",
   );
   for (const v of violations) console.error(`  - ${v}`);
   console.error(
-    "\nWiden the ignoreCommand watch list in vercel.json, or move the import out of the web runtime.",
+    "\nWiden the ignoreCommand watch list in vercel.json, or move the dependency out of the web runtime / packages/shared.",
   );
   process.exit(1);
 }
 
 console.log(
-  "web import guard: clean (no runtime @sponsee/api or @sponsee/db dependency in apps/web/src)",
+  "web import guard: clean (no runtime @sponsee/api or @sponsee/db dependency in apps/web/src; packages/shared has no @sponsee/* dependency)",
 );
