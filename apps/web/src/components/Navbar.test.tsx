@@ -3,8 +3,21 @@ import "@testing-library/jest-dom/vitest";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { CommandPalette } from "./Navbar";
+import { CommandPalette, Topbar } from "./Navbar";
 import { resolveTopbarPage } from "@/lib/route-titles";
+
+const toastSpy = vi.fn();
+vi.mock("sonner", () => ({ toast: (...args: unknown[]) => toastSpy(...args) }));
+
+vi.mock("@/lib/auth", () => ({
+  useAuth: () => ({
+    user: { id: "u1", name: "Pixel Panda", email: "p@example.com" },
+    isLoading: false,
+    isAuthenticated: true,
+    signIn: vi.fn(),
+    signOut: vi.fn(),
+  }),
+}));
 
 vi.mock("@/trpc", () => ({
   trpc: {
@@ -65,6 +78,33 @@ describe("CommandPalette keyboard handling", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Search deals, brands, invoices" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
+  });
+});
+
+describe("Topbar has no fake Go Live control (SPO-152 regression)", () => {
+  function renderTopbar() {
+    return render(
+      <MemoryRouter>
+        <Topbar />
+      </MemoryRouter>
+    );
+  }
+
+  it("renders no Go Live button", () => {
+    renderTopbar();
+
+    expect(screen.queryByRole("button", { name: /go live/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/go live/i)).not.toBeInTheDocument();
+  });
+
+  it("no topbar control claims a live/offline state Sponsee never queried", () => {
+    renderTopbar();
+
+    for (const button of screen.getAllByRole("button")) {
+      fireEvent.click(button);
+    }
+
+    expect(toastSpy).not.toHaveBeenCalledWith(expect.stringMatching(/live/i));
   });
 });
 
