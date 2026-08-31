@@ -2,16 +2,29 @@
 import "@testing-library/jest-dom/vitest";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import { CommandPalette, Topbar } from "./Navbar";
 import { resolveTopbarPage } from "@/lib/route-titles";
 
-const toastSpy = vi.fn();
-vi.mock("sonner", () => ({ toast: (...args: unknown[]) => toastSpy(...args) }));
+// `vi.hoisted` so the exported `toast` IS this spy rather than a wrapper around
+// it: SPO-152 asserts on `toastSpy` directly, while SPO-103 re-imports `toast`
+// from "sonner" and asserts on that. Both need the same real mock function —
+// a lazy `(...args) => toastSpy(...args)` forwarder would satisfy the first and
+// break the second, since `toHaveBeenCalledWith` requires an actual spy.
+const { toastSpy } = vi.hoisted(() => ({
+  toastSpy: Object.assign(vi.fn(), {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+  }),
+}));
+
+vi.mock("sonner", () => ({ toast: toastSpy }));
 
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({
-    user: { id: "u1", name: "Pixel Panda", email: "p@example.com" },
+    user: { id: "u1", name: "PixelPanda", email: "p@example.com", image: null },
     isLoading: false,
     isAuthenticated: true,
     signIn: vi.fn(),
@@ -235,6 +248,51 @@ describe("Topbar notification bell (SPO-153)", () => {
     ]);
     renderTopbar();
     expect(screen.getByTestId("notifications-unread-dot")).toBeInTheDocument();
+  });
+});
+
+describe("Topbar account menu (SPO-103)", () => {
+  function LocationProbe() {
+    const location = useLocation();
+    return <span data-testid="loc">{location.pathname + location.search}</span>;
+  }
+
+  function renderTopbar() {
+    return render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route
+            path="*"
+            element={
+              <>
+                <Topbar />
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  it("navigates Profile to the Settings profile tab instead of firing a mock toast", async () => {
+    const { toast } = await import("sonner");
+    renderTopbar();
+
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    fireEvent.click(screen.getByRole("button", { name: /Profile/ }));
+
+    expect(screen.getByTestId("loc")).toHaveTextContent("/settings?tab=profile");
+    expect(toast).not.toHaveBeenCalledWith("Profile (mock)");
+  });
+
+  it("keeps Settings pointing at the settings route", () => {
+    renderTopbar();
+
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    fireEvent.click(screen.getByRole("button", { name: /Settings/ }));
+
+    expect(screen.getByTestId("loc")).toHaveTextContent("/settings");
   });
 });
 

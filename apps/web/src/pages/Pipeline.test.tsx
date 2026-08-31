@@ -76,6 +76,55 @@ describe("Pipeline kanban card accessibility", () => {
   });
 });
 
+describe("Pipeline drag-and-drop (SPO-52, re-landed for SPO-103)", () => {
+  function getCard() {
+    // The draggable wrapper is the card itself, not the stretched open button.
+    const card = document.querySelector('[aria-roledescription="Draggable deal card"]');
+    if (!card) throw new Error("no draggable deal card rendered");
+    return card as HTMLElement;
+  }
+
+  it("renders each deal card as a drag source", () => {
+    renderPipeline();
+    expect(getCard()).toBeInTheDocument();
+  });
+
+  it("does not regress the SPO-25 contract: the draggable card is not itself a button", () => {
+    renderPipeline();
+    // dnd-kit's listener attributes default to role="button"/tabIndex=0; the
+    // card must override them so the nested open button stays the only button.
+    expect(getCard()).toHaveAttribute("role", "group");
+    expect(getCard()).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("activates a drag after the pointer moves past the threshold", async () => {
+    renderPipeline();
+    const card = getCard();
+
+    fireEvent.mouseDown(card, { clientX: 0, clientY: 0 });
+    fireEvent.mouseMove(document, { clientX: 40, clientY: 0 });
+
+    // Once a drag is live the source card dims and the overlay clone appears,
+    // so the brand name is rendered twice.
+    await waitFor(() => {
+      expect(screen.getAllByText("Acme").length).toBeGreaterThan(1);
+    });
+
+    fireEvent.mouseUp(document);
+  });
+
+  it("keeps a plain click on the card as open-the-deal, not a drag", () => {
+    renderPipeline();
+    const card = getCard();
+
+    fireEvent.mouseDown(card, { clientX: 0, clientY: 0 });
+    fireEvent.mouseUp(document, { clientX: 0, clientY: 0 });
+
+    // No movement past the 4px threshold: no overlay clone was created.
+    expect(screen.getAllByText("Acme")).toHaveLength(1);
+  });
+});
+
 describe("NewDealModal accessibility", () => {
   it("renders with dialog semantics and closes on Escape", async () => {
     renderPipeline("/pipeline?new=1");

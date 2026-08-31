@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { User, Radio, CreditCard, Mail, Receipt } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -18,13 +17,34 @@ const tabs: { key: TabKey; label: string; icon: typeof User }[] = [
   { key: "billing", label: "Billing", icon: Receipt },
 ];
 
+const TAB_KEYS = new Set<string>(tabs.map((t) => t.key));
+
 export default function SettingsPage() {
+  // The active tab lives in the URL so other surfaces can deep-link into a
+  // section (the Topbar account menu points Profile at ?tab=profile) and so
+  // the browser back button steps between tabs (SPO-103).
+  const [searchParams, setSearchParams] = useSearchParams();
+
   // The OAuth connect flow (PlatformsPanel) redirects back to /settings with
   // ?connected= or ?connect_error= — land the user on the tab they left from.
-  const [searchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState<TabKey>(
-    searchParams.has("connected") || searchParams.has("connect_error") ? "platforms" : "profile"
-  );
+  const requestedTab = searchParams.get("tab");
+  const activeTab: TabKey =
+    requestedTab && TAB_KEYS.has(requestedTab)
+      ? (requestedTab as TabKey)
+      : searchParams.has("connected") || searchParams.has("connect_error")
+        ? "platforms"
+        : "profile";
+
+  function setActiveTab(tab: TabKey) {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("tab", tab);
+        return next;
+      },
+      { replace: true }
+    );
+  }
 
   return (
     <div className="mx-auto max-w-[720px]">

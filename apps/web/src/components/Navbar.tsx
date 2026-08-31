@@ -316,12 +316,12 @@ export function Sidebar({
           <p className="mt-1.5 text-[10.5px] text-ink-3">
             {activeDealCount} of {dealSlotLimit} active deal slots used
           </p>
-          <button
-            onClick={() => toast("Plan management (mock)")}
-            className="mt-1.5 text-[11px] font-medium text-pine hover:text-pine-hover"
+          <NavLink
+            to="/settings?tab=billing"
+            className="mt-1.5 inline-block text-[11px] font-medium text-pine hover:text-pine-hover"
           >
             Manage
-          </button>
+          </NavLink>
         </div>
         <p className="flex items-center gap-1.5 px-1 text-[11px] leading-4 text-ink-3">
           <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-pine" />
@@ -527,7 +527,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
                 <button
                   onClick={() => {
                     setAvatarOpen(false);
-                    toast("Profile (mock)");
+                    navigate("/settings?tab=profile");
                   }}
                   className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] text-ink-2 hover:bg-surface-subtle"
                 >
