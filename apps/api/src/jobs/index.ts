@@ -1,12 +1,15 @@
 import { getBoss } from "./boss.js";
 import { runChaseTick, sendChaseEmail } from "./chase-tick.js";
 import { runPlatformSync } from "./platform-sync.js";
+import { runStorageOrphanSweep } from "../storage/sweep.js";
 
 const CHASE_CRON = "0/15 * * * *"; // Every 15 minutes
 const CHASE_TICK_JOB = "chase-tick";
 const CHASE_SEND_JOB = "chase-send";
 const PLATFORM_SYNC_CRON = "30 6 * * *"; // Daily 06:30 UTC — plenty for a CRM, keeps YouTube quota trivial
 const PLATFORM_SYNC_JOB = "platform-sync";
+const STORAGE_SWEEP_CRON = "0 4 * * *"; // Daily 04:00 UTC
+const STORAGE_SWEEP_JOB = "storage-sweep";
 
 /**
  * Register all recurring jobs with pg-boss.
@@ -19,6 +22,7 @@ export async function registerJobs(): Promise<void> {
   await boss.createQueue(CHASE_TICK_JOB);
   await boss.createQueue(CHASE_SEND_JOB);
   await boss.createQueue(PLATFORM_SYNC_JOB);
+  await boss.createQueue(STORAGE_SWEEP_JOB);
 
   // Register handler
   boss.work(CHASE_TICK_JOB, async () => {
@@ -43,7 +47,18 @@ export async function registerJobs(): Promise<void> {
     console.log(`[platform-sync] synced=${synced} errored=${errored} skipped=${skipped}`);
   });
 
+  // Reconciles storage objects orphaned by a hard `deals` row deletion — see
+  // the doc comment on runStorageOrphanSweep for why this is needed alongside
+  // (not instead of) the app-initiated deleteObject call sites. No-ops until
+  // storage is configured.
+  boss.work(STORAGE_SWEEP_JOB, async () => {
+    const { scanned, deleted, skippedUnconfigured } = await runStorageOrphanSweep();
+    if (skippedUnconfigured) return;
+    console.log(`[storage-sweep] scanned=${scanned} deleted=${deleted}`);
+  });
+
   // Schedule recurring
   await boss.schedule(CHASE_TICK_JOB, CHASE_CRON, {});
   await boss.schedule(PLATFORM_SYNC_JOB, PLATFORM_SYNC_CRON, {});
+  await boss.schedule(STORAGE_SWEEP_JOB, STORAGE_SWEEP_CRON, {});
 }

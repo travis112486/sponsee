@@ -12,6 +12,7 @@ import { settingsRouter } from "./settings.js";
 import { billingRouter } from "../billing/router.js";
 import { activityRouter } from "./activity.js";
 import { calendarRouter } from "./calendar.js";
+import { storageRouter } from "./storage.js";
 
 export const appRouter = createTRPCRouter({
   health: healthRouter,
@@ -27,6 +28,7 @@ export const appRouter = createTRPCRouter({
   billing: billingRouter,
   activity: activityRouter,
   calendar: calendarRouter,
+  storage: storageRouter,
 });
 
 export type AppRouter = typeof appRouter;

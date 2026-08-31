@@ -24,6 +24,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1121.0",
+    "@aws-sdk/s3-request-presigner": "^3.1121.0",
     "@better-auth/core": "1.7.2",
     "@hono/node-server": "^2.1.1",
     "@sponsee/db": "workspace:*",
@@ -36,9 +38,9 @@
     "nodemailer": "^9.0.5",
     "pg": "^8.14.0",
     "pg-boss": "^12.28.0",
+    "stripe": "^17.7.0",
     "superjson": "^2.2.0",
-    "zod": "^3.25.76",
-    "stripe": "^17.7.0"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
