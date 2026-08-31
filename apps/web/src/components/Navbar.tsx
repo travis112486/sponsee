@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router";
 import {
   LayoutDashboard,
@@ -21,6 +21,13 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { resolveTopbarPage } from "@/lib/route-titles";
 import { trpc } from "@/trpc";
+import {
+  buildNotifications,
+  countUnread,
+  loadLastReadAt,
+  readWatermark,
+  saveLastReadAt,
+} from "@/lib/notifications";
 import { planLabels, planPricesCents } from "@sponsee/shared";
 
 const navItems = [
@@ -322,6 +329,32 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
   const [avatarOpen, setAvatarOpen] = useState(false);
   const page = resolveTopbarPage(location.pathname);
 
+  // Notifications are derived from data the app already loads, so the bell adds
+  // no new endpoint and shares React Query's cache with the Dashboard (SPO-153).
+  const { data: activity } = trpc.activity.list.useQuery({ limit: 8 });
+  const { data: invoices } = trpc.invoice.list.useQuery();
+  // Read state is stored per user, so re-read it during render when the signed-in
+  // account changes rather than leaking one creator's watermark into another's.
+  const [readState, setReadState] = useState<{ userId?: string; at: string | null }>(() => ({
+    userId: user?.id,
+    at: loadLastReadAt(user?.id),
+  }));
+  if (readState.userId !== user?.id) {
+    setReadState({ userId: user?.id, at: loadLastReadAt(user?.id) });
+  }
+
+  const notifications = useMemo(
+    () => buildNotifications({ activity, invoices, now: new Date() }),
+    [activity, invoices]
+  );
+  const unreadCount = countUnread(notifications, readState.at);
+
+  const markNotificationsRead = () => {
+    const watermark = readWatermark(notifications, new Date());
+    saveLastReadAt(user?.id, watermark);
+    setReadState({ userId: user?.id, at: watermark });
+  };
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -379,25 +412,76 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
         <div className="relative">
           <button
             onClick={() => {
-              setBellOpen((v) => !v);
+              const next = !bellOpen;
+              setBellOpen(next);
               setAvatarOpen(false);
+              if (next) markNotificationsRead();
             }}
             className="relative rounded-lg p-2 text-ink-2 transition-colors hover:bg-surface-subtle"
-            aria-label="Notifications"
+            aria-label={
+              unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications"
+            }
             aria-haspopup="true"
             aria-expanded={bellOpen}
           >
             <Bell className="h-4 w-4" />
-            <span className="absolute right-1.5 top-1.5 flex h-2 w-2 items-center justify-center rounded-full bg-brick text-[0px]" />
+            {unreadCount > 0 && (
+              <span
+                data-testid="notifications-unread-dot"
+                className="absolute right-1.5 top-1.5 flex h-2 w-2 items-center justify-center rounded-full bg-brick text-[0px]"
+              />
+            )}
           </button>
           {bellOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setBellOpen(false)} />
               <div className="absolute right-0 top-10 z-20 w-72 rounded-[10px] border border-hairline bg-surface py-1 shadow-warm-md">
                 <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-3">
-                  Notifications · 0 new
+                  Notifications · {unreadCount} new
                 </p>
-                <p className="px-3 py-2 text-[12.5px] text-ink-3">No notifications yet</p>
+                {notifications.length === 0 ? (
+                  <p className="px-3 py-2 text-[12.5px] text-ink-3">No notifications yet</p>
+                ) : (
+                  <ul className="max-h-80 overflow-y-auto">
+                    {notifications.map((n) => {
+                      const body = (
+                        <>
+                          <span
+                            className={cn(
+                              "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full",
+                              n.tone === "alert" ? "bg-brick" : "bg-ink-3/40"
+                            )}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-[12.5px] leading-4 text-ink-2">
+                              {n.title}
+                            </span>
+                            <span className="mt-0.5 block text-[11px] text-ink-3">
+                              {new Date(n.at).toLocaleDateString()}
+                            </span>
+                          </span>
+                        </>
+                      );
+                      return (
+                        <li key={n.id}>
+                          {n.href ? (
+                            <button
+                              onClick={() => {
+                                setBellOpen(false);
+                                navigate(n.href!);
+                              }}
+                              className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-surface-subtle"
+                            >
+                              {body}
+                            </button>
+                          ) : (
+                            <div className="flex items-start gap-2 px-3 py-2">{body}</div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </div>
             </>
           )}
