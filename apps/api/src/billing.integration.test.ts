@@ -621,7 +621,12 @@ describe("stripe webhook", () => {
       id: "sub_123",
       status: "active",
       metadata: { creatorId: creator.id, tier: "pro" },
-      current_period_end: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+      // Basil moved current_period_end off the subscription onto its items
+      // (SPO-190) — this fixture mirrors what a real 2025-03-31.basil+
+      // `subscriptions.retrieve()` response looks like.
+      items: {
+        data: [{ current_period_end: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60 }],
+      },
     });
 
     const res = await app.request("/api/webhooks/stripe", {
@@ -643,6 +648,39 @@ describe("stripe webhook", () => {
     expect(updated?.currentPeriodEnd).toBeInstanceOf(Date);
   });
 
+  // SPO-190 regression guard: 2025-03-31.basil moved `current_period_end` off
+  // the top-level subscription onto `subscription.items.data[n]`. A read that
+  // still looks at the top level silently writes `currentPeriodEnd: null` for
+  // every active subscription instead of throwing, so this asserts the value
+  // explicitly rather than relying on `toBeInstanceOf` elsewhere to catch it.
+  it("reads current_period_end off the subscription item, not the subscription (basil field move)", async () => {
+    const { creator } = await createUserAndCreator("basil-trap@example.com");
+    const periodEndSeconds = Math.floor(Date.now() / 1000) + 14 * 24 * 60 * 60;
+
+    mockSubscriptionEvent("customer.subscription.updated", {
+      id: "sub_basil",
+      status: "active",
+      metadata: { creatorId: creator.id, tier: "pro" },
+      // No top-level current_period_end — only basil's item-level field.
+      items: { data: [{ price: { id: "price_test_pro" }, current_period_end: periodEndSeconds }] },
+    });
+
+    const res = await app.request("/api/webhooks/stripe", {
+      method: "POST",
+      headers: { "stripe-signature": "sig" },
+      body: "payload",
+    });
+    expect(res.status).toBe(200);
+
+    const [updated] = await db
+      .select()
+      .from(schema.creators)
+      .where(eq(schema.creators.id, creator.id));
+
+    expect(updated?.currentPeriodEnd).not.toBeNull();
+    expect(updated?.currentPeriodEnd?.getTime()).toBe(periodEndSeconds * 1000);
+  });
+
   it("updates creator on customer.subscription.updated", async () => {
     const { creator } = await createUserAndCreator("test@example.com");
     await db
@@ -654,7 +692,9 @@ describe("stripe webhook", () => {
       id: "sub_456",
       status: "past_due",
       metadata: { creatorId: creator.id },
-      current_period_end: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
+      items: {
+        data: [{ current_period_end: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60 }],
+      },
     });
 
     const res = await app.request("/api/webhooks/stripe", {
@@ -702,8 +742,14 @@ describe("stripe webhook", () => {
       status: "active",
       // No `tier` in metadata — exactly what a portal-initiated upgrade sends.
       metadata: { creatorId: creator.id },
-      items: { data: [{ price: { id: "price_test_pro" } }] },
-      current_period_end: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+      items: {
+        data: [
+          {
+            price: { id: "price_test_pro" },
+            current_period_end: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+          },
+        ],
+      },
     });
 
     const res = await app.request("/api/webhooks/stripe", {

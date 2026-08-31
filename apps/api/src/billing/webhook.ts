@@ -36,6 +36,19 @@ function tierFromSubscription(subscription: Stripe.Subscription): PlanTier | nul
 }
 
 /**
+ * Read the current period end off the subscription.
+ *
+ * As of API version 2025-03-31.basil, `current_period_end` no longer exists on
+ * Stripe.Subscription — it moved to each Stripe.SubscriptionItem (SPO-190). A
+ * subscription always has at least one item, but read defensively: a null here
+ * must not become a thrown error in a webhook handler.
+ */
+function currentPeriodEndFromSubscription(subscription: Stripe.Subscription): Date | null {
+  const seconds = subscription.items?.data?.[0]?.current_period_end;
+  return typeof seconds === "number" ? new Date(seconds * 1000) : null;
+}
+
+/**
  * Find the creator this subscription belongs to.
  *
  * Prefer the metadata we stamped at checkout, but verify the row actually
@@ -109,9 +122,7 @@ async function updateCreatorFromSubscription(subscription: Stripe.Subscription) 
     .set({
       stripeSubscriptionId: subscription.id,
       subscriptionStatus: status,
-      currentPeriodEnd: subscription.current_period_end
-        ? new Date(subscription.current_period_end * 1000)
-        : null,
+      currentPeriodEnd: currentPeriodEndFromSubscription(subscription),
       ...(planTier ? { plan: planTier } : {}),
       updatedAt: new Date(),
     })
@@ -213,7 +224,16 @@ export function registerStripeWebhook(app: Hono) {
         }
         case "invoice.payment_failed":
         case "invoice.payment_succeeded": {
-          const invoice = event.data.object as Stripe.Invoice;
+          // The webhook endpoint (we_1UAdAeB1QieISYczbZ91rjhS) is pinned at
+          // 2025-02-24.acacia independently of the SDK's apiVersion above, so the
+          // *delivered* payload stays acacia-shaped: `subscription` sits at the
+          // top level, not on basil's `invoice.parent.subscription_details`. Cast
+          // past the (now basil) SDK type rather than the runtime field (SPO-190)
+          // — read `invoice.parent...` instead only if the endpoint's own pin is
+          // ever bumped to match.
+          const invoice = event.data.object as Stripe.Invoice & {
+            subscription?: string | Stripe.Subscription | null;
+          };
           const subId = invoice.subscription;
           if (subId && typeof subId === "string") {
             const sub = await stripe.subscriptions.retrieve(subId);
