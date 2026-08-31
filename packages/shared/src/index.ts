@@ -13,6 +13,13 @@ export { renderMergeTokens, validateMergeTokens, hasMergeTokens };
 export const platforms = ["twitch", "youtube", "kick", "tiktok"] as const;
 export type Platform = (typeof platforms)[number];
 
+export const platformLabels: Record<Platform, string> = {
+  twitch: "Twitch",
+  youtube: "YouTube",
+  kick: "Kick",
+  tiktok: "TikTok",
+};
+
 export const dealStages = [
   "inbound",
   "negotiating",

@@ -19,6 +19,8 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { useCreatorIdentity } from "@/lib/use-creator-identity";
+import CreatorAvatar from "@/components/CreatorAvatar";
 import { resolveTopbarPage } from "@/lib/route-titles";
 import { trpc } from "@/trpc";
 import {
@@ -217,6 +219,7 @@ export function Sidebar({
   onClose?: () => void;
 }) {
   const { user } = useAuth();
+  const identity = useCreatorIdentity();
   const { data: subscription } = trpc.billing.getSubscription.useQuery();
   const location = useLocation();
 
@@ -256,10 +259,20 @@ export function Sidebar({
       {/* Identity chip */}
       {user && (
         <div className="mx-3 mb-3 flex items-center gap-2.5 rounded-lg border border-hairline bg-surface-subtle px-2.5 py-2">
-          <img src={user.image || "/pixelpanda-avatar.png"} alt={user.name} className="h-7 w-7 rounded-full object-cover" />
+          <CreatorAvatar
+            src={identity.avatarUrl}
+            name={identity.name ?? user.name}
+            className="h-7 w-7 shrink-0 text-[11px]"
+          />
           <div className="min-w-0">
-            <p className="truncate text-[13px] font-semibold leading-4 text-ink">{user.name}</p>
-            <p className="truncate text-[10.5px] leading-4 text-ink-3">Creator</p>
+            <p className="truncate text-[13px] font-semibold leading-4 text-ink">
+              {identity.name ?? user.name}
+            </p>
+            {/* Primary platform + handle, or nothing — the old hardcoded
+                "Creator" subtitle told the creator nothing they didn't know. */}
+            {identity.subtitle && (
+              <p className="truncate text-[10.5px] leading-4 text-ink-3">{identity.subtitle}</p>
+            )}
           </div>
         </div>
       )}
@@ -324,6 +337,7 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
+  const identity = useCreatorIdentity();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
@@ -499,10 +513,10 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void }) {
             aria-haspopup="true"
             aria-expanded={avatarOpen}
           >
-            <img
-              src={user?.image || "/pixelpanda-avatar.png"}
-              alt={user?.name || "User"}
-              className="h-8 w-8 rounded-full object-cover"
+            <CreatorAvatar
+              src={identity.avatarUrl}
+              name={identity.name ?? user?.name}
+              className="h-8 w-8 shrink-0 text-[12px]"
             />
             <ChevronDown className="h-3.5 w-3.5 text-ink-3" />
           </button>
