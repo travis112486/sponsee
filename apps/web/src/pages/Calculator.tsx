@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { motion } from "framer-motion";
 import { Bookmark, Copy, HelpCircle, Minus, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -11,7 +10,7 @@ import {
 } from "@sponsee/shared";
 import { trpc } from "@/trpc";
 import { cn } from "@/lib/utils";
-import { entrance } from "@/lib/motion";
+import { motion, entrance } from "@/lib/motion";
 import { useCountUp } from "@/hooks/useCountUp";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
