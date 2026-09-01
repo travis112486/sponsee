@@ -31,11 +31,22 @@ Without it, two PRs can each be green, each report no git conflict, and still
 red `main` when both merge — because the second is never re-tested against the
 first. Git only sees textual conflicts; it cannot see semantic ones.
 
-This is not hypothetical. SPO-247 is the observed instance: PR #81 added a
-`CHECK (status <> 'paid' OR paid_at IS NOT NULL)` constraint and PR #83 added a
-test seeding exactly that row. Different files, so no conflict, both green.
-Merging both produced `1 failed | 18 passed` on `main`, and containing it by
-hand cost a full sequencing cycle plus a delegated rebase.
+This is not hypothetical. SPO-247 is the observed instance: PR #81 adds a
+`CHECK (status <> 'paid' OR paid_at IS NOT NULL)` constraint and PR #83 adds a
+test seeding exactly that row. Both green, and git merges them cleanly — they
+share `apps/api/src/routers/dashboard.test.ts` but the hunks do not overlap, so
+there is no textual conflict to see.
+
+Merging `origin/main` + both PRs **in a scratch worktree** produced
+`1 failed | 18 passed`. That dry run is how the collision was caught: it never
+reached `main`. `main` has not gone red, PR #81 is still open, and the
+sequencing work it caused is ongoing rather than concluded — see SPO-247.
+
+The point is what *would* have happened. Nothing in CI was going to catch it:
+with `strict: false` the second PR merges without ever being tested against the
+first, so the first red build would have been on `main`, after the fact. The
+worktree proof is the stronger argument for `strict`, not the weaker one — it
+shows the collision was invisible to every signal the gate actually had.
 
 **The cost, honestly.** Every merge to `main` marks every other open PR out of
 date, and this repo runs 10-12 open PRs at a time. But the bill is not
@@ -64,9 +75,9 @@ merge is not doing the job it was built for.
 This was not a close call, and it is close to free:
 
 - It is **not on the critical path.** It needs only `lint-and-typecheck` and
-  runs 24-32s, finishing well inside `test`'s ~112s. Requiring it adds **zero**
+  runs 24-38s, finishing well inside `test`'s ~112s. Requiring it adds **zero**
   wall-clock to the gate.
-- It is **not flaky.** 10/10 green over the ten runs before the change.
+- It is **not flaky.** 13/13 green over the last thirteen runs.
 
 If it does start flaking, fix it or delete it. Do not quietly drop it back to
 advisory — that recreates the exact hole SPO-225 closed.
@@ -78,8 +89,10 @@ plainly rather than being left as an unexamined default.
 
 Every agent on this project shares one GitHub account, and that account has
 admin. With `enforce_admins: false` an admin can merge past a red required
-check. **So for us the gate above is a norm, not a wall.** Everything on this
-page describes what we agree to do, not what GitHub physically prevents.
+check — and past the `allow_force_pushes: false` and `allow_deletions: false`
+rows in the table above, which are admin-bypassable for the same reason.
+**So for us the gate above is a norm, not a wall.** Everything on this page
+describes what we agree to do, not what GitHub physically prevents.
 
 It stays off because the same shared-account constraint removes the usual
 escape hatch. There is no second reviewer and no second account: if a required
@@ -94,7 +107,23 @@ merge the fix. Keeping it off preserves break-glass.
    ticket, with the reason, before merging.
 2. Merge one PR at a time and let each land before updating the next. `strict`
    makes staleness *visible*; it does not sequence merges for you.
-3. `required_pull_request_reviews` is off for the same shared-account reason —
+3. **Prefer "Update branch" over rebase + force-push** when satisfying `strict`.
+   This is the one place the two SPO-225 items meet. The `sponsee` Vercel
+   project's `ignoreCommand` diffs `HEAD` against `VERCEL_GIT_PREVIOUS_SHA`:
+
+   - **"Update branch"** (a merge commit) leaves the previous head reachable, so
+     that SHA still resolves and a docs-only or api-only update takes the cheap
+     **skip** path — no build.
+   - **Rebase + force-push** destroys the previous head. The SPO-225 fallback
+     then does its job and forces a **build**, every time, deliberately.
+
+   That fallback is the right default (an unnecessary build is visible; a
+   wrongly skipped one ships a stale bundle silently), but it is not free: the
+   Vercel account is on a free plan that already returns "retry in 24 hours",
+   and exhausting that budget turns the `Vercel` check red repo-wide. `strict`
+   makes branch updates more frequent, so pick the cheap path unless you need
+   the linear history.
+4. `required_pull_request_reviews` is off for the same shared-account reason —
    GitHub will not let an account approve its own PR, so requiring approvals
    would deadlock every PR. Review happens on the ticket thread instead, and
    that is where the QA/Reviewer sign-off lives.

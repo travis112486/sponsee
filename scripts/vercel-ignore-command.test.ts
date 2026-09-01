@@ -22,6 +22,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // unknown. This suite pins the exit status for each branch against real git
 // repositories rather than string-matching the command, because the thing that
 // matters is what git actually returns.
+//
+// The command must stay POSIX sh-clean: Vercel's build container shell is not
+// contractually bash, so a bashism would pass here and fail at deploy time —
+// the same "green locally, red there" gap this suite exists to close. Hence
+// `/bin/sh` below rather than the developer's shell.
 
 const SKIP = 0;
 const BUILD = 1;
@@ -34,11 +39,23 @@ const ignoreCommand = (
 
 let fixture: string;
 
+// The fixture must not inherit the developer's git config: a global
+// `commit.gpgsign` or `core.hooksPath` would break the throwaway commits and
+// error the suite out for reasons unrelated to the command under test.
+const ISOLATED_GIT_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+    env: {
+      ...process.env,
+      ...ISOLATED_GIT_ENV,
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@t",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@t",
+    },
   }).trim();
 }
 
@@ -53,11 +70,11 @@ function commit(cwd: string, file: string, contents: string, message: string): s
 
 /** Runs the real ignoreCommand the way Vercel does and returns its exit status. */
 function runIgnoreCommand(cwd: string, previousSha: string | undefined): number {
-  const env = { ...process.env };
+  const env = { ...process.env, ...ISOLATED_GIT_ENV };
   if (previousSha === undefined) delete env.VERCEL_GIT_PREVIOUS_SHA;
   else env.VERCEL_GIT_PREVIOUS_SHA = previousSha;
 
-  const result = spawnSync(ignoreCommand, { cwd, env, shell: "/bin/bash", stdio: "ignore" });
+  const result = spawnSync(ignoreCommand, { cwd, env, shell: "/bin/sh", stdio: "ignore" });
   return result.status ?? -1;
 }
 
