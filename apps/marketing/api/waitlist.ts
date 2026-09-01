@@ -18,6 +18,27 @@ export function upstreamUrl(env: Record<string, string | undefined> = process.en
 // into a site-wide lockout after a handful of signups.
 const FORWARDED_IP_HEADERS = ["x-vercel-forwarded-for", "x-forwarded-for"];
 
+// Front-door secret (SPO-200/SPO-223). This function is a *second* Vercel
+// project, so it does not pass through the app's `/api/*` rewrite and nothing
+// injects this header for it — it has to send its own.
+//
+// Two things break without it, and only the first one is loud:
+//   1. Under FRONT_DOOR_ENFORCE the origin 403s this call outright, and every
+//      waitlist signup on sponsee.app is dropped.
+//   2. Even with enforcement off, the API only trusts `x-vercel-forwarded-for`
+//      on a front-door-verified request. Unverified, it falls back to the
+//      socket address — which is Vercel's egress IP, identical for every
+//      visitor. That silently collapses the per-IP limit above into one shared
+//      bucket and caps the whole waitlist at WAITLIST_MAX_PER_WINDOW signups
+//      per window. Forwarding the IP headers is not enough on its own.
+const FRONT_DOOR_HEADER = "x-sponsee-front-door";
+
+export function frontDoorSecret(
+  env: Record<string, string | undefined> = process.env
+): string {
+  return env.FRONT_DOOR_SECRET || "";
+}
+
 const ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "http://localhost:4173",
@@ -82,6 +103,12 @@ export default async function handler(request: Request) {
     const value = request.headers.get(name);
     if (value) forwarded[name] = value;
   }
+
+  // Omitted rather than sent empty when unset: an empty header is a *present*
+  // header, and the origin treats present-but-wrong as a forgery. Sending
+  // nothing keeps the unconfigured case on the fail-open path instead.
+  const secret = frontDoorSecret();
+  if (secret) forwarded[FRONT_DOOR_HEADER] = secret;
 
   try {
     const upstream = await fetch(upstreamUrl(), {

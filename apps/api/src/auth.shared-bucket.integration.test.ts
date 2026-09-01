@@ -23,6 +23,11 @@ vi.stubEnv("AUTH_RATE_LIMIT_ENABLED", "true");
 // Better Auth tolerates its default secret only off production, and refuses to
 // initialise without one here.
 vi.stubEnv("BETTER_AUTH_SECRET", "shared-bucket-test-secret");
+// SPO-200: x-vercel-forwarded-for is only trusted when the front-door secret is
+// present. The "identified caller" cases below carry it; the shared-bucket cases
+// (no headers) remain unidentified.
+const FRONT_DOOR_VALUE = "shared-bucket-test-front-door-secret";
+vi.stubEnv("FRONT_DOOR_SECRET", FRONT_DOOR_VALUE);
 
 vi.mock("nodemailer", () => ({
   default: {
@@ -32,6 +37,7 @@ vi.mock("nodemailer", () => ({
 
 const { default: app } = await import("./app.js");
 const { resolvesAuthClientIp } = await import("./client-ip.js");
+const { FRONT_DOOR_HEADER } = await import("./front-door.js");
 
 import { initPgliteSchema } from "./test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "./test-utils/schema-sql.js";
@@ -54,6 +60,14 @@ function signIn(headers: Record<string, string> = {}) {
     headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify({ email: "creator@example.com", callbackURL: "/" }),
   });
+}
+
+/** A caller Better Auth can identify: single-hop client IP + the front-door proof. */
+function identified(ip: string): Record<string, string> {
+  return {
+    "x-vercel-forwarded-for": ip,
+    [FRONT_DOOR_HEADER]: FRONT_DOOR_VALUE,
+  };
 }
 
 beforeAll(async () => {
@@ -126,10 +140,10 @@ describe("rate limiting when no client address can be resolved", () => {
     // The guard must not loosen the limit for everyone — only for the bucket
     // that is shared. A caller with a resolvable address keeps 5 per 60s.
     for (let i = 0; i < PER_CALLER_MAX; i++) {
-      expect((await signIn({ "x-vercel-forwarded-for": "203.0.113.7" })).status).not.toBe(429);
+      expect((await signIn(identified("203.0.113.7"))).status).not.toBe(429);
     }
 
-    expect((await signIn({ "x-vercel-forwarded-for": "203.0.113.7" })).status).toBe(429);
+    expect((await signIn(identified("203.0.113.7"))).status).toBe(429);
 
     const [row] = await db.select().from(rateLimit);
     expect(row.key).toContain("203.0.113.7");
@@ -137,10 +151,22 @@ describe("rate limiting when no client address can be resolved", () => {
 
   it("does not let one caller's exhausted bucket lock out another", async () => {
     for (let i = 0; i < PER_CALLER_MAX + 1; i++) {
-      await signIn({ "x-vercel-forwarded-for": "203.0.113.7" });
+      await signIn(identified("203.0.113.7"));
     }
 
-    expect((await signIn({ "x-vercel-forwarded-for": "198.51.100.9" })).status).not.toBe(429);
+    expect((await signIn(identified("198.51.100.9"))).status).not.toBe(429);
+  });
+
+  it("does not apply the per-caller rule to a forged header without the front door (SPO-200)", async () => {
+    // A request straight to the origin can carry any x-vercel-forwarded-for it
+    // likes. Without the front-door proof the guard refuses to trust it, so the
+    // tight 5-per-60s per-caller rule is replaced by the survivable shared
+    // ceiling — six requests must not 429. (Better Auth's static header list
+    // still keys the bucket on the forged value; the guard downgrades the rule
+    // that applies to it.)
+    for (let i = 0; i < PER_CALLER_MAX + 1; i++) {
+      expect((await signIn({ "x-vercel-forwarded-for": "203.0.113.7" })).status).not.toBe(429);
+    }
   });
 });
 
@@ -148,9 +174,20 @@ describe("resolvesAuthClientIp agrees with the key Better Auth writes", () => {
   // The guard is only correct while our predicate and Better Auth's resolution
   // reach the same verdict. They are separate implementations, so pin them
   // together against real requests instead of trusting that they match.
+  //
+  // SPO-200 narrows the pinning surface: x-vercel-forwarded-for is only trusted
+  // when the front-door proof is present, so a case that carries that header also
+  // carries the proof (that header is Vercel-set and stripped of client values).
+  // The forged case — x-vercel-forwarded-for *without* the proof — is covered by
+  // the rate-limit test above, where the guard deliberately diverges from Better
+  // Auth's static header list.
+  const FD = { [FRONT_DOOR_HEADER]: FRONT_DOOR_VALUE };
   const cases: Array<{ name: string; headers: Record<string, string> }> = [
     { name: "no forwarded headers", headers: {} },
-    { name: "single-hop host header", headers: { "x-vercel-forwarded-for": "203.0.113.7" } },
+    {
+      name: "single-hop host header",
+      headers: { "x-vercel-forwarded-for": "203.0.113.7", ...FD },
+    },
     {
       name: "the live three-hop chain through Vercel",
       headers: { "x-forwarded-for": "69.213.239.195,54.226.216.119, 104.22.100.156" },
@@ -161,6 +198,7 @@ describe("resolvesAuthClientIp agrees with the key Better Auth writes", () => {
         "x-vercel-forwarded-for": "69.213.239.195",
         "x-forwarded-for": "69.213.239.195,54.226.216.119, 104.22.100.156",
         "cf-connecting-ip": "54.226.216.119",
+        ...FD,
       },
     },
     { name: "a single hop that is not an address", headers: { "x-forwarded-for": "unknown" } },
@@ -169,25 +207,53 @@ describe("resolvesAuthClientIp agrees with the key Better Auth writes", () => {
     // that disagreed with Better Auth on every IPv6 form still passed.
     {
       name: "an IPv6 zone ID, which node:net accepts and Better Auth rejects",
-      headers: { "x-vercel-forwarded-for": "fe80::1%eth0" },
+      headers: { "x-vercel-forwarded-for": "fe80::1%eth0", ...FD },
     },
-    { name: "a numeric IPv6 zone ID", headers: { "x-vercel-forwarded-for": "fe80::1%1" } },
-    { name: "loopback IPv6", headers: { "x-vercel-forwarded-for": "::1" } },
-    { name: "compressed IPv6", headers: { "x-vercel-forwarded-for": "2001:db8::1" } },
-    { name: "uppercase IPv6", headers: { "x-vercel-forwarded-for": "2001:DB8::1" } },
-    { name: "IPv4-mapped IPv6", headers: { "x-vercel-forwarded-for": "::ffff:192.0.2.1" } },
+    {
+      name: "a numeric IPv6 zone ID",
+      headers: { "x-vercel-forwarded-for": "fe80::1%1", ...FD },
+    },
+    { name: "loopback IPv6", headers: { "x-vercel-forwarded-for": "::1", ...FD } },
+    {
+      name: "compressed IPv6",
+      headers: { "x-vercel-forwarded-for": "2001:db8::1", ...FD },
+    },
+    {
+      name: "uppercase IPv6",
+      headers: { "x-vercel-forwarded-for": "2001:DB8::1", ...FD },
+    },
+    {
+      name: "IPv4-mapped IPv6",
+      headers: { "x-vercel-forwarded-for": "::ffff:192.0.2.1", ...FD },
+    },
     {
       name: "a bracketed IPv6 with a port",
-      headers: { "x-vercel-forwarded-for": "[2001:db8::1]:443" },
+      headers: { "x-vercel-forwarded-for": "[2001:db8::1]:443", ...FD },
     },
-    { name: "IPv4 with a port", headers: { "x-vercel-forwarded-for": "203.0.113.7:443" } },
-    { name: "an out-of-range octet", headers: { "x-vercel-forwarded-for": "256.1.1.1" } },
-    { name: "a trailing comma", headers: { "x-vercel-forwarded-for": "203.0.113.7," } },
-    { name: "surrounding whitespace", headers: { "x-vercel-forwarded-for": " 203.0.113.7 " } },
-    { name: "an empty header value", headers: { "x-vercel-forwarded-for": "" } },
+    {
+      name: "IPv4 with a port",
+      headers: { "x-vercel-forwarded-for": "203.0.113.7:443", ...FD },
+    },
+    {
+      name: "an out-of-range octet",
+      headers: { "x-vercel-forwarded-for": "256.1.1.1", ...FD },
+    },
+    {
+      name: "a trailing comma",
+      headers: { "x-vercel-forwarded-for": "203.0.113.7,", ...FD },
+    },
+    {
+      name: "surrounding whitespace",
+      headers: { "x-vercel-forwarded-for": " 203.0.113.7 ", ...FD },
+    },
+    { name: "an empty header value", headers: { "x-vercel-forwarded-for": "", ...FD } },
     {
       name: "an unresolvable first header falling through to the second",
-      headers: { "x-vercel-forwarded-for": "unknown", "x-forwarded-for": "203.0.113.7" },
+      headers: {
+        "x-vercel-forwarded-for": "unknown",
+        "x-forwarded-for": "203.0.113.7",
+        ...FD,
+      },
     },
   ];
 

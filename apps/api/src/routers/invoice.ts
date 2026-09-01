@@ -4,6 +4,24 @@ import { TRPCError } from "@trpc/server";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { invoices, invoiceChaseState, chaseTemplates, deals, contacts, brands } from "@sponsee/db/schema";
 
+const PAID_REQUIRES_PAID_AT_CONSTRAINT = "invoices_paid_requires_paid_at";
+
+/**
+ * Did this update fail the DB-level status='paid' <=> paidAt not-null invariant?
+ *
+ * The router-level guards in `update` reject the input shapes they can decide
+ * from the input alone (`paidAt` with no `status`, in either direction); they
+ * cannot see the row's current status, so any other path that would violate it
+ * (e.g. a future caller adding a field that clears paidAt) still reaches
+ * Postgres and fails the `invoices_paid_requires_paid_at` CHECK. Catching that
+ * here turns it into a typed BAD_REQUEST instead of a 500 that carries the raw
+ * query in `error.message`.
+ */
+function isPaidInvariantViolation(error: unknown): boolean {
+  const cause = (error as { cause?: { constraint?: string } } | undefined)?.cause;
+  return cause?.constraint === PAID_REQUIRES_PAID_AT_CONSTRAINT;
+}
+
 export const invoiceRouter = createTRPCRouter({
   list: creatorScopedProcedure.query(async ({ ctx }) => {
     return ctx.db
@@ -109,11 +127,60 @@ export const invoiceRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
-      const [invoice] = await ctx.db
-        .update(invoices)
-        .set({ ...data, updatedAt: new Date() })
-        .where(and(eq(invoices.id, id), eq(invoices.creatorId, ctx.creatorId)))
-        .returning();
+
+      // `paidAt` with no `status` is undecidable from the input alone, in both
+      // directions, so both are rejected rather than resolved by reading the row.
+      //
+      // `paidAt: null` (SPO-260): on a paid invoice it would strand status='paid'
+      // with a null paidAt. On a non-paid one it is a no-op only because the guard
+      // below it keeps paid_at from ever landing on a non-paid row — do not read
+      // that as an invariant the schema enforces: the 0013 CHECK is
+      // one-directional (status <> 'paid' OR paid_at IS NOT NULL), so an orphan
+      // paid_at is representable in the DB and may exist on rows written before
+      // these guards. Either way the intent is better expressed as status: "open".
+      if (data.paidAt === null && data.status === undefined) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: 'Set "status" to change whether an invoice is paid; "paidAt" alone cannot clear it.',
+        });
+      }
+
+      // `paidAt: <date>` (SPO-265): the mirror image. It would silently write
+      // paid_at onto a draft/open/void invoice — the orphan the CHECK above does
+      // not forbid. The intent is better expressed as status: "paid" (which may
+      // carry an explicit paidAt alongside it to backdate the payment).
+      if (data.paidAt != null && data.status === undefined) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: 'Set "status" to "paid" to mark an invoice paid; "paidAt" alone cannot do it.',
+        });
+      }
+
+      // Keep status='paid' <=> paidAt IS NOT NULL atomic: callers may set either
+      // field independently, so this mutation must not be able to produce a
+      // paid invoice with no paidAt (or a non-paid invoice with a stale one).
+      if (data.status === "paid" && data.paidAt == null) {
+        data.paidAt = new Date();
+      } else if (data.status !== undefined && data.status !== "paid") {
+        data.paidAt = null;
+      }
+
+      let invoice;
+      try {
+        [invoice] = await ctx.db
+          .update(invoices)
+          .set({ ...data, updatedAt: new Date() })
+          .where(and(eq(invoices.id, id), eq(invoices.creatorId, ctx.creatorId)))
+          .returning();
+      } catch (error) {
+        if (isPaidInvariantViolation(error)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "That update would leave a paid invoice without a paid date.",
+          });
+        }
+        throw error;
+      }
 
       if (!invoice) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });

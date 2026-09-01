@@ -39,6 +39,12 @@ pnpm db:migrate    # Run migrations
 pnpm db:studio     # Drizzle Studio
 ```
 
+## Merging to `main`
+
+Five required CI contexts, and branches must be up to date before merging.
+`docs/merge-gate.md` has the settings, why each is set that way, and the one
+place the gate is a norm rather than a wall.
+
 ## Environment Variables
 
 Copy `.env.example` in each app and fill in real values:

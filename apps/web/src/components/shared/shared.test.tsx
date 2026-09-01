@@ -110,6 +110,44 @@ describe("StatusChip", () => {
     expect(screen.getByText("Overdue 12d")).toBeInTheDocument();
   });
 
+  it("rejects a tone-only chip with no label at compile time (SPO-222)", () => {
+    // The tone-only arm has no status to derive copy from, so omitting `label`
+    // used to compile and render a coloured pill with no text. `label` is now
+    // required on that arm of the union.
+    //
+    // This is a *type* guard, and it is load-bearing: an unmatched
+    // expect-error directive is itself a compile error, so if the props union
+    // is ever loosened back, the suppression below goes unused and `tsc -b`
+    // fails. (Keep that wording out of a line-leading position — a comment
+    // *starting* with the directive name is parsed as a directive.)
+    // @ts-expect-error -- `label` is required on the tone-only form
+    const missingLabel = <StatusChip tone="danger" />;
+    expect(missingLabel).toBeTruthy();
+
+    // The `kind` form keeps `label` optional — it only overrides domain copy.
+    const domainCopy = <StatusChip kind="deal" status="live" />;
+    expect(domainCopy).toBeTruthy();
+  });
+
+  it("never renders an empty pill for the tone-only form", () => {
+    // Runtime half of the guard above: whatever a caller passes is what shows.
+    for (const label of ["Overdue", "Due in 3d", "Stale"]) {
+      const { container, unmount } = render(<StatusChip tone="amber" label={label} />);
+      expect(container.firstElementChild?.textContent?.trim()).toBe(label);
+      unmount();
+    }
+  });
+
+  it("lets an explicit label override the domain copy on a kind chip", () => {
+    // `resolve()` is the single place a label is decided, so the override has
+    // to survive the switch rather than being re-applied at the render site.
+    const { container } = render(
+      <StatusChip kind="deal" status="contract_sent" label="Awaiting signature" />
+    );
+    expect(container.firstElementChild).toHaveTextContent("Awaiting signature");
+    expect(screen.queryByText("Contract Sent")).toBeNull();
+  });
+
   it("renders a non-empty, styled chip for every status in every shared enum", () => {
     // Coverage sweep. The per-status *tones* are typed as Record<Union, Tone>,
     // so adding a status to @sponsee/shared is a compile error, not a silent

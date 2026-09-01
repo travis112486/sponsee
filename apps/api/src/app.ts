@@ -8,8 +8,51 @@ import { auth, LINK_ONLY_PROVIDERS } from "./auth.js";
 import waitlistApp, { waitlistAdminApp } from "./routers/waitlist.js";
 import { handleEmailWebhook } from "./routers/webhooks.js";
 import { registerStripeWebhook } from "./billing/webhook.js";
+import { evaluateFrontDoor, FRONT_DOOR_HEADER } from "./front-door.js";
 
 const app = new Hono();
+
+// Front-door gate (SPO-200). Registered first so it runs before every route and
+// CORS handler below. The Render origin is publicly reachable, so a request that
+// did not arrive through the Vercel rewrite (which injects x-sponsee-front-door)
+// must not reach the authenticated API surface. Exempt: health (Render's own
+// checker) and provider webhooks (signature-verified in-handler, direct-to-origin
+// by design).
+let warnedUnsetSecret = false;
+app.use("*", async (c, next) => {
+  const decision = evaluateFrontDoor(c.req.method, c.req.path, c.req.raw.headers);
+
+  switch (decision.kind) {
+    case "exempt":
+      return next();
+
+    case "secret-unset":
+      // Fail open. An unset secret must not take the API down — enforcement is
+      // the FRONT_DOOR_ENFORCE flag, not the presence of the secret.
+      if (!warnedUnsetSecret) {
+        warnedUnsetSecret = true;
+        console.warn(
+          "[front-door] FRONT_DOOR_SECRET is unset — front-door verification is DISABLED (fail open). Set it before enabling FRONT_DOOR_ENFORCE.",
+        );
+      }
+      return next();
+
+    case "observe":
+      console.info(
+        `[front-door] observe ${c.req.method} ${c.req.path} ${FRONT_DOOR_HEADER}=${decision.valid ? "valid" : decision.present ? "invalid" : "absent"}`,
+      );
+      return next();
+
+    case "pass":
+      return next();
+
+    case "reject":
+      console.warn(
+        `[front-door] rejected ${c.req.method} ${c.req.path}: missing or invalid ${FRONT_DOOR_HEADER}`,
+      );
+      return c.json({ error: "Forbidden" }, 403);
+  }
+});
 
 // Public waitlist endpoint — wide CORS for marketing site
 app.use(

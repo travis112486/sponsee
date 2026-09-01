@@ -1,5 +1,6 @@
 import { createTRPCRouter } from "../trpc.js";
 import { healthRouter } from "./health.js";
+import { dashboardRouter } from "./dashboard.js";
 import { dealsRouter } from "./deals.js";
 import { brandRouter } from "./brand.js";
 import { deliverableRouter } from "./deliverable.js";
@@ -16,6 +17,7 @@ import { storageRouter } from "./storage.js";
 
 export const appRouter = createTRPCRouter({
   health: healthRouter,
+  dashboard: dashboardRouter,
   deals: dealsRouter,
   brand: brandRouter,
   deliverable: deliverableRouter,

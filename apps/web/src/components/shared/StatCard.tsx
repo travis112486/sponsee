@@ -1,12 +1,11 @@
 /* eslint-disable react-refresh/only-export-components */
 import type { ReactNode } from "react";
-import { motion } from "framer-motion";
 import { cva, type VariantProps } from "class-variance-authority";
 import { ArrowUpRight } from "lucide-react";
 
 import { Sparkline } from "@/components/shared/Sparkline";
 import { formatCount, useCountUp } from "@/hooks/useCountUp";
-import { entrance } from "@/lib/motion";
+import { motion, entrance } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 const deltaChip = cva(
