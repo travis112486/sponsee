@@ -22,3 +22,6 @@ screenshots/
 # Neon CLI context (SPO-14 DB hookup)
 .neon
 PAPERCLIP_SCRATCH_DIR/
+
+# Claude Code local settings (Paperclip runtime writes this per worktree)
+.claude/settings.local.json
