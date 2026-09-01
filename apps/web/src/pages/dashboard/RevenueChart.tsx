@@ -1,8 +1,7 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
 import { TrendingUp } from "lucide-react";
 
-import { DURATION, EASE, STAGGER, prefersReducedMotion } from "@/lib/motion";
+import { motion, DURATION, EASE, STAGGER, prefersReducedMotion } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 import { formatAxisCents, formatCents, monthLabels } from "./format";

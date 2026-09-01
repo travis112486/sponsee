@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
   AlarmClock,
@@ -31,7 +30,7 @@ import { BrandMark } from "@/components/shared/BrandMark";
 import { PlatformDot } from "@/components/shared/PlatformDot";
 import { describeActivity } from "@/lib/activity-label";
 import { useCreatorIdentity } from "@/lib/use-creator-identity";
-import { DURATION, EASE, STAGGER, entrance, prefersReducedMotion } from "@/lib/motion";
+import { motion, DURATION, EASE, STAGGER, entrance, prefersReducedMotion } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 import { RevenueChart } from "./dashboard/RevenueChart";
