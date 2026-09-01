@@ -98,10 +98,19 @@ roster is only our description of it.
 
 `--require-first-names` promotes a bad greeting from a warning to a blocker.
 Leave it off on send day — a bad greeting is a copy miss and not a broken
-opt-out, and `block` is reserved for the latter. Turn it on when *building* the
-audience (SPO-280), where the whole point is to carry SPO-269's confirmed names:
-without it a green preflight is compatible with every greeting silently falling
-back.
+opt-out, and `block` is reserved for the latter.
+
+**Wave 1 runs the SPO-280 acceptance check with the flag off.** Building an
+audience is where the flag belongs in general — it is the check for "did we push
+every name we hold" — but SPO-292 decided that four Wave 1 contacts (Sinder,
+Snuffy, Dokibird, Shxtou) keep the `Hey there —` fallback permanently: SPO-269
+recorded them as deliberately identity-withholding VTuber personas, so there is
+no name to push and the flag would block on rows nobody intends to fix. Read the
+census instead. Every fallback recipient is printed by default, so a green Wave
+1A preflight should name those four and no others — the 11-of-15 personalized
+figure on record. On a wave where every recipient *should* have a name, turn the
+flag on: without it a green preflight is equally compatible with every greeting
+silently falling back.
 
 The flag checks the **contact's** name, not roster-vs-contact drift. Resend
 renders `{{{contact.first_name|there}}}` from the contact, so the contact's value

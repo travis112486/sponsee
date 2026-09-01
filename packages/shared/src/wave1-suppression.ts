@@ -621,9 +621,17 @@ export interface ContactSyncBlockerOptions {
    *
    * Off by default: a wrong or missing greeting is a copy-quality miss rather
    * than a broken opt-out, and `block` is otherwise reserved for the latter.
-   * SPO-280 populates the audience *in order to* carry SPO-269's confirmed
-   * names, so its acceptance check runs with this on — without it a green
-   * preflight is compatible with every greeting silently falling back.
+   * Turning it on is how a caller asserts "every name we hold has been pushed",
+   * which is what populating an audience is for — without it a green preflight
+   * is equally compatible with every greeting silently falling back.
+   *
+   * Wave 1 is the exception, by decision rather than by oversight. SPO-292
+   * accepted the fallback for four contacts SPO-269 recorded as deliberately
+   * identity-withholding VTuber personas: no name exists to push, so the flag
+   * would block rows nobody intends to fix, and SPO-280's acceptance check runs
+   * without it. `missingFirstName` is still reported by the CLI on the default
+   * path — that census is what the operator reads to confirm the split — so it
+   * is load-bearing whether or not this flag is set.
    *
    * The check is on the *contact's* name, not on roster-vs-contact drift
    * (SPO-288). Drift is neither necessary nor sufficient for a bad greeting:

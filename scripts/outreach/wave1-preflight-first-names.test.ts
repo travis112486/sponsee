@@ -128,6 +128,10 @@ describe("wave1-preflight --require-first-names", () => {
 
     const withoutFlag = await runPreflight(roster);
     expect(withoutFlag.code).toBe(0);
+    // Exit 0 is only half of what "off by default" means. The other half — that
+    // the run still names who falls back — is what SPO-292 turned into the
+    // acceptance evidence, and is pinned by the last test in this file.
+    expect(withoutFlag.stdout).toContain('No first_name on the contact (1)');
 
     const withFlag = await runPreflight(roster, ["--require-first-names"]);
     expect(withFlag.code).toBe(1);
@@ -164,5 +168,80 @@ describe("wave1-preflight --require-first-names", () => {
     const result = await runPreflight(roster, ["--require-first-names"]);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Clear to send");
+  });
+});
+
+describe("wave1-preflight fallback census, flag off (SPO-292)", () => {
+  // SPO-292 accepted the "Hey there —" fallback for the four Wave 1 contacts
+  // with no first_name: they are VTuber personas SPO-269 recorded as
+  // deliberately identity-withholding, so no name is coming. The SPO-280
+  // acceptance check therefore runs WITHOUT --require-first-names, and the
+  // operator confirms the split from this run's own output.
+  //
+  // That makes the default-path report load-bearing, and exit 0 does not pin
+  // it. Move the `missingFirstName` block under `if (args.requireFirstNames)`
+  // and every other test in this file still passes: the flag-off run keeps
+  // exiting 0 and printing "Clear to send", while silently reporting nothing
+  // about the recipients the acceptance check exists to count. Then a green
+  // preflight is equally consistent with 4 of 15 on the fallback and 15 of 15.
+  it("names and counts every fallback recipient without the flag", async () => {
+    const nameless = ["sinder", "snuffy", "dokibird", "shxtou"];
+    const named = [
+      { id: "ada", first: "Ada" },
+      { id: "jeff", first: "Jeff" },
+    ];
+    contacts = [
+      ...nameless.map((id) => ({
+        id: `c_${id}`,
+        email: `${id}@example.com`,
+        unsubscribed: false,
+        first_name: null,
+      })),
+      ...named.map((n) => ({
+        id: `c_${n.id}`,
+        email: `${n.id}@example.com`,
+        unsubscribed: false,
+        first_name: n.first,
+      })),
+    ];
+    const roster = [
+      ...nameless.map((id) => ({
+        id,
+        name: id,
+        firstName: null,
+        email: `${id}@example.com`,
+      })),
+      ...named.map((n) => ({
+        id: n.id,
+        name: `${n.first} Stream`,
+        firstName: n.first,
+        email: `${n.id}@example.com`,
+      })),
+    ];
+
+    const result = await runPreflight(roster);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Clear to send");
+
+    // A real count, not a hardcoded 1: four of the six recipients fall back.
+    expect(result.stdout).toContain('No first_name on the contact (4) — these render v5\'s "Hey there —" fallback');
+    expect(result.stdout).toContain("(warning only — pass --require-first-names to make this block)");
+
+    // Scope the membership assertions to that block. Every address on the
+    // roster shows up elsewhere in stdout on its own SEND line, so a bare
+    // `toContain(email)` would pass against a block that never rendered.
+    const header = result.stdout.indexOf("No first_name on the contact (");
+    const census = result.stdout.slice(header, result.stdout.indexOf("(warning only", header));
+    for (const id of nameless) {
+      expect(census).toContain(`${id}@example.com`);
+      // The roster has no name for them either, so there is nothing to sync —
+      // which is precisely why SPO-292 accepted the fallback instead.
+      expect(census).toContain("no confirmed name on either side");
+    }
+    for (const n of named) expect(census).not.toContain(`${n.id}@example.com`);
+
+    // And the point of SPO-288: drift sees none of this. Both sides agree on
+    // null for all four, so the predicate this replaced prints nothing at all.
+    expect(result.stdout).not.toContain("First-name drift");
   });
 });
