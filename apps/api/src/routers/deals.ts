@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, and, isNull, desc } from "drizzle-orm";
+import { eq, and, isNull, desc, inArray } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, type DB } from "@sponsee/db";
@@ -25,10 +25,48 @@ export const dealsRouter = createTRPCRouter({
       .where(and(eq(schema.deals.creatorId, ctx.creatorId), isNull(schema.deals.deletedAt)))
       .orderBy(desc(schema.deals.updatedAt));
 
+    const dealIds = rows.map((r) => r.deal.id);
+
+    // Fetch the board's deliverables and invoices in two flat queries and group
+    // them by deal, rather than N+1 per-deal reads. Both are creator-scoped
+    // transitively through `dealIds` (which came from a creator-scoped query).
+    const deliverables = dealIds.length
+      ? await db
+          .select()
+          .from(schema.deliverables)
+          .where(inArray(schema.deliverables.dealId, dealIds))
+          .orderBy(schema.deliverables.position)
+      : [];
+
+    const invoices = dealIds.length
+      ? await db
+          .select()
+          .from(schema.invoices)
+          .where(inArray(schema.invoices.dealId, dealIds))
+          .orderBy(desc(schema.invoices.issuedAt))
+      : [];
+
+    const deliverablesByDeal = new Map<string, typeof deliverables>();
+    for (const d of deliverables) {
+      const list = deliverablesByDeal.get(d.dealId) ?? [];
+      list.push(d);
+      deliverablesByDeal.set(d.dealId, list);
+    }
+
+    const invoicesByDeal = new Map<string, typeof invoices>();
+    for (const i of invoices) {
+      if (!i.dealId) continue;
+      const list = invoicesByDeal.get(i.dealId) ?? [];
+      list.push(i);
+      invoicesByDeal.set(i.dealId, list);
+    }
+
     return rows.map((r) => ({
       ...r.deal,
       brand: r.brand,
       primaryContact: r.contact,
+      deliverables: deliverablesByDeal.get(r.deal.id) ?? [],
+      invoices: invoicesByDeal.get(r.deal.id) ?? [],
     }));
   }),
 
