@@ -125,28 +125,45 @@ function zoneOffsetMs(date: Date, timeZone: string): number {
   return civilMs(getZonedParts(date, timeZone)) - date.getTime();
 }
 
+const DAY_MS = 86_400_000;
+
 /**
  * The instant at which the given wall clock reads in `timeZone`.
  *
- * Ambiguous (fall-back) wall clocks resolve to the earlier instant; wall clocks
- * skipped by a spring-forward resolve to the first instant after the gap. Both
- * are the right answer for a period boundary: the period starts as soon as the
- * zone reaches it.
+ * Candidates are built from the zone offsets on either side of the wall clock
+ * and then *validated*: a candidate survives only if the zone actually formats
+ * it back to `wall`. Which candidates survive is what tells gap from ambiguity:
+ *
+ * - Two survive → a fall-back repeated this wall clock. Take the earlier, so a
+ *   period starts as soon as the zone first reaches it.
+ * - One survives → the ordinary case.
+ * - None survive → a spring-forward skipped this wall clock. Take the latest
+ *   candidate, which shifts the wall clock forward by the width of the gap
+ *   (the same rule as Temporal's `compatible` disambiguation). When the gap
+ *   *begins* at the wall clock — a midnight transition, as Asia/Beirut and
+ *   Africa/Cairo schedule — that lands exactly on the transition instant, i.e.
+ *   the first instant of the local period.
+ *
+ * Do not go back to iterating offset reads (read → correct → re-read). The
+ * third read re-applies an offset the second already disproved, so a gap
+ * resolves to whichever side the initial as-if-UTC guess happened to fall on.
+ * For a midnight gap that is the *previous local day* (SPO-245).
  */
 export function zonedWallClockToUtc(wall: WallClock, timeZone: string): Date {
   const target = civilMs(wall);
-  const guessOffset = zoneOffsetMs(new Date(target), timeZone);
-  let ts = target - guessOffset;
+  // ±1 day brackets every transition that can touch this wall clock: no IANA
+  // offset exceeds 14h, so both neighbouring offsets are inside the window.
+  const offsets = [
+    zoneOffsetMs(new Date(target - DAY_MS), timeZone),
+    zoneOffsetMs(new Date(target), timeZone),
+    zoneOffsetMs(new Date(target + DAY_MS), timeZone),
+  ];
+  const candidates = [...new Set(offsets.map((offset) => target - offset))].sort((a, b) => a - b);
 
-  const corrected = zoneOffsetMs(new Date(ts), timeZone);
-  if (corrected !== guessOffset) {
-    ts = target - corrected;
-    // A gap can bounce the estimate between the two offsets; one more read
-    // settles it on the post-transition side.
-    const settled = zoneOffsetMs(new Date(ts), timeZone);
-    if (settled !== corrected) ts = target - settled;
+  for (const ts of candidates) {
+    if (zoneOffsetMs(new Date(ts), timeZone) === target - ts) return new Date(ts);
   }
-  return new Date(ts);
+  return new Date(candidates[candidates.length - 1]!);
 }
 
 export function startOfZonedDay(date: Date, timeZone: string): Date {

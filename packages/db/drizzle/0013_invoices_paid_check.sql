@@ -1,0 +1,1 @@
+ALTER TABLE "invoices" ADD CONSTRAINT "invoices_paid_requires_paid_at" CHECK ("invoices"."status" <> 'paid' OR "invoices"."paid_at" IS NOT NULL);

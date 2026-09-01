@@ -94,6 +94,9 @@ export const dashboardRouter = createTRPCRouter({
         .leftJoin(deals, eq(invoices.dealId, deals.id))
         .where(and(eq(invoices.creatorId, ctx.creatorId), eq(invoices.status, "paid")));
 
+      // Belt-and-braces, not load-bearing: migration 0013 (invoices_paid_requires_paid_at)
+      // makes status='paid' with paid_at null unrepresentable in the DB. Kept because
+      // the Drizzle column type is still nullable.
       const attributed = paidRows
         .filter((r): r is { amountCents: number; paidAt: Date; dealType: DealType | null } => r.paidAt != null);
 
