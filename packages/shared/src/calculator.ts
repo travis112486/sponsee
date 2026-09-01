@@ -95,3 +95,54 @@ export function impliedCpvh(
   if (ccv <= 0 || durationMinutes <= 0 || valueCents <= 0) return 0;
   return valueCents / 100 / viewerHoursOf(ccv, durationMinutes);
 }
+
+/** A deal's CPVH inputs (SPO-197). `ccv`/`sponsoredMinutes` are nullable — a
+ * deal logged before the creator knows their CCV has neither. */
+export interface DealCpvhInputs {
+  valueCents: number;
+  ccv: number | null | undefined;
+  sponsoredMinutes: number | null | undefined;
+}
+
+/**
+ * Per-deal effective CPVH, or `null` when the deal doesn't have both inputs.
+ *
+ * `impliedCpvh` returns `0` for missing/invalid inputs because it has no
+ * concept of "unset" — that 0 is not a real rate and must never reach the UI
+ * as one (SPO-197). This wraps it with the null check the deal model needs:
+ * absent CCV/duration is "no data yet", not "$0.00".
+ */
+export function dealEffectiveCpvh(deal: DealCpvhInputs): number | null {
+  const { ccv, sponsoredMinutes, valueCents } = deal;
+  if (ccv == null || sponsoredMinutes == null) return null;
+  if (ccv <= 0 || sponsoredMinutes <= 0) return null;
+  return impliedCpvh(valueCents, ccv, sponsoredMinutes);
+}
+
+/**
+ * Account-level effective CPVH across deals, weighted by viewer-hours:
+ * `sum(valueCents) / sum(viewerHours)` over deals that have both CCV and
+ * duration. This is deliberately NOT the mean of each deal's
+ * {@link dealEffectiveCpvh} — averaging per-deal rates directly gives a tiny
+ * deal the same influence as a large one, which over-weights it. Returns
+ * `null` when no deal has both inputs, for the same "no data ≠ $0.00" reason
+ * as {@link dealEffectiveCpvh}.
+ */
+export function accountEffectiveCpvh(
+  deals: readonly DealCpvhInputs[]
+): number | null {
+  let totalValueCents = 0;
+  let totalViewerHours = 0;
+
+  for (const deal of deals) {
+    const { ccv, sponsoredMinutes, valueCents } = deal;
+    if (ccv == null || sponsoredMinutes == null) continue;
+    if (ccv <= 0 || sponsoredMinutes <= 0) continue;
+
+    totalValueCents += valueCents;
+    totalViewerHours += viewerHoursOf(ccv, sponsoredMinutes);
+  }
+
+  if (totalViewerHours <= 0) return null;
+  return totalValueCents / 100 / totalViewerHours;
+}

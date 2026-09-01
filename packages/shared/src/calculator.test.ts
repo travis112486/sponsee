@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { compute, impliedCpvh } from "./calculator.js";
+import {
+  compute,
+  impliedCpvh,
+  dealEffectiveCpvh,
+  accountEffectiveCpvh,
+} from "./calculator.js";
 import { defaultBenchmarkConfig } from "./benchmark.js";
 
 describe("calculator.compute", () => {
@@ -128,5 +133,72 @@ describe("calculator.impliedCpvh", () => {
     expect(impliedCpvh(10000, 0, 60)).toBe(0);
     expect(impliedCpvh(10000, 500, 0)).toBe(0);
     expect(impliedCpvh(0, 500, 60)).toBe(0);
+  });
+});
+
+describe("calculator.dealEffectiveCpvh", () => {
+  it("a deal priced exactly at the mid band round-trips to the mid band rate", () => {
+    // 500 CCV * 60 min = 500 viewer-hours; $525 / 500 = $1.05/hr = the mid band.
+    expect(
+      dealEffectiveCpvh({ valueCents: 52500, ccv: 500, sponsoredMinutes: 60 })
+    ).toBeCloseTo(1.05, 10);
+  });
+
+  it("returns null, not 0, when ccv is missing", () => {
+    expect(
+      dealEffectiveCpvh({ valueCents: 52500, ccv: null, sponsoredMinutes: 60 })
+    ).toBeNull();
+  });
+
+  it("returns null, not 0, when sponsoredMinutes is missing", () => {
+    expect(
+      dealEffectiveCpvh({ valueCents: 52500, ccv: 500, sponsoredMinutes: undefined })
+    ).toBeNull();
+  });
+
+  it("returns null, not 0, for non-positive ccv/duration even when both are present", () => {
+    expect(
+      dealEffectiveCpvh({ valueCents: 52500, ccv: 0, sponsoredMinutes: 60 })
+    ).toBeNull();
+    expect(
+      dealEffectiveCpvh({ valueCents: 52500, ccv: 500, sponsoredMinutes: 0 })
+    ).toBeNull();
+  });
+
+  it("returns a real 0 for a genuinely free deal with known ccv/duration", () => {
+    // Distinct from the null cases above: this deal has both inputs, so a
+    // $0.00 rate here is real data, not a missing-data lie.
+    expect(dealEffectiveCpvh({ valueCents: 0, ccv: 500, sponsoredMinutes: 60 })).toBe(0);
+  });
+});
+
+describe("calculator.accountEffectiveCpvh", () => {
+  it("is viewer-hour-weighted, not a mean of per-deal rates", () => {
+    // Deal A: tiny — 100 viewer-hours at $2.00/hr = $200
+    const dealA = { valueCents: 20000, ccv: 100, sponsoredMinutes: 60 };
+    // Deal B: big — 10,000 viewer-hours at $1.00/hr = $10,000
+    const dealB = { valueCents: 1000000, ccv: 1000, sponsoredMinutes: 600 };
+
+    const weighted = accountEffectiveCpvh([dealA, dealB]);
+    const unweightedMean = (2.0 + 1.0) / 2; // = 1.5 — must NOT match
+
+    // sum(value)/sum(viewerHours) = (200 + 10000) / (100 + 10000) ≈ 1.0099
+    expect(weighted).toBeCloseTo(1.00990099, 6);
+    expect(weighted).not.toBeCloseTo(unweightedMean, 1);
+  });
+
+  it("returns null when no deal has both ccv and duration", () => {
+    expect(
+      accountEffectiveCpvh([
+        { valueCents: 10000, ccv: null, sponsoredMinutes: 60 },
+        { valueCents: 20000, ccv: 500, sponsoredMinutes: null },
+      ])
+    ).toBeNull();
+  });
+
+  it("excludes deals missing either input while still weighting the rest", () => {
+    const withData = { valueCents: 52500, ccv: 500, sponsoredMinutes: 60 };
+    const missingCcv = { valueCents: 999999, ccv: null, sponsoredMinutes: 60 };
+    expect(accountEffectiveCpvh([withData, missingCcv])).toBeCloseTo(1.05, 10);
   });
 });

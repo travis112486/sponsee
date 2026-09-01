@@ -339,4 +339,68 @@ describe("deployable migration smoke test", () => {
       `),
     ).rejects.toThrow(/invalid input value for enum platform_sync_status/);
   });
+
+  // 0014 (SPO-197). The API's own PGlite fixtures declare `deals` loosely and
+  // would not catch a missing column here — same blind spot as 'paused' and
+  // 'platform_sync' above. Both columns must stay nullable: every row that
+  // predates this migration, and any deal created without a known CCV, has
+  // to come back NULL rather than be coerced to 0 (0 is a real CPVH input,
+  // not a stand-in for "unset").
+  it("adds nullable ccv and sponsored_minutes to deals (0014)", async () => {
+    const colRes = await client.query<{
+      column_name: string;
+      is_nullable: string;
+    }>(
+      `SELECT column_name, is_nullable
+         FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'deals'
+          AND column_name IN ('ccv', 'sponsored_minutes')
+        ORDER BY column_name`,
+    );
+    expect(colRes.rows).toEqual([
+      { column_name: "ccv", is_nullable: "YES" },
+      { column_name: "sponsored_minutes", is_nullable: "YES" },
+    ]);
+
+    await client.exec(`
+      INSERT INTO brands (id, creator_id, name)
+      VALUES ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+              'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Test Brand');
+    `);
+
+    // A deal with no CCV/duration captured (the shape before this migration)
+    // must insert
+    // clean with both columns NULL — no default silently substitutes 0.
+    await client.exec(`
+      INSERT INTO deals (id, creator_id, brand_id, title, value_cents)
+      VALUES ('ffffffff-ffff-ffff-ffff-ffffffffffff',
+              'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+              'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+              'Legacy deal', 52500);
+    `);
+    const legacy = await client.query<{
+      ccv: number | null;
+      sponsored_minutes: number | null;
+    }>(
+      `SELECT ccv, sponsored_minutes FROM deals
+        WHERE id = 'ffffffff-ffff-ffff-ffff-ffffffffffff'`,
+    );
+    expect(legacy.rows[0].ccv).toBeNull();
+    expect(legacy.rows[0].sponsored_minutes).toBeNull();
+
+    // A deal that does capture both must round-trip the real values.
+    await client.exec(`
+      UPDATE deals SET ccv = 500, sponsored_minutes = 60
+       WHERE id = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+    `);
+    const captured = await client.query<{
+      ccv: number;
+      sponsored_minutes: number;
+    }>(
+      `SELECT ccv, sponsored_minutes FROM deals
+        WHERE id = 'ffffffff-ffff-ffff-ffff-ffffffffffff'`,
+    );
+    expect(captured.rows[0]).toEqual({ ccv: 500, sponsored_minutes: 60 });
+  });
 });
