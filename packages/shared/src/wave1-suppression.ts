@@ -23,7 +23,16 @@
 // that would make the opt-out decorative.
 //
 // The DM channel (1B) has no provider primitive at all. X exposes no
-// unsubscribe, so the same ledger is the only gate, keyed by handle.
+// unsubscribe, so the same ledger is the only gate, keyed by handle — plus the
+// live Resend read, because an email unsubscribe has to silence the DM too.
+//
+// ── The invariant everything here serves ─────────────────────────────────────
+//
+// Every way this file can be wrong is a way to mail someone who opted out, so
+// every ambiguous input resolves toward *stopping the touch*: a suppression we
+// cannot match, a ledger line we cannot parse, a contact we cannot account for.
+// Blocking a touch costs a day. The other direction costs the promise the copy
+// makes.
 
 /** Which channel a touch goes out on. Email is Resend; dm is X/Twitter. */
 export type OutreachChannel = "email" | "dm";
@@ -60,14 +69,93 @@ export type SuppressionReason =
   | "complained"
   | "manual";
 
+/**
+ * The union above, at runtime. The ledger is a hand-edited file read through
+ * `JSON.parse`, so the reason has to be checked against a real list — the type
+ * annotation erases at exactly that boundary.
+ */
+export const SUPPRESSION_REASONS: readonly SuppressionReason[] = [
+  "replied",
+  "stop_requested",
+  "unsubscribed",
+  "bounced",
+  "complained",
+  "manual",
+];
+
+export function isSuppressionReason(value: unknown): value is SuppressionReason {
+  return typeof value === "string" && (SUPPRESSION_REASONS as readonly string[]).includes(value);
+}
+
 export interface LedgerEntry {
   /** ISO 8601 instant the signal was observed. */
   at: string;
   reason: SuppressionReason;
-  /** At least one of these must be set, or the entry matches nobody. */
+  /**
+   * At least one of these must survive normalization, or the entry matches
+   * nobody. Presence is not enough — `"   "` and `"@"` are both truthy and both
+   * normalize to null, so an entry carrying one of them is an opt-out that
+   * silently applies to no one.
+   */
   email?: string | null;
   xHandle?: string | null;
   note?: string;
+}
+
+/**
+ * Validate one ledger entry, returning it normalized, or throw.
+ *
+ * This lives here rather than in the CLI on purpose: a ledger entry that fails
+ * to match its recipient is an opt-out dropped on the floor, so the check
+ * belongs in the tested module.
+ *
+ * Both rejections below describe entries that are *structurally* indistinguish-
+ * able downstream from "this person never opted out", because every consumer
+ * tests `reason !== undefined` against a map:
+ *
+ *   - an absent or unrecognized `reason` indexes the address to `undefined`, so
+ *     `has()` is true while `get()` is not a suppression;
+ *   - an address that is truthy but normalizes to null indexes under no key at
+ *     all, so the entry suppresses nobody.
+ *
+ * `label` is prefixed to the message; the CLI passes `file:line`.
+ */
+export function validateLedgerEntry(value: unknown, label = "ledger entry"): LedgerEntry {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label}: expected a JSON object`);
+  }
+  const entry = value as Record<string, unknown>;
+
+  // `at` drives the "earliest reason wins" tiebreak below. A missing one still
+  // suppresses (it sorts last and is kept) but can report the wrong reason, so
+  // require it rather than degrade quietly.
+  if (typeof entry.at !== "string" || entry.at.trim().length === 0) {
+    throw new Error(`${label}: "at" must be a non-empty ISO 8601 timestamp string`);
+  }
+  if (!isSuppressionReason(entry.reason)) {
+    throw new Error(
+      `${label}: "reason" must be one of ${SUPPRESSION_REASONS.join(", ")} — got ` +
+        `${JSON.stringify(entry.reason)}. An unrecognized reason indexes as undefined and ` +
+        `reads downstream as "not suppressed".`,
+    );
+  }
+
+  const email = normalizeEmail(entry.email as string | null | undefined);
+  const xHandle = normalizeHandle(entry.xHandle as string | null | undefined);
+  if (email === null && xHandle === null) {
+    throw new Error(
+      `${label}: neither "email" nor "xHandle" survives normalization, so this entry would ` +
+        `match nobody (email=${JSON.stringify(entry.email)}, xHandle=${JSON.stringify(entry.xHandle)})`,
+    );
+  }
+
+  return {
+    at: entry.at,
+    reason: entry.reason,
+    email,
+    xHandle,
+    ...(typeof entry.note === "string" ? { note: entry.note } : {}),
+  };
 }
 
 /** A contact as Resend currently reports it. */
@@ -106,11 +194,37 @@ export interface RosterDecision {
   decision: Decision;
 }
 
+/**
+ * An audience contact matching no roster row.
+ *
+ * The inverse of `not-in-audience`, and the direction that actually delivers
+ * mail: a Broadcast sends to the *audience*, so the audience is the send list.
+ * A stray subscribed contact receives Wave 1 while appearing in no decision line
+ * and in no audit record.
+ */
+export interface UnknownRecipient {
+  email: string;
+  unsubscribed: boolean;
+}
+
 export interface TouchPlan {
   touch: OutreachTouch;
   channel: OutreachChannel;
   decisions: RosterDecision[];
-  /** True only when nothing is blocked. The CLI exits non-zero when false. */
+  /**
+   * Audience contacts on no roster row. Always computed, so a DM run still
+   * reports them, but only blocking on `email` — see `clearToSend`.
+   */
+  unknownRecipients: UnknownRecipient[];
+  /**
+   * True only when nothing is blocked. The CLI exits non-zero when false.
+   *
+   * A *subscribed* unknown recipient blocks an email touch for the same reason
+   * `not-in-audience` does: the send list and the roster must agree before a
+   * Broadcast goes out. An unsubscribed one does not — Resend skips it, so it is
+   * reported and harmless. On `dm` the send list is the roster's handles and
+   * audience membership decides nothing, so neither blocks.
+   */
   clearToSend: boolean;
 }
 
@@ -161,12 +275,18 @@ interface LedgerIndex {
  * recipient is in, they stay in. When one recipient has several entries the
  * earliest is kept, because the reason we report should be the one that
  * actually removed them from the sequence.
+ *
+ * Every entry is validated first. That is a second line of defence behind the
+ * CLI's own parse, and it is what makes the rule unskippable: no caller can
+ * reach a plan through this module carrying an entry that suppresses nobody.
  */
 export function indexLedger(entries: readonly LedgerEntry[]): LedgerIndex {
   const byEmail = new Map<string, SuppressionReason>();
   const byHandle = new Map<string, SuppressionReason>();
 
-  const ordered = [...entries].sort((a, b) => {
+  const validated = entries.map((entry, i) => validateLedgerEntry(entry, `ledger entry ${i}`));
+
+  const ordered = [...validated].sort((a, b) => {
     const at = Date.parse(a.at);
     const bt = Date.parse(b.at);
     // An unparseable timestamp must not silently reorder — or worse, drop —
@@ -195,11 +315,21 @@ export interface PlanTouchInput {
   roster: readonly RosterRow[];
   ledger: readonly LedgerEntry[];
   /**
-   * Live contact state read from Resend immediately before the touch. Required
-   * on the email channel; ignored on `dm`. "Live" is the point — a snapshot
-   * taken when T1 went out is four to nine days stale by T2/T3.
+   * Live contact state read from Resend immediately before the touch.
+   *
+   * Required on **both** channels, and required rather than optional on
+   * purpose. The hosted unsubscribe URL is the only opt-out v5's email copy
+   * offers, so clicking it is the primary opt-out event for Wave 1 — and it
+   * lands in Resend's contact state and nowhere else. A DM plan built without
+   * this read cannot see that click, so it would DM at T2/T3 someone who
+   * unsubscribed at T1. An optional field is what previously let the CLI omit
+   * it on `dm` while a unit test that hand-supplied `contacts` reported the
+   * cross-channel rule as enforced.
+   *
+   * "Live" is the other half: a snapshot taken when T1 went out is four to nine
+   * days stale by T2/T3.
    */
-  contacts?: readonly ResendContactState[];
+  contacts: readonly ResendContactState[];
 }
 
 /**
@@ -214,8 +344,18 @@ export function planTouch(input: PlanTouchInput): TouchPlan {
   const { touch, channel, roster, ledger } = input;
   const index = indexLedger(ledger);
 
+  // The CLI is plain JS, so the required-ness of `contacts` has to be enforced
+  // at runtime too — a type a caller can ignore is not a gate.
+  if (!Array.isArray(input.contacts)) {
+    throw new Error(
+      `planTouch requires live Resend contact state on every channel, including "${channel}". ` +
+        `Without it an email unsubscribe cannot suppress the DM, and the plan would report ` +
+        `"send" for someone who has already opted out.`,
+    );
+  }
+
   const contactsByEmail = new Map<string, ResendContactState>();
-  for (const contact of input.contacts ?? []) {
+  for (const contact of input.contacts) {
     const email = normalizeEmail(contact.email);
     if (email !== null) contactsByEmail.set(email, contact);
   }
@@ -290,19 +430,55 @@ export function planTouch(input: PlanTouchInput): TouchPlan {
     return { ...base, decision: { action: "send", recipient: email } };
   });
 
+  // Walk the audience, not only the roster. Everything above answers "is this
+  // roster row safe to mail". This answers the question a Broadcast actually
+  // asks — "who is on the send list" — and the two sets are not the same.
+  const rosterEmails = new Set<string>();
+  for (const row of roster) {
+    const email = normalizeEmail(row.email);
+    if (email !== null) rosterEmails.add(email);
+  }
+  const unknownRecipients: UnknownRecipient[] = [];
+  for (const contact of input.contacts) {
+    const email = normalizeEmail(contact.email);
+    if (email === null || rosterEmails.has(email)) continue;
+    unknownRecipients.push({ email, unsubscribed: contact.unsubscribed === true });
+  }
+
+  const blockedRow = decisions.some((d) => d.decision.action === "block");
+  const blockedByStranger =
+    channel === "email" && unknownRecipients.some((c) => !c.unsubscribed);
+
   return {
     touch,
     channel,
     decisions,
-    clearToSend: !decisions.some((d) => d.decision.action === "block"),
+    unknownRecipients,
+    clearToSend: !blockedRow && !blockedByStranger,
   };
 }
 
 // ── Projecting the ledger into Resend ────────────────────────────────────────
 
+export interface ContactToCreate {
+  email: string;
+  firstName: string | null;
+  rosterId: string;
+  /**
+   * Create this contact already unsubscribed.
+   *
+   * True when the ledger holds a suppression for the row. Resend creates
+   * contacts subscribed by default, so following the runbook's "add every roster
+   * row before T1" step on such a row would arm precisely the send the ledger
+   * says must not happen. `contactSyncBlockers` refuses the touch until the
+   * contact exists, so this flag is an instruction, not a hope.
+   */
+  unsubscribed: boolean;
+}
+
 export interface ContactSyncPlan {
   /** Roster rows with an address that Resend has never seen. Create before T1. */
-  toCreate: Array<{ email: string; firstName: string | null; rosterId: string }>;
+  toCreate: ContactToCreate[];
   /**
    * Contacts our ledger says are out but Resend still has as subscribed.
    * Pushing these is what makes Resend's own Broadcast exclusion honor a reply
@@ -310,9 +486,9 @@ export interface ContactSyncPlan {
    */
   toUnsubscribe: Array<{ email: string; reason: SuppressionReason; rosterId: string }>;
   /**
-   * Contacts whose first name disagrees with the roster. Left as a report
-   * rather than an auto-fix: the greeting is the most visible line in the mail
-   * and a silent overwrite in either direction is the wrong default.
+   * Contacts whose first name disagrees with the roster. Reported rather than
+   * auto-fixed: the greeting is the most visible line in the mail and a silent
+   * overwrite in either direction is the wrong default.
    */
   firstNameDrift: Array<{ email: string; roster: string | null; resend: string | null; rosterId: string }>;
 }
@@ -339,16 +515,21 @@ export function planContactSync(
       typeof row.firstName === "string" && row.firstName.trim().length > 0
         ? row.firstName.trim()
         : null;
-    const contact = contactsByEmail.get(email);
-
-    if (contact === undefined) {
-      plan.toCreate.push({ email, firstName: rosterFirstName, rosterId: row.id });
-      continue;
-    }
-
     const handle = normalizeHandle(row.xHandle);
     const reason =
       index.byEmail.get(email) ?? (handle !== null ? index.byHandle.get(handle) : undefined);
+    const contact = contactsByEmail.get(email);
+
+    if (contact === undefined) {
+      plan.toCreate.push({
+        email,
+        firstName: rosterFirstName,
+        rosterId: row.id,
+        unsubscribed: reason !== undefined,
+      });
+      continue;
+    }
+
     if (reason !== undefined && !contact.unsubscribed) {
       plan.toUnsubscribe.push({ email, reason, rosterId: row.id });
     }
@@ -368,4 +549,64 @@ export function planContactSync(
   }
 
   return plan;
+}
+
+export interface ContactSyncBlockerOptions {
+  /**
+   * Promote first-name drift from a warning to a blocker.
+   *
+   * Off by default: drift degrades the greeting to "Hey there —", which is a
+   * copy-quality miss rather than a broken opt-out, and `block` is otherwise
+   * reserved for the latter. SPO-280 populates the audience *in order to* carry
+   * SPO-269's confirmed names, so its acceptance check runs with this on —
+   * without it a green preflight is compatible with every greeting silently
+   * falling back.
+   */
+  requireFirstNames?: boolean;
+}
+
+/**
+ * Reasons the audience is not ready, in the operator's words. Empty means ready.
+ *
+ * The CLI exits non-zero when this is non-empty, so these are rules that decide
+ * whether a touch may proceed — which is why they live here under test rather
+ * than as an `if` in the script.
+ */
+export function contactSyncBlockers(
+  plan: ContactSyncPlan,
+  options: ContactSyncBlockerOptions = {},
+): string[] {
+  const blockers: string[] = [];
+
+  for (const row of plan.toUnsubscribe) {
+    blockers.push(
+      `${row.email}: ledger says ${row.reason} but Resend still has them subscribed — ` +
+        `a Broadcast would mail them. Re-run with --apply-suppressions. [${row.rosterId}]`,
+    );
+  }
+
+  // The ordering trap: planTouch consults the ledger before the audience, so a
+  // suppressed row that is not yet a contact decides `suppress` rather than
+  // `block` and never reaches toUnsubscribe — the count the gate keys on. Left
+  // alone the operator reads "add every roster row before T1", creates the
+  // contact subscribed, and the next Broadcast mails someone the ledger pulled.
+  for (const row of plan.toCreate) {
+    if (!row.unsubscribed) continue;
+    blockers.push(
+      `${row.email}: the ledger suppresses them but they are not in the audience yet — ` +
+        `create the contact with unsubscribed=true before T1, never subscribed. [${row.rosterId}]`,
+    );
+  }
+
+  if (options.requireFirstNames) {
+    for (const row of plan.firstNameDrift) {
+      blockers.push(
+        `${row.email}: first name differs (roster=${row.roster ?? "—"}, resend=${row.resend ?? "—"}) — ` +
+          `the greeting renders from the contact, so this sends "Hey ${greetingName(row.resend)} —". ` +
+          `[${row.rosterId}]`,
+      );
+    }
+  }
+
+  return blockers;
 }

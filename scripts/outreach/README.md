@@ -47,7 +47,15 @@ Run this immediately before **every** touch — T1, T2 and T3, on both channels.
 A snapshot taken at T1 is four to nine days stale by T2/T3, which is the whole
 reason this exists.
 
+Both channels need `RESEND_API_KEY` and `--audience`, including `--channel dm`.
+The hosted unsubscribe link is the only opt-out the email copy offers, so a click
+on it is the primary opt-out event for Wave 1 — and it exists only in Resend's
+contact state. A DM preflight that skipped that read would clear a T2/T3 DM to
+someone who unsubscribed at T1. If Resend is unreachable the gate stops the
+touch; blocking during an outage is the safe direction.
+
 ```bash
+pnpm install                          # a fresh checkout has no node_modules
 pnpm --filter @sponsee/shared build   # the rules live in @sponsee/shared
 
 source ~/.config/infisical-agent/credentials.env
@@ -67,20 +75,43 @@ node scripts/outreach/wave1-preflight.mjs \
 node scripts/outreach/wave1-preflight.mjs ... --touch T2 --channel email \
   --apply-suppressions --json evidence/wave1-T2-email.json
 
-# 3. DM channel — same ledger, keyed by handle. Needs no network.
+# 3. DM channel — same ledger keyed by handle, plus the same live Resend read,
+#    so an email unsubscribe suppresses the DM too.
 node scripts/outreach/wave1-preflight.mjs ... --touch T2 --channel dm
 ```
 
 **Exit code 0 is the gate.** Non-zero means do not send that touch. Keep the
 `--json` output as the audit record of who was suppressed and why.
 
-Before T1 the audience must contain every roster row that has an email — the
-preflight blocks on `not-in-audience` precisely because a non-contact has no
-hosted unsubscribe URL, so mailing them would break the promise in the copy.
+### What has to agree before T1
+
+The audience and the roster must match **in both directions**, because a
+Broadcast sends to the *audience* — the audience is the send list, and the
+roster is only our description of it.
+
+- **Roster ∖ audience** blocks (`not-in-audience`). A non-contact has no hosted
+  unsubscribe URL, so mailing them would break the promise in the copy — and a
+  silently short send list would read as "all N were mailed" when N−k were.
+- **Audience ∖ roster** blocks too, when the stray contact is *subscribed*: it
+  receives Wave 1 while appearing in no decision line and in no audit record.
+  An unsubscribed stray is reported and not blocked, because Resend skips it.
+
+`--require-first-names` promotes first-name drift from a warning to a blocker.
+Leave it off on send day — drift downgrades the greeting to "Hey there —", which
+is a copy miss and not a broken opt-out, and `block` is reserved for the latter.
+Turn it on when *building* the audience (SPO-280), where the whole point is to
+carry SPO-269's confirmed names: without it a green preflight is compatible with
+every greeting silently falling back.
 
 ## File formats
 
-`--roster` — JSON array (or `{"roster": [...]}`). `id` must be stable and unique.
+Neither file is in the repo yet — SPO-267 is still resolving contact channels
+and SPO-280 is populating the audience. The paths above are where they land.
+
+`--roster` — JSON array (or `{"roster": [...]}`). `id` must be stable and unique,
+and no two rows may share an email: that would be one recipient with two decision
+lines, and if the rows disagree about first name or handle, which greeting and
+which suppression apply becomes order-dependent.
 
 ```json
 [
@@ -96,8 +127,18 @@ renders v5's "Hey there —". Never put the channel or brand name there; that is
 the mail-merge tell v5 was written to remove.
 
 `--ledger` — JSONL, one signal per line. `#` comments and blank lines ignored.
-Append-only; entries never expire. A line that parses as neither an `email` nor
-an `xHandle` match is a hard error rather than a silently dropped opt-out.
+Append-only; entries never expire.
+
+Every line is validated, and each rule below rejects an entry that *looks*
+present while suppressing nobody — which downstream is indistinguishable from
+"this person never opted out", i.e. a send. All three are hard errors rather
+than a silently dropped opt-out:
+
+- `reason` must be one of the six below. A missing or unrecognized one indexes
+  the address to `undefined`: present to `has()`, absent to `get()`.
+- `email`/`xHandle` must survive normalization. `"   "` and `"@"` are truthy and
+  match nobody, so presence alone is not enough.
+- `at` must be a non-empty timestamp; it drives the earliest-reason-wins tiebreak.
 
 ```jsonl
 # Wave 1 suppression ledger
