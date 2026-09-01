@@ -6,8 +6,17 @@ import { dashboardRouter } from "./dashboard.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
 
-// Fixed "now" for deterministic boundaries: 2026-03-18 is a Wednesday.
+// Fixed "now" for deterministic boundaries: 2026-03-18T12:00Z is Wed Mar 18,
+// 8:00am in America/New_York — the same calendar day and ISO week in both
+// zones, so it is a neutral anchor for the non-boundary assertions below.
 const NOW_ISO = "2026-03-18T12:00:00Z";
+
+// Creators A/B carry the `creators.timezone` default, America/New_York, so all
+// period boundaries here are *local* instants: March starts at 05:00Z (EST,
+// UTC-5) and ends at 04:00Z on Apr 1 (EDT, UTC-4, after the Mar 8 transition).
+const MAR_START_ET = new Date("2026-03-01T05:00:00Z");
+const APR_START_ET = new Date("2026-04-01T04:00:00Z");
+const JAN_START_ET = new Date("2026-01-01T05:00:00Z");
 
 function mockCtx(creatorId: string) {
   return {
@@ -89,6 +98,20 @@ async function insertInvoice(opts: {
     })
     .returning();
   return row;
+}
+
+async function mkDeliverableA(
+  dueAt: Date | null,
+  status: "not_started" | "scheduled" | "in_progress" | "done" | "missed" | "rescheduled",
+  title: string
+) {
+  await db.insert(schema.deliverables).values({
+    dealId: dealAFlatId,
+    title,
+    status,
+    dueAt,
+    position: 0,
+  });
 }
 
 async function cleanTables() {
@@ -193,8 +216,8 @@ describe("dashboard.overview", () => {
 
     expect(result.revenue.totalCents).toBe(60000);
     expect(result.revenue.byType).toEqual({ flat: 10000, bounty: 20000, hybrid: 30000 });
-    expect(result.revenue.periodStart).toEqual(new Date("2026-03-01T00:00:00Z"));
-    expect(result.revenue.periodEnd).toEqual(new Date("2026-04-01T00:00:00Z"));
+    expect(result.revenue.periodStart).toEqual(MAR_START_ET);
+    expect(result.revenue.periodEnd).toEqual(APR_START_ET);
   });
 
   it("bounds month/quarter revenue totals correctly", async () => {
@@ -208,16 +231,16 @@ describe("dashboard.overview", () => {
 
     const month = await caller.overview({ period: "month", now: NOW_ISO });
     expect(month.revenue.totalCents).toBe(10000);
-    expect(month.revenue.periodStart).toEqual(new Date("2026-03-01T00:00:00Z"));
+    expect(month.revenue.periodStart).toEqual(MAR_START_ET);
 
     const quarter = await caller.overview({ period: "quarter", now: NOW_ISO });
     expect(quarter.revenue.totalCents).toBe(18000);
-    expect(quarter.revenue.periodStart).toEqual(new Date("2026-01-01T00:00:00Z"));
-    expect(quarter.revenue.periodEnd).toEqual(new Date("2026-04-01T00:00:00Z"));
+    expect(quarter.revenue.periodStart).toEqual(JAN_START_ET);
+    expect(quarter.revenue.periodEnd).toEqual(APR_START_ET);
 
     const ytd = await caller.overview({ period: "ytd", now: NOW_ISO });
     expect(ytd.revenue.totalCents).toBe(18000);
-    expect(ytd.revenue.periodStart).toEqual(new Date("2026-01-01T00:00:00Z"));
+    expect(ytd.revenue.periodStart).toEqual(JAN_START_ET);
   });
 
   it("attributes revenue to paidAt, not issuedAt", async () => {
@@ -245,36 +268,46 @@ describe("dashboard.overview", () => {
     expect(feb?.valueCents).toBe(9000);
   });
 
-  it("bounds due-this-week deliverables and excludes done", async () => {
-    const mkDeliverable = async (
-      dueAt: Date | null,
-      status: "not_started" | "scheduled" | "in_progress" | "done" | "missed" | "rescheduled",
-      title: string
-    ) => {
-      await db.insert(schema.deliverables).values({
-        dealId: dealAFlatId,
-        title,
-        status,
-        dueAt,
-        position: 0,
-      });
-    };
-
-    await mkDeliverable(new Date("2026-03-16T00:00:00Z"), "scheduled", "Mon in-week");
-    await mkDeliverable(new Date("2026-03-20T00:00:00Z"), "scheduled", "Fri in-week");
-    await mkDeliverable(new Date("2026-03-23T00:00:00Z"), "scheduled", "next Mon (out)");
-    await mkDeliverable(new Date("2026-03-15T00:00:00Z"), "scheduled", "prior Sun (out)");
-    await mkDeliverable(new Date("2026-03-19T00:00:00Z"), "done", "in-week but done");
+  it("bounds due-this-week deliverables to the creator-local ISO week and excludes done", async () => {
+    // Creator A is America/New_York, so "this week" is Mon 2026-03-16 00:00 ET
+    // (2026-03-16T04:00Z) through Mon 2026-03-23 00:00 ET (2026-03-23T04:00Z).
+    // Two fixtures below straddle that window in the direction UTC gets wrong.
+    await mkDeliverableA(new Date("2026-03-16T04:00:00Z"), "scheduled", "Mon 00:00 ET (in, week start)");
+    await mkDeliverableA(new Date("2026-03-20T22:00:00Z"), "scheduled", "Fri 18:00 ET (in)");
+    // Sunday evening local. UTC calls this Mon Mar 23 and files it next week.
+    await mkDeliverableA(new Date("2026-03-23T00:00:00Z"), "scheduled", "Sun 20:00 ET (in, last local day)");
+    // Sunday night local, before the week starts. UTC calls this Mon Mar 16.
+    await mkDeliverableA(new Date("2026-03-16T03:59:00Z"), "scheduled", "prior Sun 23:59 ET (out)");
+    await mkDeliverableA(new Date("2026-03-23T04:00:00Z"), "scheduled", "next Mon 00:00 ET (out)");
+    await mkDeliverableA(new Date("2026-03-19T20:00:00Z"), "done", "in-week but done");
 
     const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
     const result = await caller.overview({ now: NOW_ISO });
 
     expect(result.deliverablesDue.map((d) => d.title)).toEqual([
-      "Mon in-week",
-      "Fri in-week",
+      "Mon 00:00 ET (in, week start)",
+      "Fri 18:00 ET (in)",
+      "Sun 20:00 ET (in, last local day)",
     ]);
     expect(result.deliverablesDue[0].dealTitle).toBe("Flat deal");
     expect(result.deliverablesDue[0].brandName).toBe("Brand A");
+  });
+
+  it("keeps the due-this-week window 7 calendar days wide across a DST transition", async () => {
+    // US DST starts Sun 2026-03-08 at 02:00 ET, so the week of Mon Mar 2 is 167
+    // hours long: Mon 2026-03-02 00:00 EST (05:00Z) → Mon 2026-03-09 00:00 EDT
+    // (04:00Z). A `weekStart + 7 * 24h` implementation ends at 05:00Z instead
+    // and swallows the first hour of the next week.
+    await mkDeliverableA(new Date("2026-03-09T03:00:00Z"), "scheduled", "Sun 23:00 EDT (in, last hour)");
+    await mkDeliverableA(new Date("2026-03-09T04:30:00Z"), "scheduled", "next Mon 00:30 EDT (out)");
+    await mkDeliverableA(new Date("2026-03-02T04:59:00Z"), "scheduled", "prior Sun 23:59 EST (out)");
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ now: "2026-03-04T12:00:00Z" });
+
+    expect(result.deliverablesDue.map((d) => d.title)).toEqual([
+      "Sun 23:00 EDT (in, last hour)",
+    ]);
   });
 
   it("orders overdue invoices by most urgent (oldest due date) and surfaces chase state", async () => {
@@ -334,5 +367,132 @@ describe("dashboard.overview", () => {
 
     expect(result.overdue.count).toBe(0);
     expect(result.overdue.mostUrgent).toBeNull();
+  });
+});
+
+describe("dashboard.overview period math is creator-local", () => {
+  async function seedCreator(timezone?: string) {
+    const [creator] = await db
+      .insert(schema.creators)
+      .values({ displayName: `Creator ${timezone ?? "default"}`, ...(timezone ? { timezone } : {}) })
+      .returning();
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ creatorId: creator.id, name: "Brand" })
+      .returning();
+    const [deal] = await db
+      .insert(schema.deals)
+      .values({
+        creatorId: creator.id,
+        brandId: brand.id,
+        title: "Deal",
+        type: "flat",
+        stage: "live",
+        valueCents: 1000,
+      })
+      .returning();
+    return { creatorId: creator.id, dealId: deal.id };
+  }
+
+  async function paidInvoice(creatorId: string, dealId: string, number: number, amountCents: number, paidAt: string) {
+    await insertInvoice({
+      creatorId,
+      dealId,
+      number,
+      amountCents,
+      status: "paid",
+      paidAt: new Date(paidAt),
+    });
+  }
+
+  it("files a month-boundary payment in the creator's month, not UTC's", async () => {
+    // The exact probe from the QA review of PR #79: 2026-03-01T01:30:00Z is
+    // Feb 28, 8:30pm for a New York creator, so it is February revenue.
+    const { creatorId, dealId } = await seedCreator("America/New_York");
+    await paidInvoice(creatorId, dealId, 1, 44400, "2026-03-01T01:30:00Z");
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorId));
+
+    const feb = await caller.overview({ period: "month", now: "2026-02-20T12:00:00Z" });
+    expect(feb.timeZone).toBe("America/New_York");
+    expect(feb.revenue.totalCents).toBe(44400);
+    expect(feb.revenue.periodStart).toEqual(new Date("2026-02-01T05:00:00Z"));
+    expect(feb.revenue.periodEnd).toEqual(MAR_START_ET);
+
+    const mar = await caller.overview({ period: "month", now: NOW_ISO });
+    expect(mar.revenue.totalCents).toBe(0);
+
+    // ...and the trailing-12 series agrees with the period total.
+    expect(mar.revenue.monthly.find((m) => m.month === "2026-02")?.valueCents).toBe(44400);
+    expect(mar.revenue.monthly.find((m) => m.month === "2026-03")?.valueCents).toBe(0);
+  });
+
+  it("keeps the same instant in UTC's month for a UTC creator", async () => {
+    // Same payment, different creator: the old UTC behaviour is still correct
+    // for someone actually on UTC, which is what makes this a timezone bug and
+    // not an off-by-one.
+    const { creatorId, dealId } = await seedCreator("UTC");
+    await paidInvoice(creatorId, dealId, 1, 44400, "2026-03-01T01:30:00Z");
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorId));
+    const mar = await caller.overview({ period: "month", now: NOW_ISO });
+
+    expect(mar.timeZone).toBe("UTC");
+    expect(mar.revenue.totalCents).toBe(44400);
+    expect(mar.revenue.periodStart).toEqual(new Date("2026-03-01T00:00:00Z"));
+    expect(mar.revenue.monthly.find((m) => m.month === "2026-03")?.valueCents).toBe(44400);
+    expect(mar.revenue.monthly.find((m) => m.month === "2026-02")?.valueCents).toBe(0);
+  });
+
+  it("uses the offset in force at each boundary, not the offset at `now` (DST)", async () => {
+    // US DST starts 2026-03-08. March 2026 opens at 05:00Z (EST) and closes at
+    // 04:00Z on Apr 1 (EDT). Anything that caches one offset — say the EDT
+    // offset in force at `now` — puts the March boundary at 04:00Z and pulls
+    // this 04:30Z payment (Feb 28, 11:30pm EST) into March.
+    const { creatorId, dealId } = await seedCreator("America/New_York");
+    await paidInvoice(creatorId, dealId, 1, 7700, "2026-03-01T04:30:00Z");
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorId));
+    const mar = await caller.overview({ period: "month", now: NOW_ISO });
+
+    expect(mar.revenue.periodStart).toEqual(MAR_START_ET);
+    expect(mar.revenue.periodEnd).toEqual(APR_START_ET);
+    expect(mar.revenue.totalCents).toBe(0);
+    expect(mar.revenue.monthly.find((m) => m.month === "2026-02")?.valueCents).toBe(7700);
+  });
+
+  it("handles a southern-hemisphere zone whose DST runs the other way", async () => {
+    // Australia/Sydney is UTC+11 in March (AEDT) and UTC+10 in July (AEST), so
+    // its year and quarter boundaries move in the opposite direction to the US.
+    const { creatorId, dealId } = await seedCreator("Australia/Sydney");
+    // 2025-12-31T14:30:00Z is Jan 1 2026, 1:30am in Sydney — 2026 revenue.
+    await paidInvoice(creatorId, dealId, 1, 5000, "2025-12-31T14:30:00Z");
+    // 2026-06-30T15:30:00Z is Jul 1, 1:30am AEST — Q3, outside a Q2 window.
+    await paidInvoice(creatorId, dealId, 2, 6000, "2026-06-30T15:30:00Z");
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorId));
+
+    const ytd = await caller.overview({ period: "ytd", now: "2026-03-18T12:00:00Z" });
+    expect(ytd.revenue.periodStart).toEqual(new Date("2025-12-31T13:00:00Z"));
+    expect(ytd.revenue.totalCents).toBe(5000);
+
+    const q2 = await caller.overview({ period: "quarter", now: "2026-05-15T12:00:00Z" });
+    expect(q2.revenue.periodStart).toEqual(new Date("2026-03-31T13:00:00Z"));
+    expect(q2.revenue.periodEnd).toEqual(new Date("2026-06-30T14:00:00Z"));
+    expect(q2.revenue.totalCents).toBe(0);
+  });
+
+  it("falls back to UTC rather than throwing when the stored timezone is unusable", async () => {
+    // `creators.timezone` is free text at the DB level; a bad value must not
+    // 500 the dashboard.
+    const { creatorId, dealId } = await seedCreator("Not/AZone");
+    await paidInvoice(creatorId, dealId, 1, 1234, "2026-03-01T01:30:00Z");
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorId));
+    const mar = await caller.overview({ period: "month", now: NOW_ISO });
+
+    expect(mar.timeZone).toBe("UTC");
+    expect(mar.revenue.periodStart).toEqual(new Date("2026-03-01T00:00:00Z"));
+    expect(mar.revenue.totalCents).toBe(1234);
   });
 });
