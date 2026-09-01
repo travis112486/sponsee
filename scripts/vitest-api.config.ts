@@ -18,6 +18,11 @@ export default defineConfig({
       // narrow glob this replaced would have silently skipped SPO-199's blog
       // generator tests.
       "apps/marketing/**/*.{test,spec}.{ts,tsx}",
+      // Repo-level tooling that belongs to no package: the SPO-225 test for the
+      // root vercel.json ignoreCommand lives here. Same trap as the two globs
+      // above — a test outside apps/ and packages/ matches nothing otherwise
+      // and would sit silently unrun.
+      "scripts/**/*.{test,spec}.{ts,tsx}",
     ],
     // storage.e2e.test.ts needs a real S3-compatible server (MinIO) and is
     // deliberately not part of the default suite — see scripts/vitest-storage-e2e.config.ts
