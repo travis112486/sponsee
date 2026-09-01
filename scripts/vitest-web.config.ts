@@ -5,7 +5,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "jsdom",
-    include: ["apps/web/src/**/*.{test,spec}.{ts,tsx}"],
+    // Marketing's browser-side tests need a DOM too — its pre-render/hydration
+    // suite (SPO-209) has nowhere else to run, since vitest-api is node-env.
+    include: [
+      "apps/web/src/**/*.{test,spec}.{ts,tsx}",
+      "apps/marketing/src/**/*.{test,spec}.{ts,tsx}",
+    ],
     exclude: ["**/node_modules/**", "**/dist/**", "**/.turbo/**"],
   },
   resolve: {
