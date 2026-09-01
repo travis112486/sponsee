@@ -97,36 +97,50 @@ type KindProps =
   | { kind: "contract"; status: ContractStatus };
 
 type StatusChipProps = (
-  | KindProps
+  /** `label` is optional here — it overrides the domain copy for the status. */
+  | (KindProps & { label?: string })
   /**
    * Escape hatch for derived states that are not a column value — "Overdue",
    * "Due in 3d", "Stale". Callers must supply their own tone and copy.
+   *
+   * `label` is *required* on this arm, not merely documented as such: there is
+   * no status to derive copy from, so an omitted label would render a coloured
+   * pill with no text — invisible to a screen reader and broken on screen.
    */
-  | { kind?: undefined; status?: undefined; tone: ChipTone }
+  | { kind?: undefined; status?: undefined; tone: ChipTone; label: string }
 ) & {
-  /** Overrides the domain label. Required for the tone-only form. */
-  label?: string;
   className?: string;
 };
 
+/**
+ * The single place a label is decided, so the returned `string` is honestly
+ * non-empty: every `kind` has a domain map to fall back to, and the tone-only
+ * arm types `label` as required.
+ */
 function resolve(props: StatusChipProps): { tone: ChipTone; label: string } {
   switch (props.kind) {
     case "deal":
-      return { tone: dealTones[props.status], label: stageLabels[props.status] };
+      return {
+        tone: dealTones[props.status],
+        label: props.label ?? stageLabels[props.status],
+      };
     case "invoice":
-      return { tone: invoiceTones[props.status], label: invoiceLabels[props.status] };
+      return {
+        tone: invoiceTones[props.status],
+        label: props.label ?? invoiceLabels[props.status],
+      };
     case "deliverable":
       return {
         tone: deliverableTones[props.status],
-        label: deliverableLabels[props.status],
+        label: props.label ?? deliverableLabels[props.status],
       };
     case "contract":
       return {
         tone: contractTones[props.status],
-        label: contractStatusLabels[props.status],
+        label: props.label ?? contractStatusLabels[props.status],
       };
     default:
-      return { tone: props.tone, label: props.label ?? "" };
+      return { tone: props.tone, label: props.label };
   }
 }
 
@@ -142,7 +156,7 @@ export function StatusChip(props: StatusChipProps) {
           <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-pine" />
         </span>
       )}
-      {props.label ?? label}
+      {label}
     </span>
   );
 }
