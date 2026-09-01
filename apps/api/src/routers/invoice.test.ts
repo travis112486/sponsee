@@ -169,9 +169,9 @@ describe("invoice.update — paidAt orphan guard (SPO-265)", () => {
       const invoice = await insertInvoice({ status });
       const caller = invoiceRouter.createCaller(mockCtx(creatorId));
 
-      await expect(
-        caller.update({ id: invoice.id, paidAt: new Date() })
-      ).rejects.toSatisfy((err: any) => err.code === "BAD_REQUEST");
+      await expect(caller.update({ id: invoice.id, paidAt: new Date() })).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
 
       const [row] = await db.select().from(schema.invoices).where(sql`id = ${invoice.id}`);
       expect(row.paidAt).toBeNull();
@@ -188,5 +188,41 @@ describe("invoice.update — paidAt orphan guard (SPO-265)", () => {
 
     expect(result.status).toBe("paid");
     expect(result.paidAt).toEqual(paidAt);
+  });
+
+  // Deliberate behaviour change, pinned so it is not "fixed" back later:
+  // re-dating an already-paid invoice used to work via a bare `paidAt`, and now
+  // requires the redundant-looking `status: "paid"` alongside it. The router
+  // cannot tell that shape apart from the orphan-writing one without reading the
+  // row, and the round trip is not worth it for a caller apps/web never makes.
+  it("rejects a bare paidAt re-date on an already-paid invoice, and takes it with status", async () => {
+    const invoice = await insertInvoice({ status: "paid", paidAt: new Date("2026-02-01T00:00:00Z") });
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+    const corrected = new Date("2026-02-14T00:00:00Z");
+
+    await expect(caller.update({ id: invoice.id, paidAt: corrected })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+
+    const updated = await caller.update({ id: invoice.id, status: "paid", paidAt: corrected });
+    expect(updated.paidAt).toEqual(corrected);
+  });
+
+  // The residual gap this fix deliberately does not close: the 0013 CHECK is
+  // one-directional, so the orphan stays *representable* even though no router
+  // path writes one. Pinned as a positive control — if someone makes the
+  // constraint a biconditional (SPO-265 option 1), this test fails loudly and
+  // tells them the router guards above are now belt-and-braces.
+  it("documents that the storage layer still permits an orphan paid_at", async () => {
+    const invoice = await insertInvoice({ status: "open" });
+
+    await db
+      .update(schema.invoices)
+      .set({ paidAt: new Date("2026-04-01T00:00:00Z") })
+      .where(sql`id = ${invoice.id}`);
+
+    const [row] = await db.select().from(schema.invoices).where(sql`id = ${invoice.id}`);
+    expect(row.status).toBe("open");
+    expect(row.paidAt).not.toBeNull();
   });
 });

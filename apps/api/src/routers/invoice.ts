@@ -9,9 +9,9 @@ const PAID_REQUIRES_PAID_AT_CONSTRAINT = "invoices_paid_requires_paid_at";
 /**
  * Did this update fail the DB-level status='paid' <=> paidAt not-null invariant?
  *
- * The router-level guard in `update` rejects the one input shape it can decide
- * from the input alone (`paidAt: null` with no `status`); it cannot see the
- * row's current status, so any other path that would violate the invariant
+ * The router-level guards in `update` reject the input shapes they can decide
+ * from the input alone (`paidAt` with no `status`, in either direction); they
+ * cannot see the row's current status, so any other path that would violate it
  * (e.g. a future caller adding a field that clears paidAt) still reaches
  * Postgres and fails the `invoices_paid_requires_paid_at` CHECK. Catching that
  * here turns it into a typed BAD_REQUEST instead of a 500 that carries the raw
