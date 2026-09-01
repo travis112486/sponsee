@@ -117,6 +117,16 @@ describe("invoice.update paid/paidAt invariant", () => {
     expect(updated.paidAt).toEqual(new Date("2026-02-01T00:00:00Z"));
   });
 
+  it("defaults paidAt when status moves to paid with an explicit paidAt: null", async () => {
+    const invoice = await insertInvoice({ status: "open" });
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    const updated = await caller.update({ id: invoice.id, status: "paid", paidAt: null });
+
+    expect(updated.status).toBe("paid");
+    expect(updated.paidAt).not.toBeNull();
+  });
+
   it("rejects a direct write that violates the invariant at the storage layer", async () => {
     const invoice = await insertInvoice({ status: "open" });
 

@@ -113,7 +113,7 @@ export const invoiceRouter = createTRPCRouter({
       // Keep status='paid' <=> paidAt IS NOT NULL atomic: callers may set either
       // field independently, so this mutation must not be able to produce a
       // paid invoice with no paidAt (or a non-paid invoice with a stale one).
-      if (data.status === "paid" && data.paidAt === undefined) {
+      if (data.status === "paid" && data.paidAt == null) {
         data.paidAt = new Date();
       } else if (data.status !== undefined && data.status !== "paid") {
         data.paidAt = null;
