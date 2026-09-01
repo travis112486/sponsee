@@ -165,10 +165,14 @@ describe("calculator.dealEffectiveCpvh", () => {
     ).toBeNull();
   });
 
-  it("returns a real 0 for a genuinely free deal with known ccv/duration", () => {
-    // Distinct from the null cases above: this deal has both inputs, so a
-    // $0.00 rate here is real data, not a missing-data lie.
-    expect(dealEffectiveCpvh({ valueCents: 0, ccv: 500, sponsoredMinutes: 60 })).toBe(0);
+  it("returns null, not 0, when valueCents is 0 even with valid ccv/duration", () => {
+    // A deal not yet priced must read as "no data", not a fabricated $0.00/hr
+    // rate (SPO-197 MEDIUM-1) — valueCents defaults to 0 in the DB, so 0 can't
+    // be trusted as "genuinely free" without a separate signal this model
+    // doesn't have.
+    expect(
+      dealEffectiveCpvh({ valueCents: 0, ccv: 500, sponsoredMinutes: 120 })
+    ).toBeNull();
   });
 });
 
@@ -200,5 +204,16 @@ describe("calculator.accountEffectiveCpvh", () => {
     const withData = { valueCents: 52500, ccv: 500, sponsoredMinutes: 60 };
     const missingCcv = { valueCents: 999999, ccv: null, sponsoredMinutes: 60 };
     expect(accountEffectiveCpvh([withData, missingCcv])).toBeCloseTo(1.05, 10);
+  });
+
+  it("excludes an unpriced deal instead of letting its $0 drag the rate down", () => {
+    // Without the valueCents<=0 guard, this unpriced deal would contribute
+    // $0 of value but its full viewer-hours, halving the reported rate
+    // (SPO-197 MEDIUM-1: 1 -> 0.5). It must be excluded entirely instead.
+    const priced = { valueCents: 100000, ccv: 500, sponsoredMinutes: 120 };
+    const unpriced = { valueCents: 0, ccv: 500, sponsoredMinutes: 120 };
+
+    expect(accountEffectiveCpvh([priced])).toBeCloseTo(1, 10);
+    expect(accountEffectiveCpvh([priced, unpriced])).toBeCloseTo(1, 10);
   });
 });

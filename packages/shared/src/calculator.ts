@@ -115,7 +115,7 @@ export interface DealCpvhInputs {
 export function dealEffectiveCpvh(deal: DealCpvhInputs): number | null {
   const { ccv, sponsoredMinutes, valueCents } = deal;
   if (ccv == null || sponsoredMinutes == null) return null;
-  if (ccv <= 0 || sponsoredMinutes <= 0) return null;
+  if (ccv <= 0 || sponsoredMinutes <= 0 || valueCents <= 0) return null;
   return impliedCpvh(valueCents, ccv, sponsoredMinutes);
 }
 
@@ -137,7 +137,7 @@ export function accountEffectiveCpvh(
   for (const deal of deals) {
     const { ccv, sponsoredMinutes, valueCents } = deal;
     if (ccv == null || sponsoredMinutes == null) continue;
-    if (ccv <= 0 || sponsoredMinutes <= 0) continue;
+    if (ccv <= 0 || sponsoredMinutes <= 0 || valueCents <= 0) continue;
 
     totalValueCents += valueCents;
     totalViewerHours += viewerHoursOf(ccv, sponsoredMinutes);
