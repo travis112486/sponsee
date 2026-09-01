@@ -19,6 +19,18 @@ import { Marked } from "marked";
 const SITE_ORIGIN = "https://sponsee.app";
 const GA_MEASUREMENT_ID = "G-SMN1L6QB3L";
 
+// Posts are signed by a byline from `content/authors/*.md`. Unset frontmatter
+// means the editorial desk, which is every post we have — the field exists so a
+// second byline is additive rather than a migration.
+const DEFAULT_AUTHOR = "quinn-alvarez";
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** The `/blog/authors/<slug>` page a byline links to. */
+export function authorHref(slug) {
+  return `/blog/authors/${slug}`;
+}
+
 // `breaks: true` because line structure carries meaning in this content: the
 // copy-paste email templates end with a signature on its own line, and the FAQ
 // puts each answer under its bolded question. Collapsing those to one line
@@ -152,6 +164,28 @@ export function parsePost(source, slug) {
     }
   }
 
+  if (!ISO_DATE.test(data.date)) {
+    throw new Error(`post "${slug}" has a non-ISO date: ${data.date}`);
+  }
+
+  // Both optional. `author` selects a byline from content/authors/; the file it
+  // names is resolved by the build, which is the only layer that can see disk.
+  const author = data.author ?? DEFAULT_AUTHOR;
+  if (!SLUG.test(author)) {
+    throw new Error(`post "${slug}" has an unusable author slug: ${author}`);
+  }
+
+  // `lastReviewed` drives dateModified and the "Last reviewed" stamp in the
+  // signature. A date before publication would claim we reviewed a draft that
+  // didn't exist yet, so it's an error rather than a silent clamp.
+  const lastReviewed = data.lastReviewed ?? data.date;
+  if (!ISO_DATE.test(lastReviewed)) {
+    throw new Error(`post "${slug}" has a non-ISO lastReviewed: ${lastReviewed}`);
+  }
+  if (lastReviewed < data.date) {
+    throw new Error(`post "${slug}" was reviewed (${lastReviewed}) before it was published (${data.date})`);
+  }
+
   const faq = extractFaq(body);
   const { markdown, footnotes } = extractFootnotes(stripDraftNotes(body));
 
@@ -161,12 +195,45 @@ export function parsePost(source, slug) {
     titleTag: data.titleTag,
     description: data.description,
     date: data.date,
+    lastReviewed,
+    author,
     order: Number(data.order),
     cta: data.cta ?? "",
     disclaimer: data.disclaimer ?? "",
     faq,
     footnotes,
     html: renderMarkdown(tidy(markdown)),
+  };
+}
+
+/**
+ * Parse one `content/authors/*.md` file. The body is the bio, rendered as
+ * markdown so it can carry the emphasis and mailto the persona copy uses.
+ */
+export function parseAuthor(source, slug) {
+  const { data, body } = parseFrontmatter(source);
+
+  for (const required of ["name", "role", "jobTitle", "titleTag", "description"]) {
+    if (!data[required]) {
+      throw new Error(`author "${slug}" is missing required frontmatter: ${required}`);
+    }
+  }
+  if (!SLUG.test(slug)) {
+    throw new Error(`author file name is not a usable slug: ${slug}`);
+  }
+
+  return {
+    slug,
+    name: data.name,
+    role: data.role,
+    jobTitle: data.jobTitle,
+    pronouns: data.pronouns ?? "",
+    email: data.email ?? "",
+    titleTag: data.titleTag,
+    description: data.description,
+    href: authorHref(slug),
+    url: `${SITE_ORIGIN}${authorHref(slug)}`,
+    bioHtml: renderMarkdown(tidy(body)),
   };
 }
 
@@ -186,6 +253,16 @@ main{max-width:720px;margin:0 auto;padding:56px 24px 24px}
 .eyebrow{font-size:13px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:0 0 12px}
 h1{font-family:'Instrument Serif',Georgia,serif;font-weight:400;font-size:34px;line-height:1.15;margin:0 0 12px}
 .lede{color:var(--ink-3);font-size:14px;margin:0 0 40px}
+.byline{color:var(--ink-3);font-size:14px;margin:0 0 40px}
+.byline a{color:var(--ink-2);font-weight:500;text-decoration:none}
+.byline a:hover{color:var(--pine)}
+.signature{margin:48px 0 0;padding-top:24px;border-top:1px solid var(--hairline);font-size:13px;color:var(--ink-3)}
+.signature p{margin:0 0 6px}
+.signature p:last-child{margin:0}
+.signature .signed{color:var(--ink-2);font-size:14px}
+.signature .signed a{font-weight:500;text-decoration:none}
+.author-posts{margin:56px 0 0;padding-top:32px;border-top:1px solid var(--hairline)}
+.author-posts h2{font-family:'Instrument Serif',Georgia,serif;font-weight:400;font-size:26px;margin:0 0 24px}
 .prose h2{font-family:'Instrument Serif',Georgia,serif;font-weight:400;font-size:28px;line-height:1.25;margin:48px 0 16px}
 .prose h3{font-family:'Instrument Serif',Georgia,serif;font-weight:400;font-size:22px;margin:32px 0 12px}
 .prose p{color:var(--ink-2);margin:0 0 20px}
@@ -216,6 +293,7 @@ sup.fnref a{text-decoration:none;font-size:11px;padding-left:1px}
 .post-list h2 a:hover{color:var(--pine)}
 .post-list p{color:var(--ink-2);margin:0}
 .post-list time{display:block;font-size:13px;color:var(--ink-3);margin-bottom:6px}
+.post-list .byline{margin:8px 0 0;font-size:13px}
 .site-footer{background:var(--paper);border-top:1px solid var(--hairline);padding:48px 0;margin-top:80px}
 .site-footer .row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:24px}
 .site-footer .tagline{font-size:14px;color:var(--ink-3);margin:4px 0 0}
@@ -269,7 +347,7 @@ const FOOTER = `<footer class="site-footer">
       </div>
     </footer>`;
 
-function shell({ titleTag, description, canonical, head = "", body }) {
+function shell({ titleTag, description, canonical, ogType = "article", head = "", body }) {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -280,7 +358,7 @@ function shell({ titleTag, description, canonical, head = "", body }) {
     <meta name="description" content="${escapeHtml(description)}" />
     <meta property="og:title" content="${escapeHtml(titleTag)}" />
     <meta property="og:description" content="${escapeHtml(description)}" />
-    <meta property="og:type" content="article" />
+    <meta property="og:type" content="${escapeHtml(ogType)}" />
     <meta property="og:url" content="${escapeHtml(canonical)}" />
     <meta property="og:image" content="${SITE_ORIGIN}/og-image.png" />
     <meta name="twitter:card" content="summary_large_image" />
@@ -306,7 +384,36 @@ export function formatDate(iso) {
   return `${monthName} ${day}, ${year}`;
 }
 
-export function renderPostPage(post) {
+/**
+ * `Author · Role · date`, under the H1. The name links to the author page,
+ * which is what turns the byline into a crawlable E-E-A-T signal rather than
+ * decoration.
+ */
+export function renderByline(post, author) {
+  return `<p class="byline"><a href="${author.href}" rel="author">${escapeHtml(author.name)}</a> · ${escapeHtml(author.role)} · <time datetime="${post.date}">${formatDate(post.date)}</time></p>`;
+}
+
+/**
+ * The signature block at the foot of every post — content-writer-persona §4.
+ *
+ * The persona doc ends this block with the non-affiliation line; that line is
+ * already rendered from each post's `disclaimer` frontmatter immediately below,
+ * so repeating it here would print it twice on the same page.
+ */
+export function renderSignature(post, author) {
+  const contact = author.email
+    ? `Spotted an error? <a href="mailto:${escapeHtml(author.email)}">${escapeHtml(author.email)}</a> · `
+    : "";
+
+  return `<footer class="signature">
+        <p class="signed">Written by <a href="${author.href}" rel="author">${escapeHtml(author.name)}</a>, ${escapeHtml(author.jobTitle)} at Sponsee</p>
+        <p>Sponsee's editorial byline — researched and fact-checked by the team building Sponsee.</p>
+        <p>${contact}Last reviewed <time datetime="${post.lastReviewed}">${formatDate(post.lastReviewed)}</time></p>
+        <p><a href="/blog/">→ More from ${escapeHtml(author.name.split(" ")[0])}</a></p>
+      </footer>`;
+}
+
+export function renderPostPage(post, author) {
   const canonical = `${SITE_ORIGIN}/blog/${post.slug}`;
 
   const structuredData = [
@@ -316,10 +423,15 @@ export function renderPostPage(post) {
       headline: post.title,
       description: post.description,
       datePublished: post.date,
-      dateModified: post.date,
+      dateModified: post.lastReviewed,
       mainEntityOfPage: { "@type": "WebPage", "@id": canonical },
-      author: { "@type": "Organization", name: "Sponsee" },
-      publisher: { "@type": "Organization", name: "Sponsee" },
+      author: {
+        "@type": "Person",
+        name: author.name,
+        url: author.url,
+        jobTitle: author.jobTitle,
+      },
+      publisher: { "@type": "Organization", name: "Sponsee", url: `${SITE_ORIGIN}/` },
     },
   ];
 
@@ -361,13 +473,14 @@ ${post.footnotes
       <article>
         <p class="eyebrow"><a href="/blog/">Blog</a></p>
         <h1>${escapeHtml(post.title)}</h1>
-        <p class="lede"><time datetime="${post.date}">${formatDate(post.date)}</time></p>
+        ${renderByline(post, author)}
         <div class="prose">
 ${post.html
   .split("\n")
   .map((line) => (line ? `          ${line}` : line))
   .join("\n")}
-        </div>${cta}${sources}${disclaimer}
+        </div>
+      ${renderSignature(post, author)}${cta}${sources}${disclaimer}
       </article>
     </main>`;
 
@@ -380,23 +493,34 @@ ${post.html
   });
 }
 
-export function renderIndexPage(posts) {
-  const items = posts
-    .map(
-      (post) => `          <li>
+/**
+ * One `<li>` per post. `authorsBySlug` is optional so the index and the author
+ * page can share this: on the author page every card has the same byline, so
+ * repeating it under each one is noise.
+ */
+function postListItems(posts, authorsBySlug) {
+  return posts
+    .map((post) => {
+      const author = authorsBySlug?.get(post.author);
+      const byline = author
+        ? `\n            <p class="byline"><a href="${author.href}" rel="author">${escapeHtml(author.name)}</a> · ${escapeHtml(author.role)}</p>`
+        : "";
+      return `          <li>
             <time datetime="${post.date}">${formatDate(post.date)}</time>
             <h2><a href="/blog/${post.slug}">${escapeHtml(post.title)}</a></h2>
-            <p>${escapeHtml(post.description)}</p>
-          </li>`,
-    )
+            <p>${escapeHtml(post.description)}</p>${byline}
+          </li>`;
+    })
     .join("\n");
+}
 
+export function renderIndexPage(posts, authorsBySlug) {
   const body = `    <main>
       <p class="eyebrow">Blog</p>
       <h1>Getting paid, priced, and taken seriously.</h1>
       <p class="lede">Practical guides on pricing, invoicing, and chasing brand deals — written for live streamers with 100–5,000 concurrent viewers.</p>
       <ul class="post-list">
-${items}
+${postListItems(posts, authorsBySlug)}
       </ul>
     </main>`;
 
@@ -409,11 +533,69 @@ ${items}
   });
 }
 
-export function renderSitemap(posts) {
+/**
+ * The author page. It carries the `ProfilePage`/`Person` structured data that
+ * makes the byline verifiable, and — because it lists every post — it is also
+ * the internal-linking hub the OpenSEO audit has been asking for since the 8/27
+ * baseline flagged the posts as orphaned.
+ */
+export function renderAuthorPage(author, posts) {
+  const canonical = author.url;
+
+  const structuredData = [
+    {
+      "@context": "https://schema.org",
+      "@type": "ProfilePage",
+      mainEntity: {
+        "@type": "Person",
+        name: author.name,
+        url: canonical,
+        jobTitle: author.jobTitle,
+        description: author.description,
+        worksFor: { "@type": "Organization", name: "Sponsee", url: `${SITE_ORIGIN}/` },
+      },
+    },
+  ];
+
+  const subtitle = [author.role, author.pronouns].filter(Boolean).join(" · ");
+
+  const postList = posts.length
+    ? `\n      <section class="author-posts">
+        <h2>Every post by ${escapeHtml(author.name)}</h2>
+        <ul class="post-list">
+${postListItems(posts)}
+        </ul>
+      </section>`
+    : "";
+
+  const body = `    <main>
+      <p class="eyebrow"><a href="/blog/">Blog</a></p>
+      <h1>${escapeHtml(author.name)}</h1>
+      <p class="lede">${escapeHtml(subtitle)}</p>
+      <div class="prose">
+${author.bioHtml
+  .split("\n")
+  .map((line) => (line ? `        ${line}` : line))
+  .join("\n")}
+      </div>${postList}
+    </main>`;
+
+  return shell({
+    titleTag: `${author.titleTag} — Sponsee`,
+    description: author.description,
+    canonical,
+    ogType: "profile",
+    head: `\n    <script type="application/ld+json">\n${toJsonLd(structuredData)}\n    </script>`,
+    body,
+  });
+}
+
+export function renderSitemap(posts, authors = []) {
   const urls = [
     { loc: `${SITE_ORIGIN}/`, priority: "1.0" },
     { loc: `${SITE_ORIGIN}/blog/`, priority: "0.8" },
     ...posts.map((post) => ({ loc: `${SITE_ORIGIN}/blog/${post.slug}`, priority: "0.7" })),
+    ...authors.map((author) => ({ loc: `${SITE_ORIGIN}${authorHref(author.slug)}`, priority: "0.5" })),
     { loc: `${SITE_ORIGIN}/privacy.html`, priority: "0.3" },
     { loc: `${SITE_ORIGIN}/terms.html`, priority: "0.3" },
   ];
@@ -439,13 +621,14 @@ ${urls
  * Returns the rewritten HTML plus the hrefs that were downgraded, so the build
  * can report them instead of degrading a typo'd slug in silence.
  */
-export function resolveInternalLinks(html, publishedSlugs) {
+export function resolveInternalLinks(html, publishedSlugs, authorSlugs = []) {
   const downgraded = [];
   const resolved = html.replace(
     /<a href="(\/blog\/[^"]*)">([\s\S]*?)<\/a>/g,
     (match, href, text) => {
       const path = href.split(/[?#]/)[0].replace(/\/$/, "");
       if (path === "/blog") return match;
+      if (authorSlugs.some((slug) => path === authorHref(slug))) return match;
       if (publishedSlugs.includes(path.slice("/blog/".length))) return match;
       downgraded.push(href);
       return text;

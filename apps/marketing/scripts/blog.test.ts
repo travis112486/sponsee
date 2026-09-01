@@ -4,14 +4,34 @@ import {
   extractFaq,
   extractFootnotes,
   findRetiredBlogLinks,
+  parseAuthor,
   parseFrontmatter,
   parsePost,
+  renderAuthorPage,
+  renderIndexPage,
   renderPostPage,
   renderSitemap,
   resolveInternalLinks,
   stripDraftNotes,
   // @ts-expect-error -- plain-JS build script, no type declarations
 } from "./blog.mjs";
+
+const AUTHOR_SOURCE = [
+  "---",
+  'name: "Quinn Alvarez"',
+  'role: "Editor, Sponsee"',
+  'jobTitle: "Editor"',
+  'pronouns: "they/them"',
+  'email: "hello@sponsee.app"',
+  'titleTag: "Quinn Alvarez — Editor at Sponsee"',
+  'description: "Sponsee\'s editorial byline."',
+  "---",
+  "",
+  "Quinn is the editorial desk at Sponsee.",
+  "",
+].join("\n");
+
+const QUINN = parseAuthor(AUTHOR_SOURCE, "quinn-alvarez");
 
 describe("parseFrontmatter", () => {
   it("JSON-decodes quoted values so copy can carry colons and em dashes", () => {
@@ -111,6 +131,23 @@ describe("resolveInternalLinks", () => {
     expect(downgraded).toEqual(["/blog/how-much-to-charge-sponsored-stream"]);
   });
 
+  it("keeps a link to a registered author page, which is not a post slug", () => {
+    const html = '<a href="/blog/authors/quinn-alvarez">Quinn</a>';
+    const { html: resolved, downgraded } = resolveInternalLinks(html, [], ["quinn-alvarez"]);
+    expect(resolved).toBe(html);
+    expect(downgraded).toEqual([]);
+  });
+
+  it("downgrades a link to an author with no registry file", () => {
+    const { html, downgraded } = resolveInternalLinks(
+      '<a href="/blog/authors/sam-okafor">Sam</a>',
+      [],
+      ["quinn-alvarez"],
+    );
+    expect(html).toBe("Sam");
+    expect(downgraded).toEqual(["/blog/authors/sam-okafor"]);
+  });
+
   it("lights the same link up once its target publishes, with no content change", () => {
     const source = '<a href="/blog/how-much-to-charge-sponsored-stream">rates pillar</a>';
     const { html, downgraded } = resolveInternalLinks(source, ["how-much-to-charge-sponsored-stream"]);
@@ -172,10 +209,51 @@ describe("parsePost", () => {
     const noDescription = POST_SOURCE.replace(/^description:.*$/m, "");
     expect(() => parsePost(noDescription, "sponsor-paying-late")).toThrow(/description/);
   });
+
+  it("signs an unattributed post with the editorial desk and reviews it on its publish date", () => {
+    const post = parsePost(POST_SOURCE, "sponsor-paying-late");
+    expect(post.author).toBe("quinn-alvarez");
+    expect(post.lastReviewed).toBe("2026-09-01");
+  });
+
+  it("carries an explicit byline and review date when the post sets them", () => {
+    const source = POST_SOURCE.replace(
+      /^order: "1"$/m,
+      'order: "1"\nauthor: sam-okafor\nlastReviewed: "2026-11-30"',
+    );
+    const post = parsePost(source, "sponsor-paying-late");
+    expect(post.author).toBe("sam-okafor");
+    expect(post.lastReviewed).toBe("2026-11-30");
+  });
+
+  it("refuses a review date that predates publication rather than back-dating dateModified", () => {
+    const source = POST_SOURCE.replace(/^order: "1"$/m, 'order: "1"\nlastReviewed: "2026-08-01"');
+    expect(() => parsePost(source, "sponsor-paying-late")).toThrow(/reviewed/);
+  });
+
+  it("refuses a non-ISO review date, which would render as an unparseable stamp", () => {
+    const source = POST_SOURCE.replace(/^order: "1"$/m, 'order: "1"\nlastReviewed: "Sept 2026"');
+    expect(() => parsePost(source, "sponsor-paying-late")).toThrow(/lastReviewed/);
+  });
+});
+
+describe("parseAuthor", () => {
+  it("reads the byline registry entry and renders the bio as markdown", () => {
+    expect(QUINN.name).toBe("Quinn Alvarez");
+    expect(QUINN.jobTitle).toBe("Editor");
+    expect(QUINN.href).toBe("/blog/authors/quinn-alvarez");
+    expect(QUINN.url).toBe("https://sponsee.app/blog/authors/quinn-alvarez");
+    expect(QUINN.bioHtml).toContain("<p>Quinn is the editorial desk at Sponsee.</p>");
+  });
+
+  it("refuses an author with no jobTitle, which the Person schema requires", () => {
+    const noJobTitle = AUTHOR_SOURCE.replace(/^jobTitle:.*$/m, "");
+    expect(() => parseAuthor(noJobTitle, "quinn-alvarez")).toThrow(/jobTitle/);
+  });
 });
 
 describe("renderPostPage", () => {
-  const html = renderPostPage(parsePost(POST_SOURCE, "sponsor-paying-late"));
+  const html = renderPostPage(parsePost(POST_SOURCE, "sponsor-paying-late"), QUINN);
 
   it("canonicalises to the extensionless /blog/<slug> URL", () => {
     expect(html).toContain('<link rel="canonical" href="https://sponsee.app/blog/sponsor-paying-late" />');
@@ -187,6 +265,40 @@ describe("renderPostPage", () => {
     const parsed = JSON.parse(jsonLd![1]);
     expect(parsed.map((entry: { "@type": string }) => entry["@type"])).toEqual(["Article", "FAQPage"]);
     expect(parsed[1].mainEntity[0].name).toBe("A question?");
+  });
+
+  it("attributes the Article to a Person with a page behind it, and Sponsee as publisher", () => {
+    const jsonLd = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(html);
+    const article = JSON.parse(jsonLd![1])[0];
+    expect(article.author).toEqual({
+      "@type": "Person",
+      name: "Quinn Alvarez",
+      url: "https://sponsee.app/blog/authors/quinn-alvarez",
+      jobTitle: "Editor",
+    });
+    expect(article.publisher["@type"]).toBe("Organization");
+    expect(article.dateModified).toBe("2026-09-01");
+  });
+
+  it("renders a byline under the H1 that links to the author page", () => {
+    expect(html).toMatch(
+      /<h1>[^<]*<\/h1>\s*<p class="byline"><a href="\/blog\/authors\/quinn-alvarez" rel="author">Quinn Alvarez<\/a> · Editor, Sponsee · <time datetime="2026-09-01">September 1, 2026<\/time><\/p>/,
+    );
+  });
+
+  it("signs off with the persona signature block above the CTA", () => {
+    expect(html).toContain("Written by <a href=\"/blog/authors/quinn-alvarez\" rel=\"author\">Quinn Alvarez</a>, Editor at Sponsee");
+    expect(html).toContain("researched and fact-checked by the team building Sponsee");
+    expect(html).toContain("Spotted an error?");
+    expect(html).toContain("Last reviewed <time datetime=\"2026-09-01\">September 1, 2026</time>");
+    expect(html.indexOf('class="signature"')).toBeLessThan(html.indexOf('class="cta"'));
+  });
+
+  // The signature's closing line in the persona doc is the non-affiliation
+  // notice, which already ships from each post's `disclaimer` frontmatter.
+  it("states the non-affiliation notice once, not once per block that mentions it", () => {
+    const occurrences = html.split("Sponsee™ is not affiliated with Twitch, YouTube, or Kick.").length - 1;
+    expect(occurrences).toBe(1);
   });
 
   it("ships the approved CTA copy and the non-affiliation footer", () => {
@@ -201,6 +313,41 @@ describe("renderPostPage", () => {
   });
 });
 
+describe("renderIndexPage", () => {
+  it("shows the byline on each card so the author signal starts at the index", () => {
+    const post = parsePost(POST_SOURCE, "sponsor-paying-late");
+    const html = renderIndexPage([post], new Map([["quinn-alvarez", QUINN]]));
+    expect(html).toContain('<a href="/blog/authors/quinn-alvarez" rel="author">Quinn Alvarez</a> · Editor, Sponsee');
+  });
+});
+
+describe("renderAuthorPage", () => {
+  const post = parsePost(POST_SOURCE, "sponsor-paying-late");
+  const html = renderAuthorPage(QUINN, [post]);
+
+  it("emits ProfilePage structured data wrapping the Person", () => {
+    const jsonLd = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(html);
+    const parsed = JSON.parse(jsonLd![1]);
+    expect(parsed[0]["@type"]).toBe("ProfilePage");
+    expect(parsed[0].mainEntity["@type"]).toBe("Person");
+    expect(parsed[0].mainEntity.url).toBe("https://sponsee.app/blog/authors/quinn-alvarez");
+    expect(parsed[0].mainEntity.jobTitle).toBe("Editor");
+    expect(parsed[0].mainEntity.worksFor.name).toBe("Sponsee");
+  });
+
+  it("canonicalises to its own URL and carries the bio", () => {
+    expect(html).toContain('<link rel="canonical" href="https://sponsee.app/blog/authors/quinn-alvarez" />');
+    expect(html).toContain("Quinn is the editorial desk at Sponsee.");
+    expect(html).toContain("Editor, Sponsee · they/them");
+  });
+
+  // The reason this page earns its keep beyond the byline: it links every post,
+  // which is what the OpenSEO audit flags the posts as missing.
+  it("links every post by the author, making it the internal-linking hub", () => {
+    expect(html).toContain('<a href="/blog/sponsor-paying-late">');
+  });
+});
+
 describe("renderSitemap", () => {
   it("lists the blog index and every post, and no retired .html page", () => {
     const xml = renderSitemap([{ slug: "sponsor-paying-late" }, { slug: "chase-email-templates" }]);
@@ -208,5 +355,10 @@ describe("renderSitemap", () => {
     expect(xml).toContain("<loc>https://sponsee.app/blog/sponsor-paying-late</loc>");
     expect(xml).toContain("<loc>https://sponsee.app/blog/chase-email-templates</loc>");
     expect(xml).not.toContain("/blog/how-to-chase-late-payments.html");
+  });
+
+  it("lists the author page, so the hub is discoverable without a crawl of the posts", () => {
+    const xml = renderSitemap([{ slug: "sponsor-paying-late" }], [{ slug: "quinn-alvarez" }]);
+    expect(xml).toContain("<loc>https://sponsee.app/blog/authors/quinn-alvarez</loc>");
   });
 });

@@ -18,6 +18,10 @@ const publishedSlugs = readdirSync(join(appRoot, "content", "blog"))
   .filter((name) => name.endsWith(".md"))
   .map((name) => name.replace(/\.md$/, ""));
 
+const authorSlugs = readdirSync(join(appRoot, "content", "authors"))
+  .filter((name) => name.endsWith(".md"))
+  .map((name) => name.replace(/\.md$/, ""));
+
 const linkSources = ["src/App.tsx", "src/components/Layout.tsx"];
 
 // Matches both the JSX attribute (`href="/blog/x"`) and the data-object form
@@ -51,6 +55,24 @@ describe("marketing site links into /blog", () => {
     expect(cardBlock).not.toBeNull();
     const carded = blogHrefs(cardBlock![1]).map((href) => href.replace("/blog/", ""));
     expect([...carded].sort()).toEqual([...publishedSlugs].sort());
+  });
+});
+
+// Same failure mode as the href tests above, one layer down: the byline is set
+// in a post's frontmatter and the page it links to comes from a different
+// directory, so nothing else notices when one names a byline the other retired.
+describe("post bylines", () => {
+  const bylineOf = (slug: string) =>
+    /^author:\s*(.+)$/m.exec(readFileSync(join(appRoot, "content", "blog", `${slug}.md`), "utf8"))?.[1].trim();
+
+  it("has a byline to sign posts with", () => {
+    expect(authorSlugs).toContain("quinn-alvarez");
+  });
+
+  it.each(publishedSlugs)("%s is signed by an author with a registry file", (slug) => {
+    // Unset means the default byline, which parsePost resolves to quinn-alvarez.
+    const author = bylineOf(slug)?.replace(/^"|"$/g, "") ?? "quinn-alvarez";
+    expect(authorSlugs).toContain(author);
   });
 });
 
