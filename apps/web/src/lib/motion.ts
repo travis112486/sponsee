@@ -9,12 +9,29 @@
  * scale and the same entrance/draw/grow helpers.
  *
  * Usage:
- *   import { motion } from "framer-motion";
- *   import { entrance, EASE, DURATION } from "@/lib/motion";
+ *   import { motion, entrance, EASE, DURATION } from "@/lib/motion";
  *
  *   <motion.div {...entrance(index)}>…</motion.div>
  *   <motion.path {...draw(0.4)} />
  */
+
+/**
+ * The house animated-element factory — framer's `m`, not its `motion` (SPO-241).
+ *
+ * Import it from here; `eslint no-restricted-imports` fails the build on a
+ * direct `framer-motion` import outside `MotionProvider`. The two have the same
+ * component surface, but `motion` statically links the whole animation engine
+ * into whichever route chunk first touches it. On SPO-235 that was the Dashboard
+ * chunk — the first screen a signed-in creator sees — which went 6.4 kB -> 152 kB
+ * for that reason alone. `m` ships the component shell and takes its behaviour
+ * from the feature bundle `MotionProvider` loads once at the app shell, so every
+ * screen shares one copy.
+ *
+ * Aliased rather than re-exported as `m` because `m` is a natural name for a
+ * loop variable (`months.map((m) => …)` in RevenueChart already used it), and a
+ * shadowed animation factory is a confusing way to find that out.
+ */
+export { m as motion } from "framer-motion";
 
 /**
  * The house easing curve — a fast-out, long-settle cubic bezier. Every animated

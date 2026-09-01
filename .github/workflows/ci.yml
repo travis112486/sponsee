@@ -41,6 +41,11 @@ jobs:
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # SPO-241: a route chunk that quietly triples is not a failing test. This
+      # asserts framer-motion's engine stayed in the shared `motion-*` chunk
+      # instead of being statically linked into a route, and holds every chunk
+      # to a gzip ceiling. Reads apps/web/dist, so it must follow `pnpm build`.
+      - run: node scripts/verify-web-bundle-budget.mjs
 
   test:
     runs-on: ubuntu-latest
