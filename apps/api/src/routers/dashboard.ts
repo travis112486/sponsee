@@ -11,14 +11,15 @@ import {
 } from "@sponsee/db/schema";
 import { dealStages } from "@sponsee/shared";
 import {
-  addZonedDays,
-  addZonedMonths,
   formatMonthKey,
   getZonedParts,
   resolveTimeZone,
   startOfZonedMonth,
+  startOfZonedMonthOffset,
   startOfZonedQuarter,
+  startOfZonedQuarterOffset,
   startOfZonedWeek,
+  startOfZonedWeekOffset,
   startOfZonedYear,
   zonedMonthKey,
 } from "../zoned-time.js";
@@ -40,13 +41,23 @@ function periodBounds(
   now: Date,
   timeZone: string
 ): { start: Date; end: Date } {
+  // The end is the *next civil period's* start, not the resolved start shifted
+  // forward: shifting preserves the start's local time of day, which is 01:00
+  // rather than 00:00 whenever a spring-forward opens at midnight, and that
+  // overruns the next period's start by the gap width (SPO-251). Deriving both
+  // sides from the civil calendar makes `end(P) === start(P+1)` hold by
+  // construction, so the half-open filter below cannot double-count.
   if (period === "month") {
-    const start = startOfZonedMonth(now, timeZone);
-    return { start, end: addZonedMonths(start, 1, timeZone) };
+    return {
+      start: startOfZonedMonth(now, timeZone),
+      end: startOfZonedMonthOffset(now, 1, timeZone),
+    };
   }
   if (period === "quarter") {
-    const start = startOfZonedQuarter(now, timeZone);
-    return { start, end: addZonedMonths(start, 3, timeZone) };
+    return {
+      start: startOfZonedQuarter(now, timeZone),
+      end: startOfZonedQuarterOffset(now, 1, timeZone),
+    };
   }
   // YTD: Jan 1 local through `now` (revenue is attributed to a recorded paid
   // date, so there is never a paidAt in the future to exclude).
@@ -165,10 +176,13 @@ export const dashboardRouter = createTRPCRouter({
       });
 
       // ── Deliverables due this week (creator-wide, scoped through deals) ──
-      // Monday 00:00 creator-local. `+7 days` is civil, not `+7 * DAY_MS`: a
-      // spring-forward week is 167 hours long and a fall-back week is 169.
+      // Monday 00:00 creator-local. The end is next Monday's *civil* start, not
+      // this week's start shifted by 7 days: a spring-forward week is 167 hours
+      // long and a fall-back week is 169, and a week that opens in a midnight
+      // gap starts at 01:00 local, which a +7d shift would carry forward
+      // (SPO-251).
       const weekStart = startOfZonedWeek(now, timeZone);
-      const weekEnd = addZonedDays(weekStart, 7, timeZone);
+      const weekEnd = startOfZonedWeekOffset(now, 1, timeZone);
       const delRows = await ctx.db
         .select({
           id: deliverables.id,

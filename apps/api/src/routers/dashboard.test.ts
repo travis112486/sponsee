@@ -596,4 +596,61 @@ describe("dashboard.overview period math is creator-local", () => {
     expect(mar.revenue.periodStart).toEqual(new Date("2026-03-01T00:00:00Z"));
     expect(mar.revenue.totalCents).toBe(1234);
   });
+
+  // ── Period seams: end(P) must be exactly start(P+1) (SPO-251) ──
+  //
+  // Deriving the end by shifting the resolved start forward inherited the
+  // start's local time of day, which is 01:00 rather than 00:00 when a
+  // spring-forward opens at midnight. The half-open windows then overlapped by
+  // the gap width and the same payment landed in two consecutive periods.
+
+  it("does not count a payment in both Q4 and Q1 when the year opens in a DST gap", async () => {
+    // Paraguay sprang forward at midnight on 2023-10-01, so Q4-2023 STARTS at
+    // 01:00 local (04:00Z) — correct. Shifting that start by 3 months put
+    // Q4's END at 2024-01-01 01:00 local (04:00Z), an hour past where Q1-2024
+    // opens (03:00Z). This payment is 2024-01-01 00:30 local, inside that hour.
+    const { creatorId, dealId } = await seedCreator("America/Asuncion");
+    await paidInvoice(creatorId, dealId, 1, 90000, "2024-01-01T03:30:00Z");
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorId));
+    const q4 = await caller.overview({ period: "quarter", now: "2023-11-15T12:00:00Z" });
+    const q1 = await caller.overview({ period: "quarter", now: "2024-02-15T12:00:00Z" });
+
+    expect(q4.revenue.periodStart).toEqual(new Date("2023-10-01T04:00:00Z"));
+    expect(q4.revenue.periodEnd).toEqual(new Date("2024-01-01T03:00:00Z"));
+    expect(q1.revenue.periodStart).toEqual(new Date("2024-01-01T03:00:00Z"));
+    // The seam itself: no overlap, no gap.
+    expect(q4.revenue.periodEnd).toEqual(q1.revenue.periodStart);
+
+    // Counted once, in Q1 — and the trailing-12 series, which keys off
+    // zonedMonthKey rather than the period bounds, agrees with it. Those two
+    // disagreeing for one invoice is the failure SPO-239 exists to prevent.
+    expect(q4.revenue.totalCents).toBe(0);
+    expect(q1.revenue.totalCents).toBe(90000);
+    expect(q1.revenue.monthly.find((m) => m.month === "2024-01")?.valueCents).toBe(90000);
+    expect(q1.revenue.monthly.find((m) => m.month === "2023-12")?.valueCents).toBe(0);
+  });
+
+  it("does not pull next week's deliverable into this week when the week opens in a DST gap", async () => {
+    // Same defect on the `addZonedDays(weekStart, 7)` path. Iran sprang forward
+    // at midnight on Monday 2016-03-21, so that week starts at 01:00 local
+    // (20:30Z Sunday) and the shifted end was 2016-03-28 01:00 local (20:30Z)
+    // — half an hour past the next week's 19:30Z start. This deliverable is due
+    // 2016-03-28 00:30 local, i.e. next week.
+    const { creatorId, dealId } = await seedCreator("Asia/Tehran");
+    await db.insert(schema.deliverables).values({
+      dealId,
+      title: "Next week's clip",
+      status: "not_started",
+      dueAt: new Date("2016-03-27T20:00:00Z"),
+      position: 0,
+    });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorId));
+    const thisWeek = await caller.overview({ now: "2016-03-23T12:00:00Z" });
+    const nextWeek = await caller.overview({ now: "2016-03-30T12:00:00Z" });
+
+    expect(thisWeek.deliverablesDue).toEqual([]);
+    expect(nextWeek.deliverablesDue.map((d) => d.title)).toEqual(["Next week's clip"]);
+  });
 });
