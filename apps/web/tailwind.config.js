@@ -66,6 +66,9 @@ export default {
         twitch: "#8B5CF6",
         youtube: "#E5484D",
         kick: "#58A617",
+        // TikTok's own brand mark is black; ink keeps it inside the warm set
+        // instead of importing the neon cyan/magenta (SPO-193).
+        tiktok: "#1B1815",
       },
       fontFamily: {
         sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
