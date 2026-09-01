@@ -16,6 +16,14 @@
 //     --audience wave-1-outreach \
 //     --touch T2 --channel email
 //
+// The ledger path must exist. `--ledger` is a hand-typed argument on send day
+// whose failure mode is mailing someone who opted out: a missing file reads as
+// "nobody opted out", which is indistinguishable from a typo in the path. Every
+// other input here already fails closed, so this one does too — `--touch T1`
+// takes `--allow-missing-ledger` for the one case where there genuinely is no
+// ledger yet. The render header names the ledger path and its entry count, so a
+// silent 0 is visible even when the file exists and is empty.
+//
 // The live Resend read happens on BOTH channels. The hosted unsubscribe URL is
 // the only opt-out the email copy offers, so a click on it is the primary
 // opt-out event for Wave 1 — and it exists only in Resend's contact state. A DM
@@ -62,18 +70,21 @@ if (RESEND_API !== RESEND_API_DEFAULT) {
   process.stderr.write(banner);
 }
 
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
 function usage(message) {
   process.stderr.write(
     `${message}\n\nUsage:\n  node scripts/outreach/wave1-preflight.mjs \\\n` +
       `    --roster <path> --ledger <path> --audience <name|id> \\\n` +
       `    --touch T1|T2|T3 --channel email|dm \\\n` +
-      `    [--apply-suppressions] [--require-first-names] [--json <path>]\n`,
+      `    [--apply-suppressions] [--require-first-names] [--json <path>] \\\n` +
+      `    [--allow-missing-ledger]   (T1 only)\n`,
   );
   process.exit(2);
 }
 
 function parseArgs(argv) {
-  const args = { applySuppressions: false, requireFirstNames: false };
+  const args = { applySuppressions: false, requireFirstNames: false, allowMissingLedger: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
@@ -85,6 +96,7 @@ function parseArgs(argv) {
       case "--json": args.json = argv[++i]; break;
       case "--apply-suppressions": args.applySuppressions = true; break;
       case "--require-first-names": args.requireFirstNames = true; break;
+      case "--allow-missing-ledger": args.allowMissingLedger = true; break;
       default: usage(`Unknown argument: ${arg}`);
     }
   }
@@ -96,6 +108,13 @@ function parseArgs(argv) {
   // read to see an email unsubscribe, which is the only opt-out most recipients
   // are offered.
   if (!args.audience) usage("--audience is required on both channels");
+  // T1 is the only touch with a defensible reason to have no ledger file: no
+  // signal has come in yet. By T2 the ledger IS the record of who replied to or
+  // opted out of T1, so "there is no ledger" is not a state that can be true —
+  // it is a wrong path. An empty file is a statement; a missing one is an accident.
+  if (args.allowMissingLedger && args.touch !== "T1") {
+    usage(`--allow-missing-ledger is only accepted with --touch T1 (got ${args.touch}).`);
+  }
   return args;
 }
 
@@ -237,8 +256,25 @@ async function readRoster(file, rules) {
 }
 
 /** JSONL, one suppression signal per line. Blank lines and `#` comments ignored. */
-async function readLedger(file, rules) {
-  if (!existsSync(file)) return [];
+async function readLedger(file, rules, { allowMissing }) {
+  if (!existsSync(file)) {
+    if (!allowMissing) {
+      // The fails-open case this guard exists for. A missing ledger yields zero
+      // suppressions, which downstream is identical to "nobody opted out" — so a
+      // typo'd --ledger clears a T2 send to everyone who replied to T1. Every
+      // other input on this path already stops the touch; so does this one.
+      throw new Error(
+        `${file}: ledger file not found (resolved to ${path.resolve(file)}).\n` +
+          `A missing ledger suppresses nobody, which is indistinguishable from "nobody opted out" —\n` +
+          `on T2/T3 that clears a send to everyone who replied or unsubscribed at T1.\n` +
+          `  - Check the path above.\n` +
+          `  - T1 before any signal has come in: pass --allow-missing-ledger (T1 only).\n` +
+          `  - T2/T3 with genuinely no suppressions: create an empty ledger file. An empty file is a\n` +
+          `    statement; a missing one is an accident.`,
+      );
+    }
+    return { path: file, entries: [], missing: true };
+  }
   const raw = await readFile(file, "utf8");
   const entries = [];
   raw.split("\n").forEach((line, i) => {
@@ -256,10 +292,10 @@ async function readLedger(file, rules) {
     // both produce an entry that suppresses nobody while looking present.
     entries.push(rules.validateLedgerEntry(parsed, `${file}:${i + 1}`));
   });
-  return entries;
+  return { path: file, entries, missing: false };
 }
 
-function render(plan, syncPlan, blockers, args) {
+function render(plan, syncPlan, blockers, args, sources) {
   const counts = { send: 0, suppress: 0, skip: 0, block: 0 };
   const lines = [];
   for (const { rosterId, name, decision } of plan.decisions) {
@@ -274,6 +310,14 @@ function render(plan, syncPlan, blockers, args) {
   }
 
   process.stdout.write(`\nWave 1 preflight — ${args.touch} / ${args.channel}\n`);
+  // Name every file this run actually read, with its size. A count of 0 that the
+  // operator can see is a question they can ask; a count of 0 nothing prints is
+  // the shape of the SPO-287 defect, and it recurs for any input read this way.
+  process.stdout.write(`roster: ${args.roster} (${plural(sources.rosterRows, "row")})\n`);
+  process.stdout.write(
+    `ledger: ${sources.ledger.path} ` +
+      `${sources.ledger.missing ? "(MISSING — allowed by --allow-missing-ledger)" : `(${plural(sources.ledger.entries.length, "entry", "entries")})`}\n`,
+  );
   process.stdout.write(`${"─".repeat(76)}\n`);
   process.stdout.write(`${lines.join("\n")}\n`);
   process.stdout.write(`${"─".repeat(76)}\n`);
@@ -364,10 +408,12 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const rules = await loadRules();
 
-  const [roster, ledger] = await Promise.all([
+  const [roster, ledgerFile] = await Promise.all([
     readRoster(args.roster, rules),
-    readLedger(args.ledger, rules),
+    readLedger(args.ledger, rules, { allowMissing: args.allowMissingLedger }),
   ]);
+  const ledger = ledgerFile.entries;
+  const sources = { rosterRows: roster.length, ledger: ledgerFile };
 
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
@@ -436,13 +482,35 @@ async function main() {
 
   const blockers = rules.contactSyncBlockers(syncPlan, { requireFirstNames: args.requireFirstNames });
 
-  const counts = render(plan, syncPlan, blockers, args);
+  const counts = render(plan, syncPlan, blockers, args, sources);
 
   if (args.json) {
     const { writeFile } = await import("node:fs/promises");
     await writeFile(
       args.json,
-      `${JSON.stringify({ touch: args.touch, channel: args.channel, audienceId, plan, syncPlan, blockers }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          touch: args.touch,
+          channel: args.channel,
+          audienceId,
+          // The audit record has to say which ledger produced these decisions.
+          // "0 suppressions" is only meaningful next to the file it came from.
+          sources: {
+            roster: { path: args.roster, resolvedPath: path.resolve(args.roster), rows: roster.length },
+            ledger: {
+              path: ledgerFile.path,
+              resolvedPath: path.resolve(ledgerFile.path),
+              entries: ledger.length,
+              missing: ledgerFile.missing,
+            },
+          },
+          plan,
+          syncPlan,
+          blockers,
+        },
+        null,
+        2,
+      )}\n`,
     );
   }
 

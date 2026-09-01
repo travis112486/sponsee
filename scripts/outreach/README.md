@@ -54,6 +54,12 @@ contact state. A DM preflight that skipped that read would clear a T2/T3 DM to
 someone who unsubscribed at T1. If Resend is unreachable the gate stops the
 touch; blocking during an outage is the safe direction.
 
+**`--ledger` must point at a file that exists.** It is the only hand-typed
+argument on send day whose failure mode is mailing someone who opted out: a
+missing file suppresses nobody, and downstream that is indistinguishable from
+"nobody opted out". So a path that does not resolve is exit 2, not an empty
+ledger — see [the ledger path is load-bearing](#the-ledger-path-is-load-bearing).
+
 ```bash
 pnpm install                          # a fresh checkout has no node_modules
 pnpm --filter @sponsee/shared build   # the rules live in @sponsee/shared
@@ -183,6 +189,41 @@ than a silently dropped opt-out:
 
 Reasons: `replied`, `stop_requested`, `unsubscribed`, `bounced`, `complained`,
 `manual`.
+
+### The ledger path is load-bearing
+
+The file must exist. A path that does not resolve is exit 2 — it is not read as
+an empty ledger.
+
+This is the one input where "we could not read it" and "nobody opted out" used
+to produce the same run. Everything else here already fails closed: no
+`RESEND_API_KEY` is exit 2, an unreachable audience is exit 2, a malformed
+ledger *line* is exit 2, a missing roster file is ENOENT. A missing ledger
+returned zero suppressions and said nothing, so on T2 the gate cleared a send to
+everyone who had replied to T1 — with the same roster, the same audience and the
+same real ledger sitting on disk one character away.
+
+Two things close it:
+
+- **`--allow-missing-ledger`, accepted on `--touch T1` only.** T1 is the only
+  touch where "there is no ledger yet" can be true; by T2 the ledger *is* the
+  record of who replied to T1. On T2/T3 with genuinely nothing to suppress,
+  create an empty file. An empty file is a statement; a missing one is an
+  accident.
+- **The run names what it read.** Every run prints the roster and ledger paths
+  with their sizes before the decision lines, and the `--json` audit record
+  carries the same under `sources` with resolved absolute paths:
+
+  ```
+  Wave 1 preflight — T2 / email
+  roster: outreach/wave1-roster.json (26 rows)
+  ledger: outreach/wave1-ledger.jsonl (3 entries)
+  ```
+
+  Read those two lines before the SEND/SUPPRESS list. Requiring the file to
+  exist closes the mistyped path; printing the count is what makes the next
+  variant of the same mistake — right path, wrong or truncated contents —
+  visible without another code change.
 
 ## Rules worth knowing before you read the output
 
