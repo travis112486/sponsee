@@ -335,7 +335,7 @@ export const invoices = pgTable(
     index("invoices_status_idx").on(t.status),
     index("invoices_due_at_idx").on(t.dueAt),
     uniqueIndex("invoices_creator_number_idx").on(t.creatorId, t.number),
-    check("invoices_paid_requires_paid_at", sql`${t.status} <> 'paid' OR ${t.paidAt} IS NOT NULL`),
+    check("invoices_paid_requires_paid_at", sql`(${t.status} = 'paid') = (${t.paidAt} IS NOT NULL)`),
   ]
 );
 
