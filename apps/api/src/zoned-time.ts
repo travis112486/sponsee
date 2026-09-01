@@ -180,25 +180,58 @@ export function addZonedDays(date: Date, days: number, timeZone: string): Date {
   );
 }
 
-/** ISO-8601 week: Monday 00:00 creator-local. */
-export function startOfZonedWeek(date: Date, timeZone: string): Date {
+// ── Calendar-period boundaries ──
+//
+// A period END must be derived from the *civil* calendar, never by shifting the
+// resolved period START (SPO-251). The two are not the same operation:
+// `addZonedMonths`/`addZonedDays` preserve their input's local time of day, and
+// a period start is not always local midnight. When a spring-forward opens *at*
+// midnight, local 00:00 does not exist, and `startOfZonedMonth` correctly
+// returns the transition instant -- which reads 01:00 local. Shifting that
+// carries the 01:00 to the next boundary, landing one gap width *after* the
+// next period's start, so the half-open interval [start, end) overlaps its
+// successor and an invoice paid in the seam is counted in both periods.
+//
+// The `*Offset` variants below resolve the next period's civil first-of-period
+// directly, so `end(P) === start(P+1)` holds by construction: both sides resolve
+// the identical wall clock through the identical resolver.
+
+/** First instant of the local ISO week `weeks` from the week containing `date`. */
+export function startOfZonedWeekOffset(date: Date, weeks: number, timeZone: string): Date {
   const p = getZonedParts(date, timeZone);
   // getUTCDay on the civil date gives the weekday of the *local* calendar day.
   const weekday = new Date(civilMs({ year: p.year, month: p.month, day: p.day })).getUTCDay();
   const sinceMonday = (weekday + 6) % 7;
-  const civil = normalizeCivil(p.year, p.month, p.day - sinceMonday);
+  const civil = normalizeCivil(p.year, p.month, p.day - sinceMonday + weeks * 7);
+  return zonedWallClockToUtc(civil, timeZone);
+}
+
+/** ISO-8601 week: Monday 00:00 creator-local. */
+export function startOfZonedWeek(date: Date, timeZone: string): Date {
+  return startOfZonedWeekOffset(date, 0, timeZone);
+}
+
+/** First instant of the local month `months` from the month containing `date`. */
+export function startOfZonedMonthOffset(date: Date, months: number, timeZone: string): Date {
+  const p = getZonedParts(date, timeZone);
+  const civil = normalizeCivil(p.year, p.month + months, 1);
   return zonedWallClockToUtc(civil, timeZone);
 }
 
 export function startOfZonedMonth(date: Date, timeZone: string): Date {
+  return startOfZonedMonthOffset(date, 0, timeZone);
+}
+
+/** First instant of the local quarter `quarters` from the quarter containing `date`. */
+export function startOfZonedQuarterOffset(date: Date, quarters: number, timeZone: string): Date {
   const p = getZonedParts(date, timeZone);
-  return zonedWallClockToUtc({ year: p.year, month: p.month, day: 1 }, timeZone);
+  const month = Math.floor((p.month - 1) / 3) * 3 + 1;
+  const civil = normalizeCivil(p.year, month + quarters * 3, 1);
+  return zonedWallClockToUtc(civil, timeZone);
 }
 
 export function startOfZonedQuarter(date: Date, timeZone: string): Date {
-  const p = getZonedParts(date, timeZone);
-  const month = Math.floor((p.month - 1) / 3) * 3 + 1;
-  return zonedWallClockToUtc({ year: p.year, month, day: 1 }, timeZone);
+  return startOfZonedQuarterOffset(date, 0, timeZone);
 }
 
 export function startOfZonedYear(date: Date, timeZone: string): Date {
@@ -208,8 +241,11 @@ export function startOfZonedYear(date: Date, timeZone: string): Date {
 
 /**
  * Shift by whole calendar months in the zone, preserving the local time of day.
- * Day-of-month overflow rolls forward the way `Date` does (Jan 31 + 1 → Mar 3);
- * callers in this codebase only ever shift month *starts*, where that cannot fire.
+ * Day-of-month overflow rolls forward the way `Date` does (Jan 31 + 1 → Mar 3).
+ *
+ * Preserving the local time of day is the contract, so this is NOT how to get a
+ * period end — use `startOfZonedMonthOffset`/`startOfZonedQuarterOffset` for
+ * that. See the boundary section above (SPO-251).
  */
 export function addZonedMonths(date: Date, months: number, timeZone: string): Date {
   const p = getZonedParts(date, timeZone);
