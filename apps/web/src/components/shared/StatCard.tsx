@@ -35,10 +35,18 @@ export interface StatCardProps {
   /**
    * The figure itself, already in display units — pass dollars, not cents. The
    * card tweens it; it does not format currency beyond an optional `$` prefix.
+   *
+   * `null` means "this number does not exist yet" and renders `emptyLabel`
+   * instead of a figure. It is deliberately not the same as `0`: a KPI whose
+   * inputs are missing must never render `$0.00`, because a creator cannot tell
+   * that apart from having genuinely earned nothing. Founder-ratified on the
+   * SPO-45 decision card and carried into SPO-194.
    */
-  value: number;
+  value: number | null;
   currency?: boolean;
   decimals?: number;
+  /** Shown in place of the figure when `value` is `null`. */
+  emptyLabel?: string;
   /** Period-over-period chip, e.g. `{ text: "+12%", tone: "accent" }`. */
   delta?: DeltaChip;
   /** One line of context under the figure, e.g. "3 invoices". */
@@ -66,6 +74,7 @@ export function StatCard({
   value,
   currency = false,
   decimals = 0,
+  emptyLabel = "Not enough data yet",
   delta,
   context,
   sparkline,
@@ -74,7 +83,10 @@ export function StatCard({
   index = 0,
   className,
 }: StatCardProps) {
-  const animated = useCountUp(value);
+  // Hooks cannot be conditional, so the tween always runs; its output is simply
+  // not rendered in the empty state.
+  const animated = useCountUp(value ?? 0);
+  const empty = value === null;
   const Tag = onClick ? "button" : "div";
 
   return (
@@ -97,17 +109,27 @@ export function StatCard({
         </div>
 
         <div className="mt-2 flex items-baseline gap-2">
-          <span className="tnum text-[26px] font-semibold tracking-[-0.02em] text-ink">
-            {formatCount(animated, { currency, decimals })}
-          </span>
-          {delta && (
+          {empty ? (
+            // Sized to sit on the same baseline as a figure so a row of cards
+            // does not jump when one of them has no data.
+            <span className="text-[15px] font-medium leading-[34px] text-ink-3">
+              {emptyLabel}
+            </span>
+          ) : (
+            <span className="tnum text-[26px] font-semibold tracking-[-0.02em] text-ink">
+              {formatCount(animated, { currency, decimals })}
+            </span>
+          )}
+          {/* A delta describes a change in the figure, so it is meaningless
+              without one. */}
+          {delta && !empty && (
             <span className={deltaChip({ tone: delta.tone })}>{delta.text}</span>
           )}
         </div>
 
         <div className="mt-auto flex items-end justify-between gap-2 pt-2">
           {context && <span className="text-[11px] leading-4 text-ink-3">{context}</span>}
-          {sparkline && <Sparkline points={sparkline} />}
+          {sparkline && !empty && <Sparkline points={sparkline} />}
         </div>
 
         {extra}
