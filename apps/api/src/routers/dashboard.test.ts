@@ -325,41 +325,6 @@ describe("dashboard.overview", () => {
     }
   });
 
-  it("excludes a status='paid' invoice with no paidAt from revenue", async () => {
-    // Ratified semantic: without a recorded paid date there is no truthful
-    // period to attribute the money to, so it is not revenue. Note the money is
-    // then invisible on every surface — status != 'open' keeps it out of overdue
-    // as well.
-    await insertInvoice({
-      creatorId: creatorAId,
-      dealId: dealAFlatId,
-      number: 1,
-      amountCents: 500000,
-      status: "paid",
-      paidAt: null,
-      dueAt: new Date("2026-01-01T00:00:00Z"),
-    });
-    // A real paid invoice, so the assertions below cannot pass by way of an
-    // empty invoices table.
-    await insertInvoice({
-      creatorId: creatorAId,
-      dealId: dealAFlatId,
-      number: 2,
-      amountCents: 7000,
-      status: "paid",
-      paidAt: new Date("2026-03-05T00:00:00Z"),
-    });
-
-    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
-    const result = await caller.overview({ period: "ytd", now: NOW_ISO });
-
-    expect(result.revenue.totalCents).toBe(7000);
-    expect(result.revenue.byType).toEqual({ flat: 7000, bounty: 0, hybrid: 0 });
-    expect(result.revenue.monthly.reduce((s, m) => s + m.valueCents, 0)).toBe(7000);
-    expect(result.overdue.count).toBe(0);
-    expect(result.overdue.totalCents).toBe(0);
-  });
-
   it("counts an orphaned invoice (dealId null) in totalCents but not in the byType split", async () => {
     // Ratified semantic: an orphaned invoice is still the creator's money, but
     // it cannot be typed, so `totalCents != flat + bounty + hybrid` by design.

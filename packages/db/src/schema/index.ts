@@ -13,7 +13,9 @@ import {
   index,
   uniqueIndex,
   serial,
+  check,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // Enums
 export const platformEnum = pgEnum("platform", ["twitch", "youtube", "kick", "tiktok"]);
@@ -333,6 +335,7 @@ export const invoices = pgTable(
     index("invoices_status_idx").on(t.status),
     index("invoices_due_at_idx").on(t.dueAt),
     uniqueIndex("invoices_creator_number_idx").on(t.creatorId, t.number),
+    check("invoices_paid_requires_paid_at", sql`${t.status} <> 'paid' OR ${t.paidAt} IS NOT NULL`),
   ]
 );
 

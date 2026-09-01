@@ -109,6 +109,16 @@ export const invoiceRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+
+      // Keep status='paid' <=> paidAt IS NOT NULL atomic: callers may set either
+      // field independently, so this mutation must not be able to produce a
+      // paid invoice with no paidAt (or a non-paid invoice with a stale one).
+      if (data.status === "paid" && data.paidAt == null) {
+        data.paidAt = new Date();
+      } else if (data.status !== undefined && data.status !== "paid") {
+        data.paidAt = null;
+      }
+
       const [invoice] = await ctx.db
         .update(invoices)
         .set({ ...data, updatedAt: new Date() })
