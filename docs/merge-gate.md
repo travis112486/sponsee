@@ -33,14 +33,20 @@ first. Git only sees textual conflicts; it cannot see semantic ones.
 
 This is not hypothetical. SPO-247 is the observed instance: PR #81 adds a
 `CHECK (status <> 'paid' OR paid_at IS NOT NULL)` constraint and PR #83 adds a
-test seeding exactly that row. Both green, and git merges them cleanly — they
-share `apps/api/src/routers/dashboard.test.ts` but the hunks do not overlap, so
-there is no textual conflict to see.
+test seeding exactly that row. Both green, and git merges them cleanly — at the
+time of the proof they touched **entirely disjoint file sets**: #81 as filed
+(`c9c7678`) did not touch `apps/api/src/routers/dashboard.test.ts` at all, and
+#83 touched only that file. Git therefore had nothing to compare and no conflict
+to report. The break was purely semantic: #81's constraint also lands in
+`apps/api/src/test-utils/schema-sql.ts`, the schema PGlite builds, which makes
+the row #83 seeds unrepresentable.
 
 Merging `origin/main` + both PRs **in a scratch worktree** produced
 `1 failed | 18 passed`. That dry run is how the collision was caught: it never
-reached `main`. `main` has not gone red, PR #81 is still open, and the
-sequencing work it caused is ongoing rather than concluded — see SPO-247.
+reached `main`, which has not gone red at any point. The sequencing it forced is
+now complete — #83 landed first (`de9d578`), #81 was rebased onto it and absorbed
+the colliding test in its own diff, and both are on `main` as of 2026-09-01
+(`aa18801`). See SPO-247.
 
 The point is what *would* have happened. Nothing in CI was going to catch it:
 with `strict: false` the second PR merges without ever being tested against the
