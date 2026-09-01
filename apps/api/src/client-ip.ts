@@ -7,6 +7,7 @@
 // this deployment was observed to actually receive, and overridable per host.
 
 import { getIPFromHeader } from "@better-auth/core/utils/ip";
+import { frontDoorVerified } from "./front-door.js";
 
 /**
  * Headers to read the client IP from, in order.
@@ -33,8 +34,18 @@ import { getIPFromHeader } from "@better-auth/core/utils/ip";
  * `x-vercel-forwarded-for` ever stopped arriving. Resolving to nothing is a
  * failure `sharedBucketRule` below can detect and survive; resolving to the
  * wrong address is not.
+ *
+ * Trust in `x-vercel-forwarded-for` is conditional (SPO-200): Vercel sets it and
+ * strips client-supplied values, so it is only worth reading on a request that
+ * demonstrably came through the front door. The static list below is what Better
+ * Auth's `advanced.ipAddress` reads — it must still name the header so legitimate
+ * front-door traffic keys per client. `ipAddressHeadersForRequest` below applies
+ * the conditional trust for our own resolution, dropping the header when the
+ * front-door secret was not present.
  */
 export const DEFAULT_IP_HEADERS = ["x-vercel-forwarded-for", "x-forwarded-for"];
+
+const VERCEL_FORWARDED_FOR = "x-vercel-forwarded-for";
 
 type Env = Record<string, string | undefined>;
 
@@ -67,6 +78,26 @@ export function ipAddressHeaders(env: Env = process.env): string[] {
 }
 
 /**
+ * Headers to read the client IP from for a *specific request*.
+ *
+ * Same as `ipAddressHeaders`, minus `x-vercel-forwarded-for` when the request
+ * did not carry a valid front-door secret. A request that bypasses Vercel can
+ * forge that header — trusting it would let a stranger pick their rate-limit
+ * bucket, or a victim's, which is exactly the SPO-102 hole. This is separate
+ * from the static list so the front-door gate and the trust decision move
+ * together while Better Auth's `advanced.ipAddress` still names the header for
+ * legitimate traffic.
+ */
+export function ipAddressHeadersForRequest(
+  headers: Headers,
+  env: Env = process.env,
+): string[] {
+  const list = ipAddressHeaders(env);
+  if (frontDoorVerified(headers, env)) return list;
+  return list.filter((h) => h !== VERCEL_FORWARDED_FOR);
+}
+
+/**
  * Best-effort client IP for application-level abuse limits.
  *
  * The leftmost entry of a forwarded chain is what every host we deploy to puts
@@ -75,7 +106,7 @@ export function ipAddressHeaders(env: Env = process.env): string[] {
  * scripted abuse; it is not an authentication or authorization signal.
  */
 export function clientIp(headers: Headers, env: Env = process.env): string | null {
-  for (const name of ipAddressHeaders(env)) {
+  for (const name of ipAddressHeadersForRequest(headers, env)) {
     const value = headers.get(name);
     if (!value) continue;
     const first = value.split(",")[0]?.trim();
@@ -116,9 +147,9 @@ export function resolvesAuthClientIp(
   env: Env = process.env
 ): boolean {
   const headers = source instanceof Headers ? source : source.headers;
-  const { ipAddressHeaders: names, ...options } = ipAddressOptions(env);
+  const { ipAddressHeaders: _names, ...options } = ipAddressOptions(env);
 
-  for (const name of names) {
+  for (const name of ipAddressHeadersForRequest(headers, env)) {
     const value = headers.get(name);
     if (value === null) continue;
     if (getIPFromHeader(value, options)) return true;

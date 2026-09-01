@@ -1,8 +1,21 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "ignoreCommand": "git diff --quiet \"${VERCEL_GIT_PREVIOUS_SHA:-HEAD^1}\" HEAD -- apps/web packages/shared package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json vercel.json",
-  "rewrites": [
-    { "source": "/api/:path*", "destination": "https://sponsee.onrender.com/api/:path*" },
-    { "source": "/((?!assets/).*)", "destination": "/index.html" }
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "https://sponsee.onrender.com/api/$1",
+      "transforms": [
+        {
+          "type": "request.headers",
+          "op": "set",
+          "target": { "key": "x-sponsee-front-door" },
+          "args": "$FRONT_DOOR_SECRET",
+          "env": ["FRONT_DOOR_SECRET"]
+        }
+      ]
+    },
+    { "handle": "filesystem" },
+    { "src": "/((?!assets/).*)", "dest": "/index.html" }
   ]
 }
