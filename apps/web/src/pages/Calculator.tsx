@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { motion } from "framer-motion";
 import { Bookmark, Copy, HelpCircle, Minus, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -10,6 +11,10 @@ import {
 } from "@sponsee/shared";
 import { trpc } from "@/trpc";
 import { cn } from "@/lib/utils";
+import { entrance } from "@/lib/motion";
+import { useCountUp } from "@/hooks/useCountUp";
+import { Slider } from "@/components/ui/slider";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BenchmarkBand, bandPlacement } from "@/components/BenchmarkBand";
 import QueryError from "@/components/QueryError";
 import { Skeleton } from "@/components/Skeleton";
@@ -227,18 +232,35 @@ function CpvhModal({ onClose }: { onClose: () => void }) {
 
 function ControlGroup({
   label,
+  tooltip,
   readout,
   children,
 }: {
   label: string;
+  /** Explanation shown on hover/focus of a help icon next to the label. */
+  tooltip?: ReactNode;
   readout?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="border-b border-hairline pb-5 last:border-0 last:pb-0">
       <div className="mb-2.5 flex items-baseline justify-between gap-3">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-3">
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-3">
           {label}
+          {tooltip && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`About ${label}`}
+                  className="normal-case tracking-normal text-ink-3 transition-colors hover:text-ink"
+                >
+                  <HelpCircle className="h-3 w-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[220px]">{tooltip}</TooltipContent>
+            </Tooltip>
+          )}
         </span>
         {readout && (
           <span className="font-mono text-[12px] font-medium text-ink">{readout}</span>
@@ -291,6 +313,15 @@ export default function Calculator() {
   const benchmark = computeQuery.data;
   const quoteCents = quoteOverride ?? benchmark?.mid ?? 0;
   const quoteCpvh = impliedCpvh(quoteCents, ccv, durationMinutes);
+
+  // Tween the headline figures toward each new input. Cents values tween as
+  // cents (formatCents divides at render time same as it always has); called
+  // unconditionally so hook order stays stable across the loading/error branches.
+  const animatedQuoteCents = useCountUp(quoteCents);
+  const animatedViewerHours = useCountUp(viewerHours);
+  const animatedFloor = useCountUp(benchmark?.floor ?? 0);
+  const animatedMid = useCountUp(benchmark?.mid ?? 0);
+  const animatedAgency = useCountUp(benchmark?.agency ?? 0);
 
   // Quick-set CCV chips built from the creator's real connected platforms —
   // no mock audience numbers.
@@ -397,17 +428,16 @@ export default function Calculator() {
               label="Average concurrent viewers (CCV)"
               readout={ccv.toLocaleString("en-US")}
             >
-              <input
-                type="range"
+              <Slider
                 min={CCV_MIN}
                 max={CCV_MAX}
                 step={10}
-                value={ccv}
-                onChange={(e) => setCcv(Number(e.target.value))}
-                onBlur={() => persist({})}
+                value={[ccv]}
+                onValueChange={([v]) => setCcv(v)}
+                onValueCommit={([v]) => persist({ ccv: v })}
                 aria-label="Average concurrent viewers"
-                aria-valuetext={`${ccv.toLocaleString("en-US")} concurrent viewers`}
-                className="w-full accent-pine"
+                formatValueText={(v) => `${v.toLocaleString("en-US")} concurrent viewers`}
+                className="py-1"
               />
               {platformsQuery.isLoading ? (
                 <Skeleton className="mt-3 h-6 w-2/3" />
@@ -464,22 +494,24 @@ export default function Calculator() {
                     <Plus className="h-3.5 w-3.5" />
                   </button>
                 </div>
-                <input
-                  type="range"
+                <Slider
                   min={HOURS_MIN}
                   max={HOURS_MAX}
                   step={0.5}
-                  value={hours}
-                  onChange={(e) => setHours(Number(e.target.value))}
-                  onBlur={() => persist({})}
+                  value={[hours]}
+                  onValueChange={([v]) => setHours(v)}
+                  onValueCommit={([v]) => persist({ hours: v })}
                   aria-label="Sponsored hours"
-                  aria-valuetext={`${formatHours(hours)} of sponsored airtime`}
-                  className="flex-1 accent-pine"
+                  formatValueText={(v) => `${formatHours(v)} of sponsored airtime`}
+                  className="flex-1 py-1"
                 />
               </div>
             </ControlGroup>
 
-            <ControlGroup label="Platforms in this activation">
+            <ControlGroup
+              label="Platforms in this activation"
+              tooltip="The platforms you check here nudge the benchmark rate to match how sponsors value that mix — leave everything unchecked to price against the unadjusted band."
+            >
               <div className="flex flex-wrap gap-2">
                 {allPlatforms.map((platform) => (
                   <label
@@ -508,7 +540,10 @@ export default function Calculator() {
               </p>
             </ControlGroup>
 
-            <ControlGroup label="Deliverable type">
+            <ControlGroup
+              label="Deliverable type"
+              tooltip="Deliverable type carries its own multiplier against the benchmark rate — a dedicated VOD typically commands more than a quick ad read at the same viewer-hours."
+            >
               <fieldset>
                 <legend className="sr-only">Deliverable type</legend>
                 <div className="flex rounded-lg border border-hairline bg-surface-subtle p-0.5">
@@ -559,35 +594,55 @@ export default function Calculator() {
             </div>
           ) : (
             <div className="rounded-[10px] bg-ink p-6 text-white shadow-warm-md">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/60">
+              <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-white/60">
                 Recommended price for this activation
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="About the benchmark band"
+                      className="text-white/50 transition-colors hover:text-white"
+                    >
+                      <HelpCircle className="h-3 w-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-[220px]">
+                    Floor is the walk-away number, midpoint is the fair ask, and agency high is
+                    what brand-agency buyers pay — the same CPVH benchmark band the deal form
+                    uses.
+                  </TooltipContent>
+                </Tooltip>
               </p>
               <p
                 role="status"
                 aria-live="polite"
                 className="mt-2 text-[48px] font-semibold leading-none text-white"
               >
-                {formatCents(quoteCents)}
+                {formatCents(Math.round(animatedQuoteCents))}
               </p>
               <p className="mt-2 text-[12.5px] text-white/60">
-                CPVH ${quoteCpvh.toFixed(2)} · {viewerHours.toLocaleString("en-US")}{" "}
+                CPVH ${quoteCpvh.toFixed(2)} · {Math.round(animatedViewerHours).toLocaleString("en-US")}{" "}
                 viewer-hours ({ccv.toLocaleString("en-US")} CCV × {formatHours(hours)})
               </p>
 
               <div className="mt-5 grid grid-cols-3 divide-x divide-white/15 border-y border-white/15">
                 {[
-                  { label: "Floor", value: benchmark.floor },
-                  { label: "Midpoint", value: benchmark.mid },
-                  { label: "Agency high", value: benchmark.agency },
-                ].map((col) => (
-                  <div key={col.label} className="px-4 py-3 first:pl-0">
+                  { label: "Floor", value: animatedFloor },
+                  { label: "Midpoint", value: animatedMid },
+                  { label: "Agency high", value: animatedAgency },
+                ].map((col, index) => (
+                  <motion.div
+                    key={col.label}
+                    {...entrance(index, { stagger: 0.08, delay: 0.05 })}
+                    className="px-4 py-3 first:pl-0"
+                  >
                     <p className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-white/50">
                       {col.label}
                     </p>
                     <p className="mt-1 font-mono text-[15px] font-medium text-white">
-                      {formatCents(col.value)}
+                      {formatCents(Math.round(col.value))}
                     </p>
-                  </div>
+                  </motion.div>
                 ))}
               </div>
 
