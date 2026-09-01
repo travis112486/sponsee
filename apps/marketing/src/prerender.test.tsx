@@ -1,3 +1,7 @@
+import { readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
 import { hydrateRoot } from "react-dom/client";
@@ -10,11 +14,17 @@ import { injectRoot } from "../scripts/prerender.mjs";
 // page. These tests hold the line on the two things that fix buys us —
 // crawlable copy, and internal links pointing at the blog posts.
 
-const BLOG_LINKS = [
-  "/blog/rate-calculator-for-streamers.html",
-  "/blog/pricing-your-first-sponsorship.html",
-  "/blog/how-to-chase-late-payments.html",
-];
+const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// Read from content/blog rather than a hardcoded list: SPO-199 retired the
+// three SPO-20 static pages this suite was originally written against, and
+// every post published since would have had to be added here by hand.
+const publishedHrefs = readdirSync(join(appRoot, "content", "blog"))
+  .filter((name) => name.endsWith(".md"))
+  .map((name) => `/blog/${name.replace(/\.md$/, "")}`);
+
+// Present in the footer of every page, so every pre-rendered entry carries them.
+const SITE_WIDE_LINKS = ["/blog/", "/privacy.html", "/terms.html"];
 
 function textOf(markup: string) {
   return markup.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -31,7 +41,18 @@ describe("pre-rendered marketing pages", () => {
     const markup = renderToString(PAGES[file]);
 
     expect(markup.match(/<h1[\s>]/g) ?? []).toHaveLength(1);
-    for (const href of [...BLOG_LINKS, "/privacy.html", "/terms.html"]) {
+    for (const href of SITE_WIDE_LINKS) {
+      expect(markup).toContain(`href="${href}"`);
+    }
+  });
+
+  it("passes link equity to every published post from the homepage", () => {
+    // The homepage is the internal-link hub; a post the pre-rendered markup
+    // never links is a post crawlers reach only through the /blog/ index.
+    const markup = renderToString(PAGES["index.html"]);
+
+    expect(publishedHrefs.length).toBeGreaterThan(0);
+    for (const href of publishedHrefs) {
       expect(markup).toContain(`href="${href}"`);
     }
   });
