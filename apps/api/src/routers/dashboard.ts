@@ -11,6 +11,7 @@ import {
 } from "@sponsee/db/schema";
 import { dealStages } from "@sponsee/shared";
 import {
+  addZonedMonths,
   formatMonthKey,
   getZonedParts,
   resolveTimeZone,
@@ -62,6 +63,33 @@ function periodBounds(
   // YTD: Jan 1 local through `now` (revenue is attributed to a recorded paid
   // date, so there is never a paidAt in the future to exclude).
   return { start: startOfZonedYear(now, timeZone), end: new Date(now) };
+}
+
+// The immediately preceding window of the same period type, used for the
+// revenue delta chip: previous month, previous quarter, or the same YTD
+// window in the prior year. Every boundary is creator-local, matching
+// `periodBounds`, so the delta compares like-for-like windows.
+function previousPeriodBounds(
+  period: "month" | "quarter" | "ytd",
+  now: Date,
+  timeZone: string
+): { start: Date; end: Date } {
+  if (period === "month") {
+    return {
+      start: startOfZonedMonthOffset(now, -1, timeZone),
+      end: startOfZonedMonthOffset(now, 0, timeZone),
+    };
+  }
+  if (period === "quarter") {
+    return {
+      start: startOfZonedQuarterOffset(now, -1, timeZone),
+      end: startOfZonedQuarterOffset(now, 0, timeZone),
+    };
+  }
+  // YTD: Jan 1 local through the same local moment one year earlier, so the
+  // comparison is not skewed by a leap year or a DST offset.
+  const end = addZonedMonths(now, -12, timeZone);
+  return { start: startOfZonedYear(end, timeZone), end };
 }
 
 export const dashboardRouter = createTRPCRouter({
@@ -121,6 +149,17 @@ export const dashboardRouter = createTRPCRouter({
           if (row.dealType === "flat") byType.flat += row.amountCents;
           else if (row.dealType === "bounty") byType.bounty += row.amountCents;
           else if (row.dealType === "hybrid") byType.hybrid += row.amountCents;
+        }
+      }
+
+      // Prior-period revenue for the delta chip. `null` (not 0) when the
+      // preceding window has no paid invoice at all, so the UI can suppress
+      // the chip instead of rendering a fake +100%.
+      const { start: prevStart, end: prevEnd } = previousPeriodBounds(period, now, timeZone);
+      let previousTotalCents: number | null = null;
+      for (const row of attributed) {
+        if (row.paidAt >= prevStart && row.paidAt < prevEnd) {
+          previousTotalCents = (previousTotalCents ?? 0) + row.amountCents;
         }
       }
 
@@ -279,6 +318,14 @@ export const dashboardRouter = createTRPCRouter({
           }
         : null;
 
+      // ── Outstanding open invoices (every open invoice, regardless of dueAt) ──
+      const outstandingRows = await ctx.db
+        .select({ amountCents: invoices.amountCents })
+        .from(invoices)
+        .where(and(eq(invoices.creatorId, ctx.creatorId), eq(invoices.status, "open")));
+
+      const outstandingTotalCents = outstandingRows.reduce((sum, r) => sum + r.amountCents, 0);
+
       return {
         // The zone every boundary above was computed in. Additive to the
         // SPO-233 contract; the client needs it to label a month truthfully
@@ -289,6 +336,7 @@ export const dashboardRouter = createTRPCRouter({
           periodStart,
           periodEnd,
           totalCents,
+          previousTotalCents,
           byType,
           monthly,
         },
@@ -298,6 +346,10 @@ export const dashboardRouter = createTRPCRouter({
           count: overdueRows.length,
           totalCents: overdueTotalCents,
           mostUrgent,
+        },
+        outstanding: {
+          count: outstandingRows.length,
+          totalCents: outstandingTotalCents,
         },
       };
     }),
