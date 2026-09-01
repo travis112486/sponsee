@@ -319,6 +319,79 @@ describe("planTouch — the audience is the send list", () => {
   });
 });
 
+// SPO-289 item 3. `contacts` is required on `dm`, but requiring the read is not
+// the same as the read saying anything: a DM row can be cleared to send having
+// consulted an audience that holds nothing about it. That is approved — the
+// block would make the no-email cohort uncontactable — so it has to be counted.
+describe("planTouch — uncoveredByAudience (the vacuous dm read)", () => {
+  it("reports a dm send row with no email — nothing to look the audience up by", () => {
+    const plan = planTouch({
+      touch: "T1",
+      channel: "dm",
+      roster: ROSTER,
+      ledger: [],
+      contacts: SUBSCRIBED,
+    });
+    // Doki is DM-only. Ada and Craft are both contacts, so the read spoke for them.
+    expect(decisionFor(plan, "doki")).toEqual({ action: "send", recipient: "@dokibird" });
+    expect(plan.uncoveredByAudience).toEqual([
+      { rosterId: "doki", name: "Dokibird", reason: "no-email" },
+    ]);
+    // Report only — this is exactly the row that must stay contactable.
+    expect(plan.clearToSend).toBe(true);
+  });
+
+  it("distinguishes a row whose email the audience lost from one that never had an email", () => {
+    // The case that bites later: Craft has an address, and the contact carrying
+    // her unsubscribe state is gone. On email that blocks; on dm she sends.
+    const plan = planTouch({
+      touch: "T1",
+      channel: "dm",
+      roster: ROSTER,
+      ledger: [],
+      contacts: [SUBSCRIBED[0]],
+    });
+    expect(plan.uncoveredByAudience).toEqual([
+      { rosterId: "craft", name: "Craft Computing", reason: "not-in-audience" },
+      { rosterId: "doki", name: "Dokibird", reason: "no-email" },
+    ]);
+    expect(plan.clearToSend).toBe(true);
+  });
+
+  it("counts only send rows — a suppressed row has no send for the read to miss", () => {
+    const ledger: LedgerEntry[] = [
+      { at: "2026-09-01T00:00:00Z", reason: "stop_requested", xHandle: "@dokibird" },
+    ];
+    const plan = planTouch({ touch: "T1", channel: "dm", roster: ROSTER, ledger, contacts: SUBSCRIBED });
+    expect(decisionFor(plan, "doki")).toMatchObject({ action: "suppress" });
+    expect(plan.uncoveredByAudience).toEqual([]);
+  });
+
+  it("is empty on email by construction, which makes the count a live positive control", () => {
+    // Every email send row is a contact — `not-in-audience` blocks the rest — so
+    // a non-empty list here would mean planTouch and this count disagree about
+    // what the audience holds.
+    for (const contacts of [SUBSCRIBED, [SUBSCRIBED[0]], []]) {
+      const plan = planTouch({ touch: "T1", channel: "email", roster: ROSTER, ledger: [], contacts });
+      expect(plan.uncoveredByAudience).toEqual([]);
+    }
+  });
+
+  it("stays aligned with the roster when an earlier row is skipped", () => {
+    // decisions is a positional map over roster; a skip must not shift which row
+    // an uncovered send is attributed to.
+    const roster: RosterRow[] = [
+      { id: "nohandle", name: "No Handle", email: "nohandle@example.com", xHandle: null },
+      ...ROSTER,
+    ];
+    const plan = planTouch({ touch: "T1", channel: "dm", roster, ledger: [], contacts: SUBSCRIBED });
+    expect(decisionFor(plan, "nohandle")).toEqual({ action: "skip", reason: "no-address" });
+    expect(plan.uncoveredByAudience).toEqual([
+      { rosterId: "doki", name: "Dokibird", reason: "no-email" },
+    ]);
+  });
+});
+
 describe("planContactSync", () => {
   it("lists roster rows Resend has never seen", () => {
     const plan = planContactSync(ROSTER, [], [SUBSCRIBED[0]]);

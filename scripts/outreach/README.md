@@ -102,6 +102,25 @@ roster is only our description of it.
   receives Wave 1 while appearing in no decision line and in no audit record.
   An unsubscribed stray is reported and not blocked, because Resend skips it.
 
+Neither direction is a block on `--channel dm`, and deliberately so: most of the
+DM cohort carries `"email": null`, so a `not-in-audience` block would make the
+no-email carve-out permanently uncontactable. The cost is that the live read —
+required on `dm` precisely so an email unsubscribe silences the DM — can be
+*vacuous* for a given row and still clear it to send. Every run therefore prints
+the coverage of its own send list:
+
+```
+dm: 7 of 11 SEND row(s) not covered by the audience read
+  Alias One                    no email on the roster row — nothing to look up  [a]
+  Alias Two                    has an email, but the audience does not hold it  [b]
+```
+
+Read it as a denominator, not an alarm. `0 of N` is the healthy line and is what
+`--channel email` always prints, since an email send row is a contact by
+construction. The number matters when it *moves* — a re-pointed audience, or a
+contact deleted after they unsubscribed, silently takes rows out of the
+cross-channel rule's reach and changes nothing else in the plan.
+
 `--require-first-names` promotes a bad greeting from a warning to a blocker.
 Leave it off on send day — a bad greeting is a copy miss and not a broken
 opt-out, and `block` is reserved for the latter.

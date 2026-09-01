@@ -212,6 +212,38 @@ export interface UnknownRecipient {
   unsubscribed: boolean;
 }
 
+/**
+ * A row this touch would send to that the live Resend read could not speak for.
+ *
+ * `contacts` is required on both channels so an email unsubscribe can silence
+ * the DM — but requiring the *read* is not the same as the read *saying
+ * something* about a given row. On `email` it always does: a row absent from
+ * the audience is `block: not-in-audience`, so every `send` row is a contact by
+ * construction and this list is structurally empty. On `dm` there is no such
+ * block, and there must not be — the DM cohort is largely rows with no email at
+ * all, and blocking them would make the no-email carve-out uncontactable. Those
+ * rows fall through to `send` having consulted an audience that holds nothing
+ * about them.
+ *
+ * So this is the report that keeps the gap visible rather than closing it. Today
+ * the uncovered set is nearly "people never emailed", who have no email opt-out
+ * to miss. It matters when the audience is re-pointed, or a contact is deleted
+ * after unsubscribing: the cross-channel rule silently stops applying to them
+ * and nothing else in the plan changes.
+ */
+export interface UncoveredByAudience {
+  rosterId: string;
+  name: string;
+  /**
+   * `no-email` — the row carries no address, so there is no key to look up.
+   * `not-in-audience` — it has one, and the audience does not hold it.
+   *
+   * Worth splitting: the first is the expected DM-only carve-out, the second is
+   * a contact that went missing from an audience we do mail.
+   */
+  reason: "no-email" | "not-in-audience";
+}
+
 export interface TouchPlan {
   touch: OutreachTouch;
   channel: OutreachChannel;
@@ -221,6 +253,11 @@ export interface TouchPlan {
    * reports them, but only blocking on `email` — see `clearToSend`.
    */
   unknownRecipients: UnknownRecipient[];
+  /**
+   * `send` rows the live audience read decided nothing for. Report only: it
+   * never affects `clearToSend`. See `UncoveredByAudience`.
+   */
+  uncoveredByAudience: UncoveredByAudience[];
   /**
    * True only when nothing is blocked. The CLI exits non-zero when false.
    *
@@ -450,6 +487,28 @@ export function planTouch(input: PlanTouchInput): TouchPlan {
     unknownRecipients.push({ email, unsubscribed: contact.unsubscribed === true });
   }
 
+  // How much of the send list the live read actually adjudicated. `decisions`
+  // is a 1:1 map over `roster`, so index i is roster[i].
+  //
+  // Only `send` rows count. A suppressed or skipped row is not going out, so
+  // whether the audience knew about it decides nothing; counting them would
+  // inflate the number with rows that are already safe and bury the ones that
+  // are not.
+  const uncoveredByAudience: UncoveredByAudience[] = [];
+  decisions.forEach((decided, i) => {
+    if (decided.decision.action !== "send") return;
+    const email = normalizeEmail(roster[i]?.email);
+    if (email === null) {
+      uncoveredByAudience.push({ rosterId: decided.rosterId, name: decided.name, reason: "no-email" });
+    } else if (!contactsByEmail.has(email)) {
+      uncoveredByAudience.push({
+        rosterId: decided.rosterId,
+        name: decided.name,
+        reason: "not-in-audience",
+      });
+    }
+  });
+
   const blockedRow = decisions.some((d) => d.decision.action === "block");
   const blockedByStranger =
     channel === "email" && unknownRecipients.some((c) => !c.unsubscribed);
@@ -459,6 +518,7 @@ export function planTouch(input: PlanTouchInput): TouchPlan {
     channel,
     decisions,
     unknownRecipients,
+    uncoveredByAudience,
     clearToSend: !blockedRow && !blockedByStranger,
   };
 }

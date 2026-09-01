@@ -337,6 +337,45 @@ function render(plan, syncPlan, blockers, args, sources) {
     );
   }
 
+  // How much of the send list the live Resend read actually spoke for.
+  //
+  // Printed on every run, including when it is zero, because the useful signal
+  // here is the denominator: "0 of 11" says the cross-channel unsubscribe rule
+  // was evaluated for every recipient, and silence would be indistinguishable
+  // from a build where the check does not exist. On `email` it is always zero —
+  // a send row is a contact by construction — which makes the email runs a
+  // standing positive control for the line itself.
+  //
+  // Deliberately not a blocker. A hard `not-in-audience` block on `dm` would
+  // make the no-email DM cohort permanently uncontactable, and that carve-out is
+  // approved (SPO-285). The gap is real but small; this makes it countable so
+  // the next variant of it does not need a code change to be noticed.
+  if (!Array.isArray(plan.uncoveredByAudience)) {
+    process.stdout.write(
+      `\naudience coverage of the SEND rows is NOT reported — @sponsee/shared is built from rules\n` +
+        `that predate SPO-289. Rebuild it to see this line:  pnpm --filter @sponsee/shared build\n`,
+    );
+  } else {
+    process.stdout.write(
+      `\n${args.channel}: ${plan.uncoveredByAudience.length} of ${counts.send} SEND row(s) not covered by the audience read\n`,
+    );
+    if (plan.uncoveredByAudience.length > 0) {
+      process.stdout.write(
+        plan.uncoveredByAudience
+          .map(
+            (r) =>
+              `  ${r.name.padEnd(28)} ${
+                r.reason === "no-email"
+                  ? "no email on the roster row — nothing to look up"
+                  : "has an email, but the audience does not hold it"
+              }  [${r.rosterId}]`,
+          )
+          .join("\n") +
+          `\n  (report only — an email unsubscribe by these recipients would not be visible to this gate)\n`,
+      );
+    }
+  }
+
   if (syncPlan) {
     if (syncPlan.toCreate.length > 0) {
       process.stdout.write(

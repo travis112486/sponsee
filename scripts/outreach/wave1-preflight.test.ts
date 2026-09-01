@@ -233,6 +233,64 @@ describe("wave1-preflight: contact pagination must prove it terminated (SPO-289 
   });
 });
 
+describe("wave1-preflight: audience coverage of the send list (SPO-289 finding 3)", () => {
+  // One DM-only row (the approved carve-out), one whose address the audience
+  // does not hold, one fully covered. All three clear to send on dm.
+  const MIXED = [
+    { id: "doki", name: "Dokibird", firstName: "Doki", email: null, xHandle: "@dokibird" },
+    { id: "craft", name: "Craft Computing", firstName: null, email: "craft@example.com", xHandle: "@craft" },
+    { id: "ada", name: "Ada Stream", firstName: "Ada", email: "ada@example.com", xHandle: "@adastream" },
+  ];
+  const ADA_ONLY = [contact(0, { email: "ada@example.com", first_name: "Ada" })];
+
+  it("names the uncovered dm rows and still exits 0 — the carve-out stays contactable", async () => {
+    pages = [{ data: ADA_ONLY, has_more: false }];
+    const { code, stdout } = await runPreflight("dm-coverage", MIXED, ["--channel", "dm"]);
+    expect(stdout).toContain("dm: 2 of 3 SEND row(s) not covered by the audience read");
+    expect(stdout).toContain("no email on the roster row");
+    expect(stdout).toContain("has an email, but the audience does not hold it");
+    expect(stdout).toContain("[doki]");
+    expect(stdout).toContain("[craft]");
+    expect(code).toBe(0);
+  });
+
+  it("prints the zero line too — silence is indistinguishable from a build without the check", async () => {
+    pages = [
+      {
+        data: [
+          contact(0, { email: "ada@example.com", first_name: "Ada" }),
+          contact(1, { email: "craft@example.com", first_name: "Craft" }),
+        ],
+        has_more: false,
+      },
+    ];
+    const { code, stdout } = await runPreflight("dm-coverage-zero", MIXED.slice(1), ["--channel", "dm"]);
+    expect(stdout).toContain("dm: 0 of 2 SEND row(s) not covered by the audience read");
+    // The zero line stands alone: no per-row detail, no report-only footnote.
+    expect(stdout).not.toContain("(report only");
+    expect(code).toBe(0);
+  });
+
+  it("always reads 0 on email, where a send row is a contact by construction", async () => {
+    pages = [{ data: ADA_ONLY, has_more: false }];
+    // Craft is on the roster and not in the audience: on email that is a block,
+    // which is why she can never surface here as an uncovered *send*.
+    const { code, stdout } = await runPreflight("email-coverage", MIXED);
+    expect(stdout).toContain("email: 0 of 1 SEND row(s) not covered by the audience read");
+    expect(code).toBe(1); // craft blocks — not-in-audience
+  });
+
+  it("carries the uncovered rows into the --json audit record", async () => {
+    pages = [{ data: ADA_ONLY, has_more: false }];
+    const { jsonPath } = await runPreflight("dm-coverage-json", MIXED, ["--channel", "dm"]);
+    const written = JSON.parse(await readFile(jsonPath, "utf8"));
+    expect(written.plan.uncoveredByAudience).toEqual([
+      { rosterId: "doki", name: "Dokibird", reason: "no-email" },
+      { rosterId: "craft", name: "Craft Computing", reason: "not-in-audience" },
+    ]);
+  });
+});
+
 describe("wave1-preflight: the test seam announces itself", () => {
   // The seam exists only for this file. If it is ever set on send day the run
   // proves nothing, so the banner must be impossible to miss in pasted evidence.
