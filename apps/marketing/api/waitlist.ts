@@ -1,139 +1,118 @@
-// Vercel Edge Function — temporary waitlist capture
-// NOTE: In-memory store resets on cold starts / redeploys.
-// Durable storage requires the shared API + Postgres (SPO-18 follow-up).
+// Vercel Edge Function — forwards waitlist signups to the durable API.
+//
+// This used to keep signups in a module-level array. That array is per-isolate
+// and dies on every cold start and redeploy, so leads were acknowledged to the
+// visitor and then lost (SPO-207). The only store of record is Postgres, behind
+// the shared API; this function exists purely to keep the form same-origin.
 
 export const config = { runtime: "edge" };
 
-interface Entry {
-  email: string;
-  platforms?: string[];
-  ccvBand?: string;
-  source: string;
-  createdAt: string;
+export const DEFAULT_UPSTREAM = "https://sponsee.onrender.com/api/waitlist";
+
+export function upstreamUrl(env: Record<string, string | undefined> = process.env): string {
+  return env.WAITLIST_UPSTREAM_URL || DEFAULT_UPSTREAM;
 }
 
-// In-memory store (ephemeral — see note above)
-const store: Entry[] = [];
+// Headers the API's rate limiter keys on. Without these every signup arrives
+// unattributed and shares one bucket, which would turn the per-network limit
+// into a site-wide lockout after a handful of signups.
+const FORWARDED_IP_HEADERS = ["x-vercel-forwarded-for", "x-forwarded-for"];
 
-// Header the admin export reads the token from. A query string ends up in
-// Vercel's request logs and in any referrer, so the token never travels there.
-export const ADMIN_TOKEN_HEADER = "x-waitlist-admin-token";
-
-/**
- * Constant-time string comparison for the admin token.
- *
- * Both sides are HMAC'd under a freshly generated random key and the fixed-width
- * digests are compared, so neither the timing nor the length of the comparison
- * leaks anything about the expected token. `crypto.subtle` is available in the
- * Vercel Edge runtime; `node:crypto.timingSafeEqual` is not.
- */
-export async function constantTimeEquals(a: string, b: string): Promise<boolean> {
-  const keyBytes = crypto.getRandomValues(new Uint8Array(32));
-  const key = await crypto.subtle.importKey(
-    "raw",
-    keyBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const encoder = new TextEncoder();
-  const [digestA, digestB] = await Promise.all([
-    crypto.subtle.sign("HMAC", key, encoder.encode(a)),
-    crypto.subtle.sign("HMAC", key, encoder.encode(b)),
-  ]);
-  const bytesA = new Uint8Array(digestA);
-  const bytesB = new Uint8Array(digestB);
-  let diff = 0;
-  for (let i = 0; i < bytesA.length; i++) diff |= bytesA[i] ^ bytesB[i];
-  return diff === 0;
-}
+const ALLOWED_ORIGINS = [
+  "http://localhost:5173",
+  "http://localhost:4173",
+  "https://sponsee.app",
+  "https://www.sponsee.app",
+];
 
 export default async function handler(request: Request) {
   const origin = request.headers.get("origin") || "";
-  const allowed = ["http://localhost:5173", "http://localhost:4173", "https://sponsee.app", "https://www.sponsee.app"];
-  const corsOrigin = allowed.includes(origin) ? origin : allowed[2];
+  const corsOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[2];
 
   const corsHeaders = {
     "Access-Control-Allow-Origin": corsOrigin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   };
+  const jsonHeaders = { "Content-Type": "application/json", ...corsHeaders };
 
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  // Admin export of captured emails. This returns PII, so it is deliberately
-  // NOT given CORS headers: no browser origin should ever be able to read it.
+  // The admin export moved to the API, which reads Postgres rather than one
+  // isolate's memory. Answered explicitly so an old bookmark reports the move
+  // instead of looking like the endpoint silently broke.
   if (request.method === "GET") {
-    const adminToken = process.env.WAITLIST_ADMIN_TOKEN ?? "";
-    // Fail closed. A default token would mean an unset env var on Vercel
-    // silently publishes every captured email address.
-    if (adminToken.length === 0) {
-      return new Response(
-        JSON.stringify({ ok: false, error: "Waitlist export is not configured." }),
-        { status: 503, headers: { "Content-Type": "application/json" } }
-      );
-    }
-    const presented = request.headers.get(ADMIN_TOKEN_HEADER) ?? "";
-    if (!(await constantTimeEquals(presented, adminToken))) {
-      return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    return new Response(JSON.stringify({ ok: true, count: store.length, entries: store }), {
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: "Moved. Waitlist export is now GET /api/admin/waitlist/export on the API.",
+      }),
+      { status: 410, headers: { "Content-Type": "application/json" } }
+    );
   }
 
   if (request.method !== "POST") {
     return new Response(JSON.stringify({ ok: false, error: "Method not allowed" }), {
       status: 405,
-      headers: { "Content-Type": "application/json", ...corsHeaders },
+      headers: jsonHeaders,
     });
   }
 
+  let payload: unknown;
   try {
-    const body = await request.json();
-    const email = String(body.email || "").toLowerCase().trim();
-    const platforms = Array.isArray(body.platforms) ? body.platforms.filter((p: unknown) => typeof p === "string") : undefined;
-    const ccvBand = body.ccvBand ? String(body.ccvBand) : undefined;
-    const source = body.source ? String(body.source) : "landing";
-    const website = body.website ? String(body.website) : "";
-
-    // Honeypot
-    if (website.length > 0) {
-      return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json", ...corsHeaders } });
-    }
-
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return new Response(JSON.stringify({ ok: false, error: "Invalid email address." }), {
-        status: 400,
-        headers: { "Content-Type": "application/json", ...corsHeaders },
-      });
-    }
-
-    const existing = store.find((e) => e.email === email);
-    if (existing) {
-      return new Response(JSON.stringify({ ok: true, duplicate: true }), {
-        headers: { "Content-Type": "application/json", ...corsHeaders },
-      });
-    }
-
-    const entry: Entry = { email, platforms, ccvBand, source, createdAt: new Date().toISOString() };
-    store.push(entry);
-
-    // Log for exportability (Vercel Function Logs)
-    console.log("[WAITLIST]", JSON.stringify(entry));
-
-    return new Response(JSON.stringify({ ok: true, duplicate: false }), {
-      headers: { "Content-Type": "application/json", ...corsHeaders },
-    });
+    payload = await request.json();
   } catch {
-    return new Response(JSON.stringify({ ok: false, error: "Something went wrong. Try again in a minute." }), {
-      status: 500,
-      headers: { "Content-Type": "application/json", ...corsHeaders },
+    return new Response(JSON.stringify({ ok: false, error: "Invalid email address." }), {
+      status: 400,
+      headers: jsonHeaders,
     });
+  }
+
+  const body = (payload ?? {}) as Record<string, unknown>;
+
+  // Honeypot: absorb bots at the edge so they never reach the database.
+  if (typeof body.website === "string" && body.website.length > 0) {
+    return new Response(JSON.stringify({ ok: true }), { headers: jsonHeaders });
+  }
+
+  const forwarded: Record<string, string> = { "Content-Type": "application/json" };
+  for (const name of FORWARDED_IP_HEADERS) {
+    const value = request.headers.get(name);
+    if (value) forwarded[name] = value;
+  }
+
+  try {
+    const upstream = await fetch(upstreamUrl(), {
+      method: "POST",
+      headers: forwarded,
+      body: JSON.stringify(body),
+    });
+
+    const text = await upstream.text();
+    if (!upstream.ok) {
+      // A lead we could not persist is written to the function log so it can be
+      // recovered by hand, rather than disappearing the way the old in-memory
+      // store lost them.
+      console.error(
+        "[WAITLIST_FALLBACK]",
+        JSON.stringify({ status: upstream.status, body, at: new Date().toISOString() })
+      );
+    }
+
+    return new Response(text, {
+      status: upstream.status,
+      headers: jsonHeaders,
+    });
+  } catch (err) {
+    console.error(
+      "[WAITLIST_FALLBACK]",
+      JSON.stringify({ error: String(err), body, at: new Date().toISOString() })
+    );
+    return new Response(
+      JSON.stringify({ ok: false, error: "Something went wrong. Try again in a minute." }),
+      { status: 502, headers: jsonHeaders }
+    );
   }
 }

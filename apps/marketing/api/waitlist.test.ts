@@ -1,137 +1,175 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import handler, { ADMIN_TOKEN_HEADER, constantTimeEquals } from "./waitlist.js";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import handler, { DEFAULT_UPSTREAM, upstreamUrl } from "./waitlist.js";
 
-// SPO-88 MEDIUM-1. The admin GET returns every captured waitlist email. Before
-// this pass it was gated by `process.env.WAITLIST_ADMIN_TOKEN || "dev-token"`,
-// so an unset env var on Vercel turned `?token=dev-token` into a public PII
-// dump. These tests pin the three properties of the fix: fail closed, header
-// only, and no browser origin can read the response.
+// SPO-207. This function used to keep signups in a module-level array, so a
+// visitor was told they were on the list and the row died with the isolate.
+// These tests pin the replacement: every accepted signup reaches the durable
+// API, and one that cannot is written to the log rather than dropped.
+//
+// The admin export that used to live here moved to the API (Postgres-backed);
+// its SPO-88 security properties are pinned in apps/api/src/routers/waitlist.test.ts.
 
 const ORIGIN = "https://sponsee.app";
 const ENDPOINT = "https://sponsee.app/api/waitlist";
 
-function get(headers: Record<string, string> = {}, url = ENDPOINT) {
-  return handler(new Request(url, { method: "GET", headers }));
-}
-
-function post(body: unknown) {
+function post(body: unknown, headers: Record<string, string> = {}) {
   return handler(
     new Request(ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json", origin: ORIGIN },
+      headers: { "Content-Type": "application/json", origin: ORIGIN, ...headers },
       body: JSON.stringify(body),
     })
   );
 }
 
-const originalToken = process.env.WAITLIST_ADMIN_TOKEN;
+function upstreamReturns(status: number, body: unknown) {
+  const fetchMock = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(
+    async () => new Response(JSON.stringify(body), { status })
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
 
 beforeEach(() => {
-  delete process.env.WAITLIST_ADMIN_TOKEN;
+  vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
-  if (originalToken === undefined) delete process.env.WAITLIST_ADMIN_TOKEN;
-  else process.env.WAITLIST_ADMIN_TOKEN = originalToken;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
-describe("waitlist admin export", () => {
-  it("fails closed when WAITLIST_ADMIN_TOKEN is unset", async () => {
-    const res = await get({ [ADMIN_TOKEN_HEADER]: "anything" });
+describe("waitlist proxy", () => {
+  it("forwards a signup to the durable API and returns its response", async () => {
+    const fetchMock = upstreamReturns(200, { ok: true, duplicate: false, confirmed: false });
 
-    expect(res.status).toBe(503);
+    const res = await post({ email: "streamer@example.com", streamerName: "pokimane" });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, duplicate: false, confirmed: false });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(DEFAULT_UPSTREAM);
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      email: "streamer@example.com",
+      streamerName: "pokimane",
+    });
+  });
+
+  it("keeps no local state — the same email is forwarded every time", async () => {
+    const fetchMock = upstreamReturns(200, { ok: true, duplicate: false });
+
+    await post({ email: "streamer@example.com" });
+    await post({ email: "streamer@example.com" });
+
+    // The old in-memory store answered the second call itself, which is exactly
+    // how signups went missing. Duplicate detection belongs to the database.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("forwards the client IP headers the API rate-limits on", async () => {
+    const fetchMock = upstreamReturns(200, { ok: true });
+
+    await post(
+      { email: "streamer@example.com" },
+      { "x-vercel-forwarded-for": "203.0.113.7", "x-forwarded-for": "203.0.113.7, 10.0.0.1" }
+    );
+
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = init.headers as Record<string, string>;
+    expect(headers["x-vercel-forwarded-for"]).toBe("203.0.113.7");
+    expect(headers["x-forwarded-for"]).toBe("203.0.113.7, 10.0.0.1");
+  });
+
+  it("absorbs honeypot submissions without touching the database", async () => {
+    const fetchMock = upstreamReturns(200, { ok: true });
+
+    const res = await post({ email: "bot@example.com", website: "http://spam.example" });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("logs a recoverable record when the upstream rejects the signup", async () => {
+    upstreamReturns(500, { ok: false, error: "boom" });
+
+    const res = await post({ email: "streamer@example.com" });
+
+    expect(res.status).toBe(500);
+    const logged = (console.error as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(logged[0]).toBe("[WAITLIST_FALLBACK]");
+    expect(logged[1]).toContain("streamer@example.com");
+  });
+
+  it("logs a recoverable record and returns 502 when the upstream is unreachable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("ECONNREFUSED"); }));
+
+    const res = await post({ email: "streamer@example.com" });
+
+    expect(res.status).toBe(502);
+    expect((await res.json()).ok).toBe(false);
+    const logged = (console.error as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(logged[0]).toBe("[WAITLIST_FALLBACK]");
+    expect(logged[1]).toContain("streamer@example.com");
+  });
+
+  it("rejects a malformed body without calling the upstream", async () => {
+    const fetchMock = upstreamReturns(200, { ok: true });
+
+    const res = await handler(
+      new Request(ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", origin: ORIGIN },
+        body: "not json",
+      })
+    );
+
+    expect(res.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("waitlist proxy configuration", () => {
+  it("defaults to the deployed API", () => {
+    expect(upstreamUrl({})).toBe(DEFAULT_UPSTREAM);
+  });
+
+  it("honours WAITLIST_UPSTREAM_URL", () => {
+    expect(upstreamUrl({ WAITLIST_UPSTREAM_URL: "http://localhost:3001/api/waitlist" })).toBe(
+      "http://localhost:3001/api/waitlist"
+    );
+  });
+});
+
+describe("retired admin export", () => {
+  it("reports that the export moved instead of serving stale in-memory data", async () => {
+    const res = await handler(new Request(ENDPOINT, { method: "GET" }));
+
+    expect(res.status).toBe(410);
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body).not.toHaveProperty("entries");
+    expect(body.error).toContain("/api/admin/waitlist/export");
   });
 
-  it("no longer accepts the old hardcoded dev-token", async () => {
-    const res = await get({ [ADMIN_TOKEN_HEADER]: "dev-token" });
-
-    expect(res.status).toBe(503);
-    expect(await res.text()).not.toContain("entries");
-  });
-
-  it("ignores a token in the query string even when it is the right value", async () => {
-    process.env.WAITLIST_ADMIN_TOKEN = "s3cret";
-
-    const res = await get({}, `${ENDPOINT}?token=s3cret`);
-
-    expect(res.status).toBe(401);
-    expect(await res.text()).not.toContain("entries");
-  });
-
-  it("rejects a wrong token presented in the header", async () => {
-    process.env.WAITLIST_ADMIN_TOKEN = "s3cret";
-
-    const res = await get({ [ADMIN_TOKEN_HEADER]: "s3crey" });
-
-    expect(res.status).toBe(401);
-  });
-
-  it("returns captured entries for the correct header token", async () => {
-    process.env.WAITLIST_ADMIN_TOKEN = "s3cret";
-    await post({ email: "streamer@example.com", source: "landing" });
-
-    const res = await get({ [ADMIN_TOKEN_HEADER]: "s3cret" });
-
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.ok).toBe(true);
-    expect(body.entries.map((e: { email: string }) => e.email)).toContain(
-      "streamer@example.com"
+  it("sends no CORS headers on the retired export", async () => {
+    const res = await handler(
+      new Request(ENDPOINT, { method: "GET", headers: { origin: ORIGIN } })
     );
-  });
-
-  it("sends no CORS headers on the export, so no browser origin can read it", async () => {
-    process.env.WAITLIST_ADMIN_TOKEN = "s3cret";
-
-    const res = await get({ [ADMIN_TOKEN_HEADER]: "s3cret", origin: ORIGIN });
 
     expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
   });
 
-  it("does not allow the token header through CORS preflight", async () => {
+  it("does not allow GET or the admin token header through CORS preflight", async () => {
     const res = await handler(
       new Request(ENDPOINT, { method: "OPTIONS", headers: { origin: ORIGIN } })
     );
 
-    expect(res.headers.get("Access-Control-Allow-Headers")).not.toContain(
-      ADMIN_TOKEN_HEADER
-    );
     expect(res.headers.get("Access-Control-Allow-Methods")).not.toContain("GET");
-  });
-});
-
-describe("constantTimeEquals", () => {
-  it("matches equal strings", async () => {
-    await expect(constantTimeEquals("abc", "abc")).resolves.toBe(true);
-  });
-
-  it("rejects strings differing only in the last character", async () => {
-    await expect(constantTimeEquals("abc", "abd")).resolves.toBe(false);
-  });
-
-  it("rejects a prefix of the expected value", async () => {
-    await expect(constantTimeEquals("abc", "abcdef")).resolves.toBe(false);
-  });
-
-  it("rejects the empty string against a real token", async () => {
-    await expect(constantTimeEquals("", "s3cret")).resolves.toBe(false);
-  });
-});
-
-describe("waitlist capture", () => {
-  it("still accepts a valid signup", async () => {
-    const res = await post({ email: "new@example.com" });
-
-    expect(res.status).toBe(200);
-    expect((await res.json()).ok).toBe(true);
-  });
-
-  it("rejects an invalid email", async () => {
-    const res = await post({ email: "nope" });
-
-    expect(res.status).toBe(400);
+    expect(res.headers.get("Access-Control-Allow-Headers")).not.toContain(
+      "x-waitlist-admin-token"
+    );
   });
 });

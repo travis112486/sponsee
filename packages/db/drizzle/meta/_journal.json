@@ -85,6 +85,13 @@
       "when": 1788154680653,
       "tag": "0011_little_rhodey",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788249733245,
+      "tag": "0012_broad_talisman",
+      "breakpoints": true
     }
   ]
 }
