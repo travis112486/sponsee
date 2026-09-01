@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "ignoreCommand": "git diff --quiet \"${VERCEL_GIT_PREVIOUS_SHA:-HEAD^1}\" HEAD -- apps/web packages/shared package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json vercel.json",
+  "ignoreCommand": "prev=\"${VERCEL_GIT_PREVIOUS_SHA:-HEAD^1}\"; git cat-file -e \"$prev^{commit}\" 2>/dev/null || exit 1; git diff --quiet \"$prev\" HEAD -- apps/web packages/shared package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json vercel.json || exit 1; exit 0",
   "routes": [
     {
       "src": "/api/(.*)",
