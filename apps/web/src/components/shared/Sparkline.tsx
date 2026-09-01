@@ -1,6 +1,5 @@
-import { motion } from "framer-motion";
 
-import { draw } from "@/lib/motion";
+import { motion, draw } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 /**
