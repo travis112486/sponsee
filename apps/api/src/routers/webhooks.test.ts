@@ -3,7 +3,15 @@ import { handleEmailWebhook } from "./webhooks.js";
 import { createEmailProvider } from "../email/index.js";
 
 const mocks = vi.hoisted(() => ({
-  update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(() => Promise.resolve()) })) })),
+  // Every column set passed to db.update(...).set(...), so tests can assert on
+  // the write itself rather than trusting the handler's response body.
+  setCalls: [] as Record<string, unknown>[],
+  update: vi.fn(() => ({
+    set: vi.fn((values: Record<string, unknown>) => {
+      mocks.setCalls.push(values);
+      return { where: vi.fn(() => Promise.resolve()) };
+    }),
+  })),
   select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(() => Promise.resolve([])) })) })) })),
   insert: vi.fn(() => ({ values: vi.fn(() => Promise.resolve()) })),
   query: {
@@ -41,6 +49,13 @@ function makeDefaultProvider() {
           detail: p.Description,
         };
       }
+      if (p.Type === "SoftBounce") {
+        return {
+          type: "failed" as const,
+          providerMessageId: String(p.MessageID),
+          detail: p.Description,
+        };
+      }
       return null;
     }),
   };
@@ -65,6 +80,7 @@ function mockContext(body: unknown, provider = "postmark", headers = new Headers
 describe("handleEmailWebhook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.setCalls.length = 0;
     (createEmailProvider as any).mockReturnValue(makeDefaultProvider());
   });
 
@@ -144,5 +160,29 @@ describe("handleEmailWebhook", () => {
 
     const result = await handleEmailWebhook(c);
     expect(result.data).toMatchObject({ ok: true, handled: true, type: "bounced" });
+
+    // The response body alone does not prove the interlock fired — assert the
+    // chase state was actually paused.
+    const pausedWrite = mocks.setCalls.find((c) => c.mode === "paused");
+    expect(pausedWrite).toBeDefined();
+    expect(pausedWrite!.pausedReason).toBe("hard_bounce");
+  });
+
+  it("does not pause chase state on a soft bounce", async () => {
+    const chaseEvent = { id: "ce-1", invoiceId: "inv-1", step: 1 };
+    mocks.select.mockImplementation(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn(() => Promise.resolve([chaseEvent])),
+        })),
+      })),
+    }));
+    mocks.query.invoices.findFirst.mockResolvedValue({ id: "inv-1", creatorId: "cr-1" });
+
+    const c = mockContext({ Type: "SoftBounce", MessageID: "msg-1" });
+    const result = await handleEmailWebhook(c);
+
+    expect(result.data).toMatchObject({ ok: true, handled: true, type: "failed" });
+    expect(mocks.setCalls.find((c) => c.mode === "paused")).toBeUndefined();
   });
 });

@@ -1,6 +1,16 @@
 import type { EmailProvider, SendEmailPayload, SentMessageInfo, WebhookEvent } from "./types.js";
 import { createHmac } from "crypto";
 
+/** Resend reports recipients as `string[]`; older/hand-rolled payloads use a bare string. */
+function firstRecipient(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const first = value.find((v) => typeof v === "string" && v.length > 0);
+    return typeof first === "string" ? first : undefined;
+  }
+  return undefined;
+}
+
 /**
  * Resend adapter — named fallback provider.
  * https://resend.com/docs/api-reference
@@ -115,12 +125,8 @@ export class ResendProvider implements EmailProvider {
     const emailId = (p.email_id as string | undefined) ?? (data?.email_id as string | undefined);
     if (!type || !emailId) return null;
 
-    const to =
-      typeof p.to === "string"
-        ? p.to
-        : typeof data?.to === "string"
-          ? data.to
-          : undefined;
+    // Resend sends `to` as an array of recipients; accept a bare string too.
+    const to = firstRecipient(p.to) ?? firstRecipient(data?.to);
 
     const error =
       typeof p.error === "string"
@@ -145,10 +151,19 @@ export class ResendProvider implements EmailProvider {
       case "email.opened":
         return { ...base, type: "opened" };
       case "email.bounced": {
-        const bouncePayload = (p.data as Record<string, unknown> | undefined) ?? data;
-        const bounceType = bouncePayload?.type as string | undefined;
-        const isHard = bounceType === "hard";
-        return { ...base, type: isHard ? "bounced" : "failed", detail: bounceType };
+        // Resend classifies the bounce under `data.bounce`, NOT `data.type`:
+        //   { type: "email.bounced", data: { ..., bounce: { type, subType, message } } }
+        // `bounce.type` is "Permanent" | "Transient" | "Undetermined". Only a
+        // Permanent bounce is a hard bounce, and only a hard bounce pauses the
+        // chase — anything else stays recoverable and is recorded as "failed".
+        const bounce = (data?.bounce ?? p.bounce) as Record<string, unknown> | undefined;
+        const bounceType = typeof bounce?.type === "string" ? bounce.type : undefined;
+        const bounceSubType = typeof bounce?.subType === "string" ? bounce.subType : undefined;
+        const bounceMessage = typeof bounce?.message === "string" ? bounce.message : undefined;
+        const isHard = bounceType?.toLowerCase() === "permanent";
+        const classification = [bounceType, bounceSubType].filter(Boolean).join("/");
+        const detail = bounceMessage ?? (classification || undefined);
+        return { ...base, type: isHard ? "bounced" : "failed", detail };
       }
       case "email.complained":
         return { ...base, type: "complained" };
