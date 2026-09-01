@@ -240,26 +240,6 @@ describe("ResendProvider", () => {
     expect(event!.type).toBe("delivered");
   });
 
-  it("ingests email.bounced webhook (hard)", () => {
-    const event = provider.ingestWebhook({
-      type: "email.bounced",
-      email_id: "res-123",
-      data: { type: "hard" },
-    });
-    expect(event).not.toBeNull();
-    expect(event!.type).toBe("bounced");
-  });
-
-  it("ingests email.bounced webhook (soft) as failed", () => {
-    const event = provider.ingestWebhook({
-      type: "email.bounced",
-      email_id: "res-123",
-      data: { type: "soft" },
-    });
-    expect(event).not.toBeNull();
-    expect(event!.type).toBe("failed");
-  });
-
   it("ingests email.delivered webhook from nested data field", () => {
     const event = provider.ingestWebhook({
       type: "email.delivered",
@@ -271,22 +251,68 @@ describe("ResendProvider", () => {
     expect(event!.to).toBe("brand@example.com");
   });
 
-  it("ingests email.bounced webhook (hard) from nested data field", () => {
+  // The payloads below are the shape Resend actually posts, per
+  // https://resend.com/docs/webhooks/emails/bounced — `to` is an array and the
+  // bounce classification lives at `data.bounce.type`, NOT `data.type`.
+  // A fixture using `data.type: "hard"` passes while production silently never
+  // hard-bounces, which is how auto-pause-on-bounce shipped inert (SPO-187).
+  it("reads the recipient from Resend's `to` array", () => {
+    const event = provider.ingestWebhook({
+      type: "email.delivered",
+      data: { email_id: "res-123", to: ["brand@example.com"], created_at: "2024-01-01T00:00:00Z" },
+    });
+    expect(event!.to).toBe("brand@example.com");
+  });
+
+  it("maps a Permanent bounce at data.bounce.type to a hard bounce", () => {
     const event = provider.ingestWebhook({
       type: "email.bounced",
-      data: { email_id: "res-123", type: "hard" },
+      created_at: "2024-01-01T00:00:00Z",
+      data: {
+        email_id: "res-123",
+        to: ["brand@example.com"],
+        bounce: {
+          message: "The recipient's email address is on the suppression list.",
+          subType: "Suppressed",
+          type: "Permanent",
+        },
+      },
     });
     expect(event).not.toBeNull();
     expect(event!.type).toBe("bounced");
+    expect(event!.to).toBe("brand@example.com");
+    expect(event!.detail).toBe("The recipient's email address is on the suppression list.");
   });
 
-  it("ingests email.bounced webhook (soft) from nested data field as failed", () => {
+  it("maps a Transient bounce to failed so the chase is not paused", () => {
     const event = provider.ingestWebhook({
       type: "email.bounced",
-      data: { email_id: "res-123", type: "soft" },
+      data: {
+        email_id: "res-123",
+        to: ["brand@example.com"],
+        bounce: { subType: "MailboxFull", type: "Transient" },
+      },
     });
     expect(event).not.toBeNull();
     expect(event!.type).toBe("failed");
+    expect(event!.detail).toBe("Transient/MailboxFull");
+  });
+
+  it("maps an Undetermined bounce to failed", () => {
+    const event = provider.ingestWebhook({
+      type: "email.bounced",
+      data: { email_id: "res-123", bounce: { type: "Undetermined" } },
+    });
+    expect(event!.type).toBe("failed");
+  });
+
+  it("does not hard-bounce when the bounce object is missing entirely", () => {
+    const event = provider.ingestWebhook({
+      type: "email.bounced",
+      data: { email_id: "res-123" },
+    });
+    expect(event!.type).toBe("failed");
+    expect(event!.detail).toBeUndefined();
   });
 
   it("returns null for unsupported webhook type", () => {
