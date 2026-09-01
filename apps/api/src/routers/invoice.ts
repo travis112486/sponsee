@@ -4,6 +4,24 @@ import { TRPCError } from "@trpc/server";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { invoices, invoiceChaseState, chaseTemplates, deals, contacts, brands } from "@sponsee/db/schema";
 
+const PAID_REQUIRES_PAID_AT_CONSTRAINT = "invoices_paid_requires_paid_at";
+
+/**
+ * Did this update fail the DB-level status='paid' <=> paidAt not-null invariant?
+ *
+ * The router-level guard in `update` rejects the one input shape it can decide
+ * from the input alone (`paidAt: null` with no `status`); it cannot see the
+ * row's current status, so any other path that would violate the invariant
+ * (e.g. a future caller adding a field that clears paidAt) still reaches
+ * Postgres and fails the `invoices_paid_requires_paid_at` CHECK. Catching that
+ * here turns it into a typed BAD_REQUEST instead of a 500 that carries the raw
+ * query in `error.message`.
+ */
+function isPaidInvariantViolation(error: unknown): boolean {
+  const cause = (error as { cause?: { constraint?: string } } | undefined)?.cause;
+  return cause?.constraint === PAID_REQUIRES_PAID_AT_CONSTRAINT;
+}
+
 export const invoiceRouter = createTRPCRouter({
   list: creatorScopedProcedure.query(async ({ ctx }) => {
     return ctx.db
@@ -110,6 +128,19 @@ export const invoiceRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
 
+      // A bare `paidAt: null` with no `status` is undecidable from the input
+      // alone: on a paid invoice it would strand status='paid' with a null
+      // paidAt (the defect this guards against); on a non-paid one it is a
+      // no-op, since paidAt is already null there. Either way the caller's
+      // intent is better expressed as `status: "open"`, so reject rather than
+      // read the row to decide.
+      if (data.paidAt === null && data.status === undefined) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: 'Set "status" to change whether an invoice is paid; "paidAt" alone cannot clear it.',
+        });
+      }
+
       // Keep status='paid' <=> paidAt IS NOT NULL atomic: callers may set either
       // field independently, so this mutation must not be able to produce a
       // paid invoice with no paidAt (or a non-paid invoice with a stale one).
@@ -119,11 +150,22 @@ export const invoiceRouter = createTRPCRouter({
         data.paidAt = null;
       }
 
-      const [invoice] = await ctx.db
-        .update(invoices)
-        .set({ ...data, updatedAt: new Date() })
-        .where(and(eq(invoices.id, id), eq(invoices.creatorId, ctx.creatorId)))
-        .returning();
+      let invoice;
+      try {
+        [invoice] = await ctx.db
+          .update(invoices)
+          .set({ ...data, updatedAt: new Date() })
+          .where(and(eq(invoices.id, id), eq(invoices.creatorId, ctx.creatorId)))
+          .returning();
+      } catch (error) {
+        if (isPaidInvariantViolation(error)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "That update would leave a paid invoice without a paid date.",
+          });
+        }
+        throw error;
+      }
 
       if (!invoice) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });

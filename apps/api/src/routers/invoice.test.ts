@@ -127,6 +127,16 @@ describe("invoice.update paid/paidAt invariant", () => {
     expect(updated.paidAt).not.toBeNull();
   });
 
+  it("rejects paidAt: null with no status against a paid invoice, without leaking the query", async () => {
+    const invoice = await insertInvoice({ status: "paid", paidAt: new Date("2026-02-01T00:00:00Z") });
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    const error: unknown = await caller.update({ id: invoice.id, paidAt: null }).catch((e) => e);
+
+    expect(error).toMatchObject({ code: "BAD_REQUEST" });
+    expect((error as Error).message).not.toMatch(/select|update|invoices|paid_at/i);
+  });
+
   it("rejects a direct write that violates the invariant at the storage layer", async () => {
     const invoice = await insertInvoice({ status: "open" });
 
