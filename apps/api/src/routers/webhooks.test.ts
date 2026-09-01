@@ -185,4 +185,57 @@ describe("handleEmailWebhook", () => {
     expect(result.data).toMatchObject({ ok: true, handled: true, type: "failed" });
     expect(mocks.setCalls.find((c) => c.mode === "paused")).toBeUndefined();
   });
+
+  // SPO-229 — the provider timestamp is the semantic event time; `updatedAt`
+  // must be wall clock (when we processed the webhook), never the provider's
+  // stale event time. A delayed webhook makes the two drift arbitrarily.
+  it.each([
+    ["delivered", "deliveredAt"],
+    ["opened", "openedAt"],
+    ["bounced", "bouncedAt"],
+    ["failed", null],
+  ] as const)("stamps updatedAt with wall clock, not the provider event time (%s)", async (type, semanticColumn) => {
+    const chaseEvent = { id: "ce-1", invoiceId: "inv-1", step: 1 };
+    mocks.select.mockImplementation(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn(() => Promise.resolve([chaseEvent])),
+        })),
+      })),
+    }));
+    mocks.query.invoices.findFirst.mockResolvedValue({ id: "inv-1", creatorId: "cr-1" });
+
+    const stale = new Date(Date.now() - 60 * 60 * 1000); // one hour ago
+    (createEmailProvider as any).mockReturnValue({
+      name: "resend",
+      verifyWebhookSignature: vi.fn(() => true),
+      ingestWebhook: vi.fn(() => ({
+        type,
+        providerMessageId: "msg-1",
+        detail: "detail",
+        timestamp: stale,
+      })),
+    });
+
+    const before = Date.now();
+    const c = mockContext({ type: "email.bounced", data: { email_id: "msg-1" } }, "resend");
+    const result = await handleEmailWebhook(c);
+    const after = Date.now();
+    expect(result.data).toMatchObject({ ok: true, handled: true, type });
+
+    const write = mocks.setCalls.find((s) => s.status === type);
+    expect(write).toBeDefined();
+
+    // Bookkeeping time is wall clock (within the call window), never the
+    // hour-old provider timestamp.
+    const updatedAt = write!.updatedAt as Date;
+    expect(updatedAt).toBeInstanceOf(Date);
+    expect(updatedAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(updatedAt.getTime()).toBeLessThanOrEqual(after);
+
+    // The semantic column still carries the provider's event time.
+    if (semanticColumn) {
+      expect(write![semanticColumn]).toEqual(stale);
+    }
+  });
 });

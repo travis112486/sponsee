@@ -58,26 +58,33 @@ export async function handleEmailWebhook(c: Context) {
     return c.json({ ok: true, matched: false }, 200);
   }
 
-  const now = event.timestamp || new Date();
+  // The provider timestamp is the *semantic* event time (when the delivery /
+  // open / bounce actually happened). `updatedAt` is bookkeeping — when WE
+  // processed the webhook — and must never trail `createdAt`. A delayed or
+  // replayed webhook carries a stale provider timestamp; stamping `updatedAt`
+  // with it made `updated_at` precede `created_at` and broke anything that
+  // treats `updated_at` as "when we last touched this row" (see SPO-229).
+  const eventAt = event.timestamp || new Date();
+  const now = new Date();
 
   // Update chase event status
   switch (event.type) {
     case "delivered":
       await db
         .update(chaseEvents)
-        .set({ status: "delivered", deliveredAt: now, updatedAt: now })
+        .set({ status: "delivered", deliveredAt: eventAt, updatedAt: now })
         .where(eq(chaseEvents.id, chaseEvent.id));
       break;
     case "opened":
       await db
         .update(chaseEvents)
-        .set({ status: "opened", openedAt: now, updatedAt: now })
+        .set({ status: "opened", openedAt: eventAt, updatedAt: now })
         .where(eq(chaseEvents.id, chaseEvent.id));
       break;
     case "bounced": {
       await db
         .update(chaseEvents)
-        .set({ status: "bounced", bouncedAt: now, updatedAt: now })
+        .set({ status: "bounced", bouncedAt: eventAt, updatedAt: now })
         .where(eq(chaseEvents.id, chaseEvent.id));
 
       // Hard bounce → pause chase state (loud alert)
