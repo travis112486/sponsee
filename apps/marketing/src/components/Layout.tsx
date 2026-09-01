@@ -49,9 +49,7 @@ export default function Layout({
               <p className="text-sm text-ink-3">The sponsorship CRM for streamers.</p>
             </div>
             <div className="flex flex-wrap gap-6 text-sm text-ink-2">
-              <a href="/blog/rate-calculator-for-streamers.html" className="hover:text-ink transition">Rate Calculator</a>
-              <a href="/blog/pricing-your-first-sponsorship.html" className="hover:text-ink transition">Pricing Guide</a>
-              <a href="/blog/how-to-chase-late-payments.html" className="hover:text-ink transition">Chase Late Payments</a>
+              <a href="/blog/" className="hover:text-ink transition">Blog</a>
               <a href="/privacy.html" className="hover:text-ink transition">Privacy</a>
               <a href="/terms.html" className="hover:text-ink transition">Terms</a>
               <a href="mailto:hello@sponsee.app" className="hover:text-ink transition">Contact</a>

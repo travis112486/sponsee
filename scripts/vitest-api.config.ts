@@ -12,9 +12,12 @@ export default defineConfig({
     include: [
       "apps/api/src/**/*.{test,spec}.{ts,tsx}",
       "packages/*/src/**/*.{test,spec}.{ts,tsx}",
-      // Marketing's Vercel functions are server-side too, and the marketing app
-      // has no runner of its own — without this line they go untested.
-      "apps/marketing/api/**/*.{test,spec}.{ts,tsx}",
+      // Marketing's Vercel functions and its blog build scripts are server-side
+      // too, and the marketing app has no runner of its own — without this line
+      // they go untested. Deliberately the whole app, not `api/` alone: the
+      // narrow glob this replaced would have silently skipped SPO-199's blog
+      // generator tests.
+      "apps/marketing/**/*.{test,spec}.{ts,tsx}",
     ],
     // storage.e2e.test.ts needs a real S3-compatible server (MinIO) and is
     // deliberately not part of the default suite — see scripts/vitest-storage-e2e.config.ts

@@ -125,6 +125,37 @@ function AccordionItem({
   );
 }
 
+// The blog posts surfaced in the "Free tools & guides" section. `href` must
+// name a slug the generator actually publishes — blogHrefs.test.ts enforces it
+// against apps/marketing/content/blog so a retired or renamed post can't leave
+// a dead card on the homepage the way the SPO-20 static pages did.
+const GUIDE_CARDS = [
+  {
+    href: "/blog/sponsor-paying-late",
+    title: "Sponsor Paying Late? What to Do",
+    blurb:
+      "The three-step follow-up sequence for a brand deal that's gone quiet — when to nudge, when to escalate, and when to call it a write-off.",
+  },
+  {
+    href: "/blog/chase-email-templates",
+    title: "Payment Reminder Email Templates",
+    blurb:
+      "Three copy-paste emails for chasing a late brand-deal payment: friendly nudge, professional reminder, and escalation.",
+  },
+  {
+    href: "/blog/deliverable-pricing",
+    title: "How to Price Every Deliverable",
+    blurb:
+      "Ad reads, overlays, chat callouts, VOD — what each one is worth against your hourly CPVH rate, and how to quote a mixed offer.",
+  },
+  {
+    href: "/blog/media-kit-for-streamers",
+    title: "Media Kit for Streamers",
+    blurb:
+      "What a live-streamer media kit should actually contain, and why concurrent viewers beat follower counts as the headline number.",
+  },
+];
+
 const FAQS = [
   {
     q: "Do you take a cut of my deals?",
@@ -187,9 +218,7 @@ export default function App() {
             <a href="#product" className="text-sm text-ink-2 hover:text-ink transition">Product</a>
             <a href="#pricing" className="text-sm text-ink-2 hover:text-ink transition">Pricing</a>
             <a href="#faq" className="text-sm text-ink-2 hover:text-ink transition">FAQ</a>
-            <a href="/blog/rate-calculator-for-streamers.html" className="text-sm text-ink-2 hover:text-ink transition">Rate Calculator</a>
-            <a href="/blog/pricing-your-first-sponsorship.html" className="text-sm text-ink-2 hover:text-ink transition">Pricing Guide</a>
-            <a href="/blog/how-to-chase-late-payments.html" className="text-sm text-ink-2 hover:text-ink transition">Chase Guide</a>
+            <a href="/blog/" className="text-sm text-ink-2 hover:text-ink transition">Blog</a>
           </nav>
           <button
             onClick={scrollToWaitlist}
@@ -334,8 +363,11 @@ export default function App() {
               <CheckItem>The &quot;we usually do $200 flat&quot; reply-guy rate stops working on you</CheckItem>
             </ul>
             <div className="mt-4">
-              <a href="/blog/rate-calculator-for-streamers.html" className="text-sm font-medium text-pine hover:underline">
-                Try the free rate calculator →
+              {/* The rate-calculator teaser page retired with SPO-199 and there is
+                  still no /calculator route, so this points at the deliverable
+                  pricing guide until the real calculator ships. */}
+              <a href="/blog/deliverable-pricing" className="text-sm font-medium text-pine hover:underline">
+                Read the deliverable pricing guide →
               </a>
             </div>
           </div>
@@ -402,7 +434,7 @@ export default function App() {
               <strong>Sponsee never holds your money.</strong> Invoices point to your own PayPal / Wise / bank details; brands pay you directly.
             </div>
             <div className="mt-4">
-              <a href="/blog/how-to-chase-late-payments.html" className="text-sm font-medium text-pine hover:underline">
+              <a href="/blog/sponsor-paying-late" className="text-sm font-medium text-pine hover:underline">
                 Read the chase guide →
               </a>
             </div>
@@ -489,33 +521,23 @@ export default function App() {
         <h2 className="font-serif text-[30px] md:text-[40px] leading-tight text-ink text-center mb-12">
           Free tools &amp; guides.
         </h2>
-        <div className="grid md:grid-cols-3 gap-6 max-w-[960px] mx-auto">
-          <a
-            href="/blog/rate-calculator-for-streamers.html"
-            className="rounded-[14px] border border-hairline bg-surface shadow-warm-md p-6 hover:border-pine transition"
-          >
-            <h3 className="font-sans text-lg font-semibold text-ink mb-2">Rate Calculator</h3>
-            <p className="text-ink-2 leading-relaxed text-sm">
-              Calculate what to charge for Twitch, YouTube Live, TikTok Live, and Kick sponsorships using real CPVH benchmarks.
-            </p>
-          </a>
-          <a
-            href="/blog/pricing-your-first-sponsorship.html"
-            className="rounded-[14px] border border-hairline bg-surface shadow-warm-md p-6 hover:border-pine transition"
-          >
-            <h3 className="font-sans text-lg font-semibold text-ink mb-2">Pricing Your First Sponsorship</h3>
-            <p className="text-ink-2 leading-relaxed text-sm">
-              How much should you charge for your first brand deal? A data-backed guide for streamers with 100–5,000 viewers.
-            </p>
-          </a>
-          <a
-            href="/blog/how-to-chase-late-payments.html"
-            className="rounded-[14px] border border-hairline bg-surface shadow-warm-md p-6 hover:border-pine transition"
-          >
-            <h3 className="font-sans text-lg font-semibold text-ink mb-2">How to Chase Late Payments</h3>
-            <p className="text-ink-2 leading-relaxed text-sm">
-              The three-email ladder that gets you paid without burning bridges — and the exact scripts to copy.
-            </p>
+        {/* Mirrors apps/marketing/content/blog — blogHrefs.test.ts fails if a card
+            points at a slug the generator doesn't publish. */}
+        <div className="grid md:grid-cols-2 gap-6 max-w-[960px] mx-auto">
+          {GUIDE_CARDS.map(({ href, title, blurb }) => (
+            <a
+              key={href}
+              href={href}
+              className="rounded-[14px] border border-hairline bg-surface shadow-warm-md p-6 hover:border-pine transition"
+            >
+              <h3 className="font-sans text-lg font-semibold text-ink mb-2">{title}</h3>
+              <p className="text-ink-2 leading-relaxed text-sm">{blurb}</p>
+            </a>
+          ))}
+        </div>
+        <div className="mt-8 text-center">
+          <a href="/blog/" className="text-sm font-medium text-pine hover:underline">
+            See all guides →
           </a>
         </div>
       </Section>
@@ -640,9 +662,7 @@ export default function App() {
               <p className="text-sm text-ink-3">The sponsorship CRM for streamers.</p>
             </div>
             <div className="flex flex-wrap gap-6 text-sm text-ink-2">
-              <a href="/blog/rate-calculator-for-streamers.html" className="hover:text-ink transition">Rate Calculator</a>
-              <a href="/blog/pricing-your-first-sponsorship.html" className="hover:text-ink transition">Pricing Guide</a>
-              <a href="/blog/how-to-chase-late-payments.html" className="hover:text-ink transition">Chase Late Payments</a>
+              <a href="/blog/" className="hover:text-ink transition">Blog</a>
               <a href="/privacy.html" className="hover:text-ink transition">Privacy</a>
               <a href="/terms.html" className="hover:text-ink transition">Terms</a>
               <a href="mailto:hello@sponsee.app" className="hover:text-ink transition">Contact</a>
