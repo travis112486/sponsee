@@ -36,6 +36,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -80,6 +81,36 @@ describe("waitlist proxy", () => {
     const headers = init.headers as Record<string, string>;
     expect(headers["x-vercel-forwarded-for"]).toBe("203.0.113.7");
     expect(headers["x-forwarded-for"]).toBe("203.0.113.7, 10.0.0.1");
+  });
+
+  // SPO-223. Forwarding the IP headers above is necessary but not sufficient:
+  // this is a separate Vercel project, so nothing injects the front-door header
+  // for it. Without the secret the origin 403s the call under enforcement, and
+  // even with enforcement off it distrusts `x-vercel-forwarded-for` and buckets
+  // every visitor under Vercel's egress IP — capping the whole waitlist at one
+  // window's worth of signups. Caught in production, not in review.
+  it("sends the front-door secret so the origin trusts the forwarded IP", async () => {
+    const fetchMock = upstreamReturns(200, { ok: true });
+    vi.stubEnv("FRONT_DOOR_SECRET", "s3cr3t");
+
+    await post({ email: "streamer@example.com" }, { "x-vercel-forwarded-for": "203.0.113.7" });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = init.headers as Record<string, string>;
+    expect(headers["x-sponsee-front-door"]).toBe("s3cr3t");
+  });
+
+  it("omits the front-door header entirely when no secret is configured", async () => {
+    const fetchMock = upstreamReturns(200, { ok: true });
+    vi.stubEnv("FRONT_DOOR_SECRET", "");
+
+    await post({ email: "streamer@example.com" });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = init.headers as Record<string, string>;
+    // Present-but-empty reads as a forgery at the origin and is rejected under
+    // enforcement; absent keeps the unconfigured case on the fail-open path.
+    expect("x-sponsee-front-door" in headers).toBe(false);
   });
 
   it("absorbs honeypot submissions without touching the database", async () => {
