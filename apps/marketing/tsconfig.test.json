@@ -1,0 +1,6 @@
+{
+  "//": "Typechecks the test files that tsconfig.json deliberately excludes, so that excluding them from the Vercel build does not quietly stop checking them. Run by `pnpm typecheck`, which only ever executes in the full workspace where vitest resolves from the repo root.",
+  "extends": "./tsconfig.json",
+  "include": ["src", "api", "vercel-config.test.ts"],
+  "exclude": []
+}

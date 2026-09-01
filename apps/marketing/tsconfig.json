@@ -21,5 +21,7 @@
     }
   },
   "//include": "`api` holds the Vercel functions. They were outside the project until SPO-88, so nothing typechecked the waitlist endpoint that returns captured PII.",
-  "include": ["src", "api"]
+  "include": ["src", "api"],
+  "//exclude": "Vercel deploys this app with Root Directory `.`, so the build runs `pnpm install` against apps/marketing/package.json alone — no repo root, no root node_modules. vitest lives at the root, so typechecking a *.test.ts here made `tsc -b` fail on Vercel with TS2307 while passing locally and in CI, where resolution walks up to the root. Shipping vitest into the production build to fix that would be backwards; the tests are typechecked by tsconfig.test.json instead, which `pnpm typecheck` runs.",
+  "exclude": ["**/*.test.ts", "**/*.test.tsx"]
 }
