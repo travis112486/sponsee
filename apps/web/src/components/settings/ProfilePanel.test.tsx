@@ -133,11 +133,71 @@ describe("ProfilePanel", () => {
 
     const timezoneInput = screen.getByLabelText("Timezone");
     expect(timezoneInput).toBeInTheDocument();
-    expect(timezoneInput.tagName.toLowerCase()).toBe("input");
+    expect(timezoneInput.tagName.toLowerCase()).toBe("select");
 
     const currencyInput = screen.getByLabelText("Default currency");
     expect(currencyInput).toBeInTheDocument();
     expect(currencyInput.tagName.toLowerCase()).toBe("select");
+  });
+
+  // SPO-246. The field used to be free text, so "Eastern" or "EST" saved
+  // cleanly and then silently gave the creator UTC (or DST-free) revenue
+  // months. The picker can only emit zones the router accepts.
+  describe("timezone picker", () => {
+    function renderWithTimezone(timezone: string) {
+      setQueryState({
+        isLoading: false,
+        isError: false,
+        data: {
+          displayName: "Alex Streams",
+          pronouns: null,
+          category: null,
+          avatarUrl: null,
+          timezone,
+          defaultCurrency: "USD",
+        },
+      });
+      render(<ProfilePanel />);
+      return screen.getByLabelText("Timezone") as HTMLSelectElement;
+    }
+
+    it("offers region/city zones and no free-text entry", () => {
+      const select = renderWithTimezone("America/New_York");
+      const values = [...select.options].map((o) => o.value);
+
+      expect(values).toContain("America/New_York");
+      expect(values).toContain("Europe/London");
+      expect(values).toContain("UTC");
+      expect(values.length).toBeGreaterThan(100);
+    });
+
+    it("offers none of the aliases the router rejects", () => {
+      const select = renderWithTimezone("America/New_York");
+      const values = [...select.options].map((o) => o.value);
+
+      for (const alias of ["EST", "MST", "HST", "EST5EDT", "PST8PDT", "GMT", "Etc/GMT+5"]) {
+        expect(values).not.toContain(alias);
+      }
+    });
+
+    it("selects the creator's saved zone", () => {
+      expect(renderWithTimezone("Europe/Berlin").value).toBe("Europe/Berlin");
+    });
+
+    it("keeps an unusable legacy value selected and warns instead of silently rewriting it", () => {
+      // Without its own option the select would snap to the first entry, and
+      // the next save would quietly move the creator to a zone they never
+      // chose.
+      const select = renderWithTimezone("Eastern");
+
+      expect(select.value).toBe("Eastern");
+      expect(screen.getByText(/revenue months are being counted in UTC/i)).toBeInTheDocument();
+    });
+
+    it("does not warn about a zone that works", () => {
+      renderWithTimezone("America/New_York");
+      expect(screen.queryByText(/revenue months are being counted in UTC/i)).toBeNull();
+    });
   });
 
   // SPO-110. The server refine on updateProfile is https-only (SPO-88, 9cca928).
@@ -252,12 +312,41 @@ describe("ProfilePanel server validation errors", () => {
 
     act(() => {
       updateOptions.onError?.({
-        message: "Timezone: Unknown timezone",
-        data: { zodError: { formErrors: [], fieldErrors: { timezone: ["Unknown timezone"] } } },
+        message: "Pronouns: String must contain at most 64 character(s)",
+        data: {
+          zodError: {
+            formErrors: [],
+            fieldErrors: { pronouns: ["String must contain at most 64 character(s)"] },
+          },
+        },
       });
     });
 
-    expect(toast.error).toHaveBeenCalledWith("Timezone: Unknown timezone");
+    expect(toast.error).toHaveBeenCalledWith(
+      "Pronouns: String must contain at most 64 character(s)"
+    );
+  });
+
+  // SPO-246. Timezone decides which month a paid invoice is counted in, so a
+  // server rejection has to land on the field rather than in a toast the
+  // creator can dismiss without fixing anything.
+  it("shows a server timezone rejection under the picker", () => {
+    renderLoaded();
+
+    act(() => {
+      updateOptions.onError?.({
+        message: "Timezone: Pick a region/city timezone",
+        data: {
+          zodError: {
+            formErrors: [],
+            fieldErrors: { timezone: ["Pick a region/city timezone"] },
+          },
+        },
+      });
+    });
+
+    expect(screen.getByText("Pick a region/city timezone")).toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("toasts non-validation errors with the server message", () => {
