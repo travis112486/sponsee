@@ -378,6 +378,7 @@ CREATE TABLE calculator_profiles (
 CREATE TABLE waitlist_signups (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email VARCHAR(255) NOT NULL UNIQUE,
+  streamer_name VARCHAR(128),
   platforms VARCHAR(64)[],
   ccv_band VARCHAR(32),
   source VARCHAR(128) NOT NULL DEFAULT 'landing',

@@ -11,23 +11,27 @@ const PLATFORMS = [
   { key: "other", label: "Other", dot: "bg-ink-3" },
 ];
 
+// Stored values stay the raw bands so existing rows keep their meaning; only
+// the labels spell out what the number is (SPO-207 — the field was a bare "CCV"
+// dropdown that meant nothing to a streamer who doesn't use the acronym).
 const CCV_BANDS = [
-  "Under 100",
-  "100–500",
-  "500–1,500",
-  "1,500–5,000",
-  "Over 5,000",
+  { value: "Under 100", label: "Under 100 viewers" },
+  { value: "100–500", label: "100–500 viewers" },
+  { value: "500–1,500", label: "500–1,500 viewers" },
+  { value: "1,500–5,000", label: "1,500–5,000 viewers" },
+  { value: "Over 5,000", label: "Over 5,000 viewers" },
 ];
 
 type FormState =
   | { kind: "idle" }
   | { kind: "submitting" }
   | { kind: "success"; email: string }
-  | { kind: "duplicate"; confirmed: boolean }
+  | { kind: "duplicate" }
   | { kind: "error"; message: string };
 
 export default function WaitlistForm({ compact = false }: { compact?: boolean }) {
   const [email, setEmail] = useState("");
+  const [streamerName, setStreamerName] = useState("");
   const [platforms, setPlatforms] = useState<string[]>([]);
   const [ccvBand, setCcvBand] = useState("");
   const [state, setState] = useState<FormState>({ kind: "idle" });
@@ -56,6 +60,7 @@ export default function WaitlistForm({ compact = false }: { compact?: boolean })
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: email.trim(),
+          streamerName: streamerName.trim() || undefined,
           platforms: platforms.length > 0 ? platforms : undefined,
           ccvBand: ccvBand || undefined,
           source: "landing",
@@ -68,7 +73,7 @@ export default function WaitlistForm({ compact = false }: { compact?: boolean })
         return;
       }
       if (data.duplicate) {
-        setState({ kind: "duplicate", confirmed: data.confirmed });
+        setState({ kind: "duplicate" });
       } else {
         setState({ kind: "success", email: email.trim() });
       }
@@ -83,12 +88,13 @@ export default function WaitlistForm({ compact = false }: { compact?: boolean })
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-pine-tint">
           <Check className="h-6 w-6 text-pine" />
         </div>
-        <h3 className="font-serif text-xl md:text-2xl text-ink mb-2">Check your inbox.</h3>
+        <h3 className="font-serif text-xl md:text-2xl text-ink mb-2">You&apos;re on the list.</h3>
         <p className="text-ink-2 mb-1">
-          We sent a confirmation link to <strong className="text-ink">{state.email}</strong>.
+          We saved <strong className="text-ink">{state.email}</strong>.
         </p>
         <p className="text-sm text-ink-3">
-          Click it and you&apos;re on the waitlist — we&apos;ll invite streamers to the private beta in small batches.
+          We invite streamers to the private beta in small batches — you&apos;ll get an email from us when
+          it&apos;s your turn. Nothing else to do right now.
         </p>
       </div>
     );
@@ -100,13 +106,9 @@ export default function WaitlistForm({ compact = false }: { compact?: boolean })
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-pine-tint">
           <Check className="h-6 w-6 text-pine" />
         </div>
-        <h3 className="font-serif text-xl md:text-2xl text-ink mb-2">
-          {state.confirmed ? "You're already on the list." : "Check your inbox."}
-        </h3>
+        <h3 className="font-serif text-xl md:text-2xl text-ink mb-2">You&apos;re already on the list.</h3>
         <p className="text-ink-2">
-          {state.confirmed
-            ? "You're all set. We'll email you when the beta opens."
-            : "Looks like you've signed up before — we've re-sent your confirmation email."}
+          Looks like you signed up before — you&apos;re all set. We&apos;ll email you when the beta opens.
         </p>
       </div>
     );
@@ -140,26 +142,6 @@ export default function WaitlistForm({ compact = false }: { compact?: boolean })
           )}
         </div>
 
-        {!compact && (
-          <>
-            <div className="md:w-48">
-              <label htmlFor="ccv" className="sr-only">Typical concurrent viewers</label>
-              <select
-                id="ccv"
-                value={ccvBand}
-                onChange={(e) => setCcvBand(e.target.value)}
-                disabled={state.kind === "submitting"}
-                className="w-full rounded-[10px] border border-hairline bg-surface px-4 py-3 text-ink outline-none transition focus:ring-2 focus:ring-pine focus:ring-offset-2 focus:ring-offset-paper disabled:opacity-60 appearance-none"
-              >
-                <option value="">CCV (optional)</option>
-                {CCV_BANDS.map((b) => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
-            </div>
-          </>
-        )}
-
         <button
           type="submit"
           disabled={state.kind === "submitting"}
@@ -180,24 +162,77 @@ export default function WaitlistForm({ compact = false }: { compact?: boolean })
       </div>
 
       {!compact && (
-        <div className="flex flex-wrap gap-2">
-          {PLATFORMS.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => togglePlatform(p.key)}
+        <div className="grid gap-4 md:grid-cols-2 text-left">
+          <div>
+            <label htmlFor="streamer-name" className="block text-sm font-medium text-ink-2 mb-1.5">
+              Channel name <span className="font-normal text-ink-3">(optional)</span>
+            </label>
+            <input
+              id="streamer-name"
+              type="text"
+              autoComplete="off"
+              maxLength={128}
+              placeholder="e.g. pokimane"
+              value={streamerName}
+              onChange={(e) => setStreamerName(e.target.value)}
               disabled={state.kind === "submitting"}
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${
-                platforms.includes(p.key)
-                  ? "border-pine bg-pine-tint text-pine"
-                  : "border-hairline bg-surface text-ink-2 hover:border-ink-3"
-              } disabled:opacity-60`}
+              aria-describedby="streamer-name-help"
+              className="w-full rounded-[10px] border border-hairline bg-surface px-4 py-3 text-ink placeholder:text-ink-3 outline-none transition focus:ring-2 focus:ring-pine focus:ring-offset-2 focus:ring-offset-paper disabled:opacity-60"
+            />
+            <p id="streamer-name-help" className="mt-1.5 text-[13px] text-ink-3">
+              Your handle or channel URL, so we can look up your stream before we reach out.
+            </p>
+          </div>
+
+          <div>
+            <label htmlFor="ccv" className="block text-sm font-medium text-ink-2 mb-1.5">
+              Average concurrent viewers <span className="font-normal text-ink-3">(optional)</span>
+            </label>
+            <select
+              id="ccv"
+              value={ccvBand}
+              onChange={(e) => setCcvBand(e.target.value)}
+              disabled={state.kind === "submitting"}
+              aria-describedby="ccv-help"
+              className="w-full rounded-[10px] border border-hairline bg-surface px-4 py-3 text-ink outline-none transition focus:ring-2 focus:ring-pine focus:ring-offset-2 focus:ring-offset-paper disabled:opacity-60 appearance-none"
             >
-              <span className={`h-2 w-2 rounded-full ${p.dot}`} />
-              {p.label}
-            </button>
-          ))}
+              <option value="">Select a range…</option>
+              {CCV_BANDS.map((b) => (
+                <option key={b.value} value={b.value}>{b.label}</option>
+              ))}
+            </select>
+            <p id="ccv-help" className="mt-1.5 text-[13px] text-ink-3">
+              Roughly how many people watch at once on a typical stream (your CCV).
+            </p>
+          </div>
         </div>
+      )}
+
+      {!compact && (
+        <fieldset className="text-left">
+          <legend className="block text-sm font-medium text-ink-2 mb-1.5">
+            Where do you stream? <span className="font-normal text-ink-3">(optional)</span>
+          </legend>
+          <div className="flex flex-wrap gap-2">
+            {PLATFORMS.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => togglePlatform(p.key)}
+                disabled={state.kind === "submitting"}
+                aria-pressed={platforms.includes(p.key)}
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${
+                  platforms.includes(p.key)
+                    ? "border-pine bg-pine-tint text-pine"
+                    : "border-hairline bg-surface text-ink-2 hover:border-ink-3"
+                } disabled:opacity-60`}
+              >
+                <span className={`h-2 w-2 rounded-full ${p.dot}`} />
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </fieldset>
       )}
 
       {state.kind === "error" && (
@@ -207,7 +242,7 @@ export default function WaitlistForm({ compact = false }: { compact?: boolean })
       )}
 
       <p className="text-[13px] text-ink-3">
-        We&apos;ll email you once to confirm, then only about the Sponsee beta and launch. No spam, unsubscribe anytime.{" "}
+        We&apos;ll only email you about the Sponsee beta and launch. No spam, unsubscribe anytime.{" "}
         <a href="/privacy.html" className="underline hover:text-ink-2">Privacy Policy</a>.
       </p>
 

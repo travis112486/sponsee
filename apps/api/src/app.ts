@@ -5,7 +5,7 @@ import { appRouter } from "./routers/index.js";
 import { createContext } from "./context.js";
 import { logTRPCError } from "./error-formatter.js";
 import { auth, LINK_ONLY_PROVIDERS } from "./auth.js";
-import waitlistApp from "./routers/waitlist.js";
+import waitlistApp, { waitlistAdminApp } from "./routers/waitlist.js";
 import { handleEmailWebhook } from "./routers/webhooks.js";
 import { registerStripeWebhook } from "./billing/webhook.js";
 
@@ -23,6 +23,10 @@ app.use(
 );
 
 app.route("/api/waitlist", waitlistApp);
+
+// Admin export lives outside /api/waitlist/* on purpose: the CORS middleware
+// above must never attach browser-readable headers to a PII dump.
+app.route("/api/admin/waitlist", waitlistAdminApp);
 
 app.use(
   "/api/trpc/*",

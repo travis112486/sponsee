@@ -541,6 +541,10 @@ export const waitlistSignups = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     email: varchar("email", { length: 255 }).notNull().unique(),
+    // Channel handle as the streamer types it, so a lead can be looked up on
+    // their platform before we reach out. Optional — asking for it must never
+    // cost us the email.
+    streamerName: varchar("streamer_name", { length: 128 }),
     platforms: varchar("platforms", { length: 64 }).array(),
     ccvBand: varchar("ccv_band", { length: 32 }),
     source: varchar("source", { length: 128 }).notNull().default("landing"),
