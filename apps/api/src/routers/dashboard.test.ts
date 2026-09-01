@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { dashboardRouter } from "./dashboard.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
@@ -76,7 +76,9 @@ async function seedBase() {
 
 async function insertInvoice(opts: {
   creatorId: string;
-  dealId: string;
+  // Nullable: an orphaned invoice (deal hard-deleted) keeps its creator but
+  // loses its deal, and the revenue split has to cope with that.
+  dealId: string | null;
   number: number;
   amountCents: number;
   status?: string;
@@ -174,8 +176,20 @@ describe("dashboard.overview", () => {
   });
 
   it("scopes every surface to the caller's creator (tenant isolation)", async () => {
-    // Creator B has a paid invoice and an overdue open invoice; creator A must
-    // not see any of it.
+    // Creator B has a paid invoice, an overdue open invoice, and a deliverable
+    // due inside the same week; creator A must not see any of it.
+    //
+    // The deliverable matters: without it the `deliverablesDue` assertion below
+    // is vacuous — an empty `deliverables` table makes `[]` true no matter how
+    // the query is scoped. See the positive control at the end of this test.
+    await db.insert(schema.deliverables).values({
+      dealId: dealBId,
+      title: "Creator B deliverable",
+      status: "scheduled",
+      // Wed Mar 18, 8:00pm ET — inside creator B's local Mar 16–22 week.
+      dueAt: new Date("2026-03-19T00:00:00Z"),
+      position: 0,
+    });
     await insertInvoice({
       creatorId: creatorBId,
       dealId: dealBId,
@@ -204,6 +218,15 @@ describe("dashboard.overview", () => {
     expect(result.deliverablesDue).toEqual([]);
     expect(result.overdue.count).toBe(0);
     expect(result.overdue.mostUrgent).toBeNull();
+
+    // Positive control: the row really is there and really is in-week, so the
+    // empty result above is the scoping working, not an empty table.
+    const bResult = await dashboardRouter
+      .createCaller(mockCtx(creatorBId))
+      .overview({ now: NOW_ISO });
+    expect(bResult.deliverablesDue.map((d) => d.title)).toEqual(["Creator B deliverable"]);
+    expect(bResult.overdue.count).toBe(1);
+    expect(bResult.revenue.totalCents).toBe(9999);
   });
 
   it("splits period revenue by deal type (flat/bounty/hybrid)", async () => {
@@ -266,6 +289,119 @@ describe("dashboard.overview", () => {
     const feb = result.revenue.monthly.find((m) => m.month === "2026-02");
     expect(jan?.valueCents).toBe(0);
     expect(feb?.valueCents).toBe(9000);
+  });
+
+  it("splits the trailing-12-month series by deal type too", async () => {
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 1, amountCents: 10000, status: "paid", paidAt: new Date("2026-03-05T00:00:00Z") });
+    await insertInvoice({ creatorId: creatorAId, dealId: dealABountyId, number: 2, amountCents: 20000, status: "paid", paidAt: new Date("2026-03-10T00:00:00Z") });
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAHybridId, number: 3, amountCents: 30000, status: "paid", paidAt: new Date("2026-03-12T00:00:00Z") });
+    // A February hybrid payment, to prove the split is bucketed per month and
+    // not just summed across the whole series.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAHybridId, number: 4, amountCents: 4000, status: "paid", paidAt: new Date("2026-02-02T00:00:00Z") });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ period: "month", now: NOW_ISO });
+
+    const mar = result.revenue.monthly.find((m) => m.month === "2026-03");
+    expect(mar).toMatchObject({
+      valueCents: 60000,
+      flatCents: 10000,
+      bountyCents: 20000,
+      hybridCents: 30000,
+    });
+
+    const feb = result.revenue.monthly.find((m) => m.month === "2026-02");
+    expect(feb).toMatchObject({
+      valueCents: 4000,
+      flatCents: 0,
+      bountyCents: 0,
+      hybridCents: 4000,
+    });
+
+    // Every other bucket is fully zeroed, split included.
+    for (const m of result.revenue.monthly) {
+      if (m.month === "2026-03" || m.month === "2026-02") continue;
+      expect(m).toMatchObject({ valueCents: 0, flatCents: 0, bountyCents: 0, hybridCents: 0 });
+    }
+  });
+
+  it("excludes a status='paid' invoice with no paidAt from revenue", async () => {
+    // Ratified semantic: without a recorded paid date there is no truthful
+    // period to attribute the money to, so it is not revenue. Note the money is
+    // then invisible on every surface — status != 'open' keeps it out of overdue
+    // as well.
+    await insertInvoice({
+      creatorId: creatorAId,
+      dealId: dealAFlatId,
+      number: 1,
+      amountCents: 500000,
+      status: "paid",
+      paidAt: null,
+      dueAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    // A real paid invoice, so the assertions below cannot pass by way of an
+    // empty invoices table.
+    await insertInvoice({
+      creatorId: creatorAId,
+      dealId: dealAFlatId,
+      number: 2,
+      amountCents: 7000,
+      status: "paid",
+      paidAt: new Date("2026-03-05T00:00:00Z"),
+    });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ period: "ytd", now: NOW_ISO });
+
+    expect(result.revenue.totalCents).toBe(7000);
+    expect(result.revenue.byType).toEqual({ flat: 7000, bounty: 0, hybrid: 0 });
+    expect(result.revenue.monthly.reduce((s, m) => s + m.valueCents, 0)).toBe(7000);
+    expect(result.overdue.count).toBe(0);
+    expect(result.overdue.totalCents).toBe(0);
+  });
+
+  it("counts an orphaned invoice (dealId null) in totalCents but not in the byType split", async () => {
+    // Ratified semantic: an orphaned invoice is still the creator's money, but
+    // it cannot be typed, so `totalCents != flat + bounty + hybrid` by design.
+    // Currently unreachable in production — `invoice.create` requires a dealId
+    // and deals are only soft-deleted — so this pins the defensive handling.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 1, amountCents: 10000, status: "paid", paidAt: new Date("2026-03-05T00:00:00Z") });
+    await insertInvoice({ creatorId: creatorAId, dealId: null, number: 2, amountCents: 25000, status: "paid", paidAt: new Date("2026-03-06T00:00:00Z") });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ period: "month", now: NOW_ISO });
+
+    expect(result.revenue.totalCents).toBe(35000);
+    expect(result.revenue.byType).toEqual({ flat: 10000, bounty: 0, hybrid: 0 });
+    const splitSum =
+      result.revenue.byType.flat + result.revenue.byType.bounty + result.revenue.byType.hybrid;
+    expect(result.revenue.totalCents - splitSum).toBe(25000);
+
+    // The T12M series carries the same documented gap.
+    const mar = result.revenue.monthly.find((m) => m.month === "2026-03");
+    expect(mar?.valueCents).toBe(35000);
+    expect((mar?.flatCents ?? 0) + (mar?.bountyCents ?? 0) + (mar?.hybridCents ?? 0)).toBe(10000);
+  });
+
+  it("excludes soft-deleted deals from the pipeline", async () => {
+    await db
+      .update(schema.deals)
+      .set({ deletedAt: new Date("2026-03-01T00:00:00Z") })
+      .where(eq(schema.deals.id, dealABountyId));
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ now: NOW_ISO });
+
+    expect(result.pipeline.reduce((s, p) => s + p.count, 0)).toBe(2);
+    // The bounty deal was the "live" stage's 2000-cent half.
+    expect(result.pipeline.find((p) => p.stage === "live")).toMatchObject({
+      count: 1,
+      valueCents: 3000,
+    });
+    expect(result.pipeline.find((p) => p.stage === "inbound")).toMatchObject({
+      count: 1,
+      valueCents: 1000,
+    });
   });
 
   it("bounds due-this-week deliverables to the creator-local ISO week and excludes done", async () => {
