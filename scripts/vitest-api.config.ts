@@ -23,7 +23,17 @@ export default defineConfig({
     // deliberately not part of the default suite — see scripts/vitest-storage-e2e.config.ts
     // and the `storage-e2e` CI job. Keep this exclude in step with
     // apps/api/vitest.config.ts's own copy (see SPO-86 / that file's comment).
-    exclude: ["**/node_modules/**", "**/dist/**", "**/.turbo/**", "**/*.e2e.test.ts"],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/.turbo/**",
+      "**/*.e2e.test.ts",
+      // ...except apps/marketing/src, which is the React app. Its tests render
+      // and hydrate components and need a DOM, so vitest-web.config.ts owns
+      // that directory (SPO-209). Nothing goes unrun: the two `include` globs
+      // between them still cover the whole marketing app.
+      "apps/marketing/src/**",
+    ],
     setupFiles: ["scripts/vitest-setup.ts"],
     fileParallelism: false,
     maxWorkers: 1,
