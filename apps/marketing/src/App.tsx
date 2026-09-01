@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useLayoutEffect, useState, useRef } from "react";
 import {
   Check,
   CreditCard,
@@ -11,6 +11,10 @@ import {
   Globe,
 } from "lucide-react";
 import WaitlistForm from "./components/WaitlistForm";
+
+// useLayoutEffect has no meaning during pre-render and React warns if it is
+// called there, so fall back to useEffect on the server.
+const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 function BrowserFrame({ children, label }: { children: React.ReactNode; label?: string }) {
   return (
@@ -40,11 +44,18 @@ function Section({
   alt?: boolean;
 }) {
   const ref = useRef<HTMLElement>(null);
-  const [visible, setVisible] = useState(false);
+  // Starts visible so the pre-rendered HTML — what crawlers and no-JS visitors
+  // get — is never a page of opacity-0 sections.
+  const [visible, setVisible] = useState(true);
 
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     const el = ref.current;
-    if (!el) return;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    // Anything already on screen at hydration stays put. Everything below the
+    // fold is hidden again before the first paint (hence useLayoutEffect, not
+    // useEffect) and then fades in on scroll, exactly as it did before.
+    if (el.getBoundingClientRect().top < window.innerHeight) return;
+    setVisible(false);
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) setVisible(true);
