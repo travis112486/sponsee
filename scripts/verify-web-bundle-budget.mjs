@@ -20,12 +20,21 @@
  *      `motion` instead of `@/lib/motion`'s `m` alias, or removes the
  *      `manualChunks` entry in vite.config.ts.
  *
- *   2. Per-chunk gzip ceilings. Deliberately generous — these are set to catch a
- *      chunk absorbing a *library* it should be sharing, not to police ordinary
+ *   2. Per-chunk gzip ceilings. Every one of them is set to catch a chunk
+ *      absorbing a *library* it should be sharing — not to police ordinary
  *      feature growth. SPO-194 still has six Dashboard modules to land; the
  *      route budget has room for all of them. Raise a ceiling in the same commit
  *      as the change that needs it, with the new number in the message, so the
  *      next person is arguing with a number instead of a vibe.
+ *
+ *      Each ceiling below states its measured number and how it was chosen,
+ *      because "leave comfortable headroom" is not a method — it produces a
+ *      number that sits above the thing you were trying to catch. See the
+ *      `index` note for a case where that nearly happened.
+ *
+ *      These ceilings are not a "the shell must not grow" ratchet, and cannot
+ *      be turned into one by tightening: a ratchet has to be a tracked number
+ *      that a commit updates on purpose, or it just fires on whoever is next.
  *
  * Run: node scripts/verify-web-bundle-budget.mjs   (exit 0 = clean, exit 1 = over)
  * Requires `pnpm --filter @sponsee/web build` to have run first.
@@ -55,11 +64,35 @@ const ENGINE_CHUNK = "motion";
  * `*` is the default applied to every lazily-loaded route chunk.
  */
 const BUDGET_KB = {
-  /** App shell: React, the router, tRPC, the query client, Layout. */
+  /**
+   * App shell: React, the router, tRPC, the query client, Layout, MotionProvider.
+   * 134.74 measured — 11% headroom, the tightest of the three, and chosen on
+   * evidence rather than by leaving room.
+   *
+   * Measured, don't guess: deleting the `manualChunks` entry drops framer into
+   * the shell and takes `index` to 161.77. So 150 catches that and 165 does not
+   * — a ceiling set for comfortable headroom would have sat above the only
+   * library-in-the-shell number we have actually measured. Rule 1 catches this
+   * particular case by chunk identity regardless; the ceiling is the backstop
+   * for the next library, which rule 1 has never heard of.
+   *
+   * The cost is real and it is not this file's to hide: ~15 kB of headroom is
+   * several providers' worth, but a shell that grows organically past it will
+   * fire on someone with no context on SPO-241. That is the trade taken on
+   * purpose — a red check with an actionable message beats a silent 27 kB on
+   * every cold load. Raise it when a legitimate change needs it.
+   */
   index: 150,
-  /** framer-motion's `m` + LazyMotion + the `domAnimation` feature bundle. */
+  /**
+   * framer-motion's `m` + LazyMotion + the `domAnimation` feature bundle.
+   * 27.20 measured — 22% headroom. Tight enough that swapping `domAnimation`
+   * for `domMax` trips it; loose enough that a framer patch release does not.
+   */
   motion: 35,
-  /** Every route chunk. The Dashboard regression measured 49.4 kB gzip. */
+  /**
+   * Every route chunk. The Dashboard regression measured 49.37 gzip, so 40
+   * would have caught it. Largest route today is Settings at 32.80.
+   */
   "*": 40,
 };
 
