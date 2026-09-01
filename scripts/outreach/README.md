@@ -96,12 +96,33 @@ roster is only our description of it.
   receives Wave 1 while appearing in no decision line and in no audit record.
   An unsubscribed stray is reported and not blocked, because Resend skips it.
 
-`--require-first-names` promotes first-name drift from a warning to a blocker.
-Leave it off on send day — drift downgrades the greeting to "Hey there —", which
-is a copy miss and not a broken opt-out, and `block` is reserved for the latter.
-Turn it on when *building* the audience (SPO-280), where the whole point is to
-carry SPO-269's confirmed names: without it a green preflight is compatible with
-every greeting silently falling back.
+`--require-first-names` promotes a bad greeting from a warning to a blocker.
+Leave it off on send day — a bad greeting is a copy miss and not a broken
+opt-out, and `block` is reserved for the latter. Turn it on when *building* the
+audience (SPO-280), where the whole point is to carry SPO-269's confirmed names:
+without it a green preflight is compatible with every greeting silently falling
+back.
+
+The flag checks the **contact's** name, not roster-vs-contact drift. Resend
+renders `{{{contact.first_name|there}}}` from the contact, so the contact's value
+alone decides what the recipient reads, and drift is neither necessary nor
+sufficient for a defect:
+
+| roster | contact | renders       | `--require-first-names` |
+| ------ | ------- | ------------- | ----------------------- |
+| `null` | `null`  | `Hey there —` | **blocks**              |
+| `Ada`  | `null`  | `Hey there —` | **blocks**              |
+| `Ada`  | `Adam`  | `Hey Adam —`  | **blocks** (`CONFLICT`) |
+| `null` | `Jeff`  | `Hey Jeff —`  | passes — greets correctly |
+| `Ada`  | `Ada`   | `Hey Ada —`   | passes                  |
+
+Row 1 is the one to watch: the two sides agree, so it produces no drift line at
+all, and a gate keyed on drift clears the send that reads `Hey there —`. Row 4 is
+why drift is not the gate — it is reported, not blocked.
+
+Suppressed recipients are exempt from all of it. Resend skips them in a
+Broadcast, so there is no greeting to get wrong, and several are suppressed
+precisely because we never confirmed a name for them.
 
 ## File formats
 

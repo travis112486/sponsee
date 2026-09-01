@@ -1,10 +1,15 @@
 // Wave 1 outreach suppression gate (SPO-270).
 //
 // GTM tooling, not product code — nothing in the app imports this. It lives in
-// @sponsee/shared for one reason: `scripts/**` is outside every vitest
-// `include` glob, so logic parked there ships untested. `packages/*/src/**` is
-// covered, so the decision rules below run in CI. The CLI wrapper that talks to
-// Resend is `scripts/outreach/wave1-preflight.mjs`; it holds no rules of its own.
+// @sponsee/shared because the CLI that talks to Resend is a `.mjs` script: it
+// matches no vitest `include` glob and cannot be imported by a test without
+// running its `main()`. Parking the rules here keeps them under unit test and
+// leaves the script holding none of its own. The wrapper is
+// `scripts/outreach/wave1-preflight.mjs`, and its exit codes are covered
+// end-to-end against a stub Resend by
+// `scripts/outreach/wave1-preflight-first-names.test.ts` —
+// `scripts/**/*.test.ts` *is* in the api config's include list, so a TypeScript
+// test may live beside the script it drives.
 //
 // ── Why this file exists ─────────────────────────────────────────────────────
 //
@@ -489,8 +494,42 @@ export interface ContactSyncPlan {
    * Contacts whose first name disagrees with the roster. Reported rather than
    * auto-fixed: the greeting is the most visible line in the mail and a silent
    * overwrite in either direction is the wrong default.
+   *
+   * This is the operator's *report*, not a gate. Disagreement has three shapes
+   * and only two of them are defects, so the two blocking shapes are split out
+   * into the two lists below rather than read off this one. See
+   * `ContactSyncBlockerOptions.requireFirstNames` for the whole matrix.
    */
   firstNameDrift: Array<{ email: string; roster: string | null; resend: string | null; rosterId: string }>;
+  /**
+   * Contacts that will render v5's fallback greeting — "Hey there —" — because
+   * the Resend contact carries no first name. Resend renders
+   * `{{{contact.first_name|there}}}` from the *contact*, so the contact's value
+   * is the only one that decides the greeting; the roster's is advisory.
+   *
+   * Deliberately not a subset of `firstNameDrift`: the row this list exists for
+   * has no name on *either* side, so the two agree, drift is empty, and a gate
+   * keyed on drift reports nothing about the recipient it was added to protect.
+   *
+   * Suppressed rows are excluded. Resend skips them in a Broadcast, so their
+   * greeting is never rendered — and several of them are suppressed precisely
+   * because nobody ever confirmed a name for them, which would make the check
+   * permanently unsatisfiable.
+   */
+  missingFirstName: Array<{ email: string; roster: string | null; rosterId: string }>;
+  /**
+   * Both sides carry a name and the names differ, so the mail greets the
+   * recipient by the contact's name while the roster records another. Either the
+   * audience missed an SPO-269 correction or the roster did; a human has to say
+   * which.
+   *
+   * Split out from `firstNameDrift` because the third drift shape — roster
+   * `null`, contact named — renders a correct, personalized greeting and is the
+   * over-fire that made drift the wrong predicate to gate on.
+   *
+   * Suppressed rows are excluded, same reasoning as `missingFirstName`.
+   */
+  firstNameConflict: Array<{ email: string; roster: string; resend: string; rosterId: string }>;
 }
 
 export function planContactSync(
@@ -505,7 +544,13 @@ export function planContactSync(
     if (email !== null) contactsByEmail.set(email, contact);
   }
 
-  const plan: ContactSyncPlan = { toCreate: [], toUnsubscribe: [], firstNameDrift: [] };
+  const plan: ContactSyncPlan = {
+    toCreate: [],
+    toUnsubscribe: [],
+    firstNameDrift: [],
+    missingFirstName: [],
+    firstNameConflict: [],
+  };
 
   for (const row of roster) {
     const email = normalizeEmail(row.email);
@@ -546,6 +591,24 @@ export function planContactSync(
         rosterId: row.id,
       });
     }
+
+    // A recipient Resend will skip has no greeting to get wrong. `reason` covers
+    // the ledger side (this row is on its way to unsubscribed) and
+    // `contact.unsubscribed` the Resend side; either one takes them off the
+    // Broadcast, so neither belongs in a greeting gate.
+    const suppressed = reason !== undefined || contact.unsubscribed === true;
+    if (suppressed) continue;
+
+    if (resendFirstName === null) {
+      plan.missingFirstName.push({ email, roster: rosterFirstName, rosterId: row.id });
+    } else if (rosterFirstName !== null && rosterFirstName !== resendFirstName) {
+      plan.firstNameConflict.push({
+        email,
+        roster: rosterFirstName,
+        resend: resendFirstName,
+        rosterId: row.id,
+      });
+    }
   }
 
   return plan;
@@ -553,14 +616,32 @@ export function planContactSync(
 
 export interface ContactSyncBlockerOptions {
   /**
-   * Promote first-name drift from a warning to a blocker.
+   * Require every recipient this touch would actually reach to have a first name
+   * on their Resend contact.
    *
-   * Off by default: drift degrades the greeting to "Hey there —", which is a
-   * copy-quality miss rather than a broken opt-out, and `block` is otherwise
-   * reserved for the latter. SPO-280 populates the audience *in order to* carry
-   * SPO-269's confirmed names, so its acceptance check runs with this on —
-   * without it a green preflight is compatible with every greeting silently
-   * falling back.
+   * Off by default: a wrong or missing greeting is a copy-quality miss rather
+   * than a broken opt-out, and `block` is otherwise reserved for the latter.
+   * SPO-280 populates the audience *in order to* carry SPO-269's confirmed
+   * names, so its acceptance check runs with this on — without it a green
+   * preflight is compatible with every greeting silently falling back.
+   *
+   * The check is on the *contact's* name, not on roster-vs-contact drift
+   * (SPO-288). Drift is neither necessary nor sufficient for a bad greeting:
+   *
+   *   roster   contact   renders          under this flag
+   *   ------   -------   --------------   --------------------------------
+   *   null     null      "Hey there —"    BLOCK  (no drift — the hole)
+   *   "Ada"    null      "Hey there —"    BLOCK
+   *   "Ada"    "Adam"    "Hey Adam —"     BLOCK  (names conflict)
+   *   null     "Jeff"    "Hey Jeff —"     pass   (drift, renders correctly)
+   *   "Ada"    "Ada"     "Hey Ada —"      pass
+   *
+   * The first row is the one the flag was added for — the live audience carries
+   * contacts with no `first_name` at all — and is exactly the row a drift
+   * predicate cannot see, because both sides agree on nothing. The fourth is the
+   * over-fire it used to produce: a correct, personalized greeting failed the
+   * gate and the blocker text quoted `sends "Hey Jeff —"` as if that were the
+   * defect. It stays in `firstNameDrift` as the warning it is.
    */
   requireFirstNames?: boolean;
 }
@@ -599,11 +680,21 @@ export function contactSyncBlockers(
   }
 
   if (options.requireFirstNames) {
-    for (const row of plan.firstNameDrift) {
+    for (const row of plan.missingFirstName) {
       blockers.push(
-        `${row.email}: first name differs (roster=${row.roster ?? "—"}, resend=${row.resend ?? "—"}) — ` +
-          `the greeting renders from the contact, so this sends "Hey ${greetingName(row.resend)} —". ` +
-          `[${row.rosterId}]`,
+        `${row.email}: the Resend contact has no first_name, so the greeting renders v5's fallback — ` +
+          `this sends "Hey ${greetingName(null)} —". ` +
+          (row.roster === null
+            ? `No confirmed first name on the roster either, so this needs an SPO-269 lookup, not a sync.`
+            : `The roster has "${row.roster}" — push it to the contact.`) +
+          ` [${row.rosterId}]`,
+      );
+    }
+    for (const row of plan.firstNameConflict) {
+      blockers.push(
+        `${row.email}: first names conflict (roster=${row.roster}, resend=${row.resend}) — ` +
+          `the greeting renders from the contact, so this sends "Hey ${greetingName(row.resend)} —" ` +
+          `while the roster says "${row.roster}". [${row.rosterId}]`,
       );
     }
   }

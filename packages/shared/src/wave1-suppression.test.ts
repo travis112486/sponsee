@@ -422,11 +422,11 @@ describe("contactSyncBlockers", () => {
     ]);
   });
 
-  it("treats first-name drift as a warning by default and a blocker on request", () => {
-    // Drift degrades the greeting to "Hey there —": a copy miss, not a broken
-    // opt-out, so it must not fail a send-day touch on its own. SPO-280 builds
-    // the audience in order to carry SPO-269's names, so its acceptance check
-    // opts in and gets an exit code rather than a line of output to notice.
+  it("reports a missing greeting as a warning by default and a blocker on request", () => {
+    // A fallback greeting is a copy miss, not a broken opt-out, so it must not
+    // fail a send-day touch on its own. SPO-280 builds the audience in order to
+    // carry SPO-269's names, so its acceptance check opts in and gets an exit
+    // code rather than a line of output to notice.
     const plan = planContactSync(
       [{ id: "ada", name: "Ada Stream", firstName: "Ada", email: "ada@example.com" }],
       [],
@@ -435,6 +435,126 @@ describe("contactSyncBlockers", () => {
     expect(contactSyncBlockers(plan)).toEqual([]);
     expect(contactSyncBlockers(plan, { requireFirstNames: true })).toEqual([
       expect.stringContaining('sends "Hey there —"'),
+    ]);
+  });
+});
+
+// SPO-288. The flag used to key on roster-vs-contact drift, which is neither
+// necessary nor sufficient for a bad greeting. Resend renders
+// {{{contact.first_name|there}}} from the CONTACT, so the contact's value alone
+// decides what the recipient reads. All five combinations are pinned below:
+// dropping either blocker condition, or widening one back to plain drift, turns
+// one of them red.
+describe("contactSyncBlockers --require-first-names (SPO-288)", () => {
+  const ON = { requireFirstNames: true } as const;
+
+  function planFor(roster: string | null, resend: string | null, ledger: LedgerEntry[] = []) {
+    return planContactSync(
+      [{ id: "ada", name: "Ada Stream", firstName: roster, email: "ada@example.com" }],
+      ledger,
+      [{ email: "ada@example.com", unsubscribed: false, firstName: resend }],
+    );
+  }
+
+  it("blocks the row neither side has a name for — the case drift cannot see", () => {
+    // The hole this ticket was filed for. Roster null and contact null agree, so
+    // there is no drift to report, and the old predicate cleared the send: this
+    // recipient reads "Hey there —" with the flag on and exit 0.
+    const plan = planFor(null, null);
+    expect(plan.firstNameDrift).toEqual([]); // what the old gate keyed on
+    expect(plan.missingFirstName).toEqual([
+      { email: "ada@example.com", roster: null, rosterId: "ada" },
+    ]);
+    expect(contactSyncBlockers(plan, ON)).toEqual([
+      expect.stringContaining("confirmed first name on the roster either"),
+    ]);
+    // Nothing to sync — the fix is an SPO-269 lookup, and the copy says so.
+    expect(contactSyncBlockers(plan, ON)[0]).toContain('sends "Hey there —"');
+  });
+
+  it("blocks a name we hold that the contact lacks, and says to push it", () => {
+    const plan = planFor("Ada", null);
+    expect(contactSyncBlockers(plan, ON)).toEqual([
+      expect.stringContaining('The roster has "Ada" — push it to the contact'),
+    ]);
+  });
+
+  it("blocks two names that disagree, quoting the one that will actually render", () => {
+    const plan = planFor("Ada", "Adam");
+    expect(plan.firstNameConflict).toEqual([
+      { email: "ada@example.com", roster: "Ada", resend: "Adam", rosterId: "ada" },
+    ]);
+    expect(contactSyncBlockers(plan, ON)).toEqual([
+      expect.stringContaining('sends "Hey Adam —" while the roster says "Ada"'),
+    ]);
+  });
+
+  it("does not block a contact name the roster simply does not carry", () => {
+    // The over-fire. This drifts, but the mail greets them correctly by name —
+    // the old blocker printed `sends "Hey Jeff —"` as if that were the defect.
+    // It stays in the drift report as the warning it is.
+    const plan = planFor(null, "Jeff");
+    expect(plan.firstNameDrift).toEqual([
+      { email: "ada@example.com", roster: null, resend: "Jeff", rosterId: "ada" },
+    ]);
+    expect(plan.missingFirstName).toEqual([]);
+    expect(plan.firstNameConflict).toEqual([]);
+    expect(contactSyncBlockers(plan, ON)).toEqual([]);
+  });
+
+  it("does not block when both sides carry the same name", () => {
+    expect(contactSyncBlockers(planFor("Ada", "Ada"), ON)).toEqual([]);
+  });
+
+  it("ignores a nameless recipient Resend will skip anyway", () => {
+    // An unsubscribed contact gets no Broadcast, so there is no greeting to get
+    // wrong — and demanding a name for someone who opted out before we ever
+    // confirmed one is a gate that can never go green.
+    const plan = planContactSync(
+      [{ id: "ada", name: "Ada Stream", firstName: null, email: "ada@example.com" }],
+      [{ at: "2026-09-23T09:00:00Z", reason: "replied", email: "ada@example.com" }],
+      [{ email: "ada@example.com", unsubscribed: true, firstName: null }],
+    );
+    expect(plan.toUnsubscribe).toEqual([]); // nothing else is firing
+    expect(plan.missingFirstName).toEqual([]);
+    expect(contactSyncBlockers(plan, ON)).toEqual([]);
+    // Positive control: the same nameless row still blocks once it is a live
+    // recipient, so the empty result above is the exclusion and not a no-op.
+    expect(contactSyncBlockers(planFor(null, null), ON)).toHaveLength(1);
+  });
+
+  it("skips a row the ledger has pulled but Resend still has subscribed", () => {
+    // Same exclusion from the other side: this row is on its way to
+    // unsubscribed, so it reports the sync blocker it already had and does not
+    // also demand a greeting for a send that will not happen.
+    const plan = planFor(null, null, [
+      { at: "2026-09-23T09:00:00Z", reason: "replied", email: "ada@example.com" },
+    ]);
+    expect(plan.missingFirstName).toEqual([]);
+    expect(contactSyncBlockers(plan, ON)).toEqual([
+      expect.stringContaining("ledger says replied"),
+    ]);
+  });
+
+  it("stays off by default for every shape", () => {
+    for (const plan of [planFor(null, null), planFor("Ada", null), planFor("Ada", "Adam")]) {
+      expect(contactSyncBlockers(plan)).toEqual([]);
+    }
+  });
+
+  it("carries the fixture the flag was added for: a contact with no name on either side", () => {
+    // ROSTER's `craft` row is the "Hey Craft Computing" case v5 was written to
+    // kill: a channel name, no confirmed first name, and a contact that has
+    // never been given one. Wired through the real fixture rather than a
+    // hand-built row so the shape the live audience actually holds is covered.
+    const plan = planContactSync(ROSTER, [], SUBSCRIBED);
+    expect(plan.firstNameDrift).toEqual([]);
+    expect(plan.missingFirstName).toEqual([
+      { email: "craft@example.com", roster: null, rosterId: "craft" },
+    ]);
+    expect(contactSyncBlockers(plan)).toEqual([]);
+    expect(contactSyncBlockers(plan, ON)).toEqual([
+      expect.stringContaining("craft@example.com: the Resend contact has no first_name"),
     ]);
   });
 });

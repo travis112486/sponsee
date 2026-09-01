@@ -46,7 +46,8 @@ const RESEND_API_DEFAULT = "https://api.resend.com";
 // Test seam, and nothing else. This file has no import-time surface a unit test
 // can reach — `main()` runs on import — so the only way to exercise the Resend
 // read paths is to spawn the real CLI against a stub server, and that needs a
-// base URL to point at. See scripts/outreach/wave1-preflight.test.ts.
+// base URL to point at. See scripts/outreach/wave1-preflight.test.ts and
+// scripts/outreach/wave1-preflight-first-names.test.ts.
 //
 // Setting this on send day would gate the touch on a fake audience and
 // manufacture a false green, so it is deliberately unmissable: every run that
@@ -306,13 +307,46 @@ function render(plan, syncPlan, blockers, args) {
           "\n",
       );
     }
+    // Two reports, because they are two different facts. The greeting renders
+    // from the Resend contact, so `missingFirstName` is the list of recipients
+    // who will read "Hey there —" — including the ones the roster has no name
+    // for either, which drift cannot see because both sides agree on nothing.
+    // Drift stays as the wider warning: some of it is a defect, some of it is a
+    // contact name we simply do not carry, which reads correctly.
+    if (syncPlan.missingFirstName.length > 0) {
+      process.stdout.write(
+        `\nNo first_name on the contact (${syncPlan.missingFirstName.length}) — these render v5's "Hey there —" fallback:\n` +
+          syncPlan.missingFirstName
+            .map(
+              (d) =>
+                `  ${d.email}  ` +
+                (d.roster === null
+                  ? "no confirmed name on either side — needs an SPO-269 lookup"
+                  : `roster has "${d.roster}" — push it to the contact`) +
+                `  [${d.rosterId}]`,
+            )
+            .join("\n") +
+          `${args.requireFirstNames ? "" : "\n  (warning only — pass --require-first-names to make this block)"}\n`,
+      );
+    }
     if (syncPlan.firstNameDrift.length > 0) {
+      // Mark from the blocking list itself rather than re-deriving "both sides
+      // named" here — a suppressed row can drift, and it does not block.
+      const conflicting = new Set(syncPlan.firstNameConflict.map((c) => c.rosterId));
       process.stdout.write(
         `\nFirst-name drift (${syncPlan.firstNameDrift.length}) — the greeting renders from the Resend contact, not the roster:\n` +
           syncPlan.firstNameDrift
-            .map((d) => `  ${d.email}  roster=${d.roster ?? "—"}  resend=${d.resend ?? "—"}  [${d.rosterId}]`)
+            .map(
+              (d) =>
+                `  ${d.email}  roster=${d.roster ?? "—"}  resend=${d.resend ?? "—"}  [${d.rosterId}]` +
+                (conflicting.has(d.rosterId) ? "  CONFLICT" : ""),
+            )
             .join("\n") +
-          `${args.requireFirstNames ? "" : "\n  (warning only — pass --require-first-names to make this block)"}\n`,
+          `${
+            args.requireFirstNames
+              ? "\n  (only the CONFLICT rows block; a contact name the roster lacks still greets correctly)"
+              : "\n  (warning only — --require-first-names blocks the rows marked CONFLICT)"
+          }\n`,
       );
     }
   }
@@ -350,6 +384,20 @@ async function main() {
   const audienceId = await resolveAudienceId(apiKey, args.audience);
   let contacts = await fetchContacts(apiKey, audienceId);
   let syncPlan = rules.planContactSync(roster, ledger, contacts);
+
+  // `packages/shared/dist` is gitignored and built out of band, so a checkout
+  // can pair this script with rules older than it. That must read as an
+  // environment error, not as a weaker gate: defaulting the missing list to `[]`
+  // would silently drop the --require-first-names condition and print a green
+  // preflight, which is the exact failure SPO-288 was filed for.
+  if (!Array.isArray(syncPlan.missingFirstName)) {
+    process.stderr.write(
+      `@sponsee/shared is built from rules that predate SPO-288 — planContactSync returned no\n` +
+        `"missingFirstName" list, so --require-first-names cannot be evaluated. Rebuild it:\n\n` +
+        `  pnpm --filter @sponsee/shared build\n`,
+    );
+    process.exit(2);
+  }
 
   if (syncPlan.toUnsubscribe.length > 0) {
     if (args.applySuppressions) {
