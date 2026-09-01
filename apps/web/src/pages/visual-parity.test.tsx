@@ -60,6 +60,9 @@ vi.mock("@/trpc", () => ({
     calendar: {
       events: { useQuery: vi.fn() },
     },
+    deliverable: {
+      update: { useMutation: vi.fn() },
+    },
     brand: {
       list: { useQuery: vi.fn() },
       create: { useMutation: vi.fn() },
@@ -160,6 +163,9 @@ beforeEach(() => {
   (trpc.brand.create.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
     idleMutation()
   );
+  (trpc.deliverable.update.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
+    idleMutation()
+  );
   (trpc.settings.updateProfile.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
     idleMutation()
   );
@@ -241,9 +247,9 @@ describe("SPO-71 visual parity safeguards", () => {
     );
 
     const card = screen.getByText("Active deals").closest("button")!;
-    const value = within(card).getByText("1");
-    expect(value.tagName).toBe("P");
-    expect(value).toHaveClass("font-serif");
+    const value = card.querySelector(".tnum")!;
+    expect(value.tagName).toBe("SPAN");
+    expect(value).toHaveClass("tnum");
   });
 
   it("renders Payments money totals at the serif scale and surfaces chase details", () => {
