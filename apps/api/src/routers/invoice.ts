@@ -128,16 +128,31 @@ export const invoiceRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
 
-      // A bare `paidAt: null` with no `status` is undecidable from the input
-      // alone: on a paid invoice it would strand status='paid' with a null
-      // paidAt (the defect this guards against); on a non-paid one it is a
-      // no-op, since paidAt is already null there. Either way the caller's
-      // intent is better expressed as `status: "open"`, so reject rather than
-      // read the row to decide.
+      // `paidAt` with no `status` is undecidable from the input alone, in both
+      // directions, so both are rejected rather than resolved by reading the row.
+      //
+      // `paidAt: null` (SPO-260): on a paid invoice it would strand status='paid'
+      // with a null paidAt. On a non-paid one it is a no-op only because the guard
+      // below it keeps paid_at from ever landing on a non-paid row — do not read
+      // that as an invariant the schema enforces: the 0013 CHECK is
+      // one-directional (status <> 'paid' OR paid_at IS NOT NULL), so an orphan
+      // paid_at is representable in the DB and may exist on rows written before
+      // these guards. Either way the intent is better expressed as status: "open".
       if (data.paidAt === null && data.status === undefined) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: 'Set "status" to change whether an invoice is paid; "paidAt" alone cannot clear it.',
+        });
+      }
+
+      // `paidAt: <date>` (SPO-265): the mirror image. It would silently write
+      // paid_at onto a draft/open/void invoice — the orphan the CHECK above does
+      // not forbid. The intent is better expressed as status: "paid" (which may
+      // carry an explicit paidAt alongside it to backdate the payment).
+      if (data.paidAt != null && data.status === undefined) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: 'Set "status" to "paid" to mark an invoice paid; "paidAt" alone cannot do it.',
         });
       }
 

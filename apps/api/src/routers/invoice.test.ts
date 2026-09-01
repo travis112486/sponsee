@@ -158,3 +158,35 @@ describe("invoice.update paid/paidAt invariant", () => {
     expect(result.revenue.totalCents).toBe(500000);
   });
 });
+
+// SPO-265: the inverse of SPO-260's `paidAt: null` gap — `paidAt: <date>`
+// with no `status` used to fall through both branches of the paid guard and
+// write an orphan paid_at onto a non-paid row.
+describe("invoice.update — paidAt orphan guard (SPO-265)", () => {
+  it.each(["draft", "open", "void"] as const)(
+    "rejects paidAt:<date> with no status against a %s invoice",
+    async (status) => {
+      const invoice = await insertInvoice({ status });
+      const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+      await expect(
+        caller.update({ id: invoice.id, paidAt: new Date() })
+      ).rejects.toSatisfy((err: any) => err.code === "BAD_REQUEST");
+
+      const [row] = await db.select().from(schema.invoices).where(sql`id = ${invoice.id}`);
+      expect(row.paidAt).toBeNull();
+      expect(row.status).toBe(status);
+    }
+  );
+
+  it("still allows paidAt to be set together with status: paid", async () => {
+    const invoice = await insertInvoice({ status: "open" });
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+    const paidAt = new Date("2026-03-01T00:00:00Z");
+
+    const result = await caller.update({ id: invoice.id, status: "paid", paidAt });
+
+    expect(result.status).toBe("paid");
+    expect(result.paidAt).toEqual(paidAt);
+  });
+});
