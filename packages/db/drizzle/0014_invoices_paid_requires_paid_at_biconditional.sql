@@ -1,0 +1,2 @@
+ALTER TABLE "invoices" DROP CONSTRAINT "invoices_paid_requires_paid_at";--> statement-breakpoint
+ALTER TABLE "invoices" ADD CONSTRAINT "invoices_paid_requires_paid_at" CHECK (("invoices"."status" = 'paid') = ("invoices"."paid_at" IS NOT NULL));
