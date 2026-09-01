@@ -4,6 +4,7 @@ export * from "./merge-tokens.js";
 export * from "./calculator.js";
 export * from "./benchmark.js";
 export * from "./subscription.js";
+export * from "./timezone.js";
 
 // Re-export for convenience
 export { renderMergeTokens, validateMergeTokens, hasMergeTokens };

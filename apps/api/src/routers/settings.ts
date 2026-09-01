@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { eq, and, desc, ne, sql } from "drizzle-orm";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import * as schema from "@sponsee/db/schema";
-import { platforms } from "@sponsee/shared";
+import { platforms, TIME_ZONE_ERROR_MESSAGE, normalizeTimeZone } from "@sponsee/shared";
 import { syncPlatformRow } from "../jobs/platform-sync.js";
 import { SlidingWindowLimiter } from "../rate-limit.js";
 
@@ -39,6 +39,29 @@ const httpsUrl = z
     }
   }, "Must be an https:// URL");
 
+/**
+ * `creators.timezone` is what `dashboard.overview` computes every month/quarter
+ * boundary in (SPO-239), and an unusable value degrades to UTC rather than
+ * throwing — deliberately, so a bad row can't 500 the dashboard, but that also
+ * makes the failure silent. Validate on the way in so the fallback only ever
+ * has to cover rows written before this check existed.
+ *
+ * `.transform` normalises to the trimmed value the DB should hold, so
+ * `"  Europe/London "` saves as `Europe/London` instead of being persisted
+ * whitespace-and-all and then resolving to UTC forever.
+ */
+const ianaTimeZone = z
+  .string()
+  .max(64)
+  .transform((value, ctx) => {
+    const normalized = normalizeTimeZone(value);
+    if (normalized === null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: TIME_ZONE_ERROR_MESSAGE });
+      return z.NEVER;
+    }
+    return normalized;
+  });
+
 export const settingsRouter = createTRPCRouter({
   // ── Profile ──
   getProfile: creatorScopedProcedure.query(async ({ ctx }) => {
@@ -56,7 +79,7 @@ export const settingsRouter = createTRPCRouter({
         pronouns: z.string().max(64).optional().nullable(),
         category: z.string().max(128).optional().nullable(),
         avatarUrl: httpsUrl.optional().nullable(),
-        timezone: z.string().max(64).optional(),
+        timezone: ianaTimeZone.optional(),
         defaultCurrency: z.string().length(3).optional(),
       })
     )
