@@ -109,9 +109,14 @@ Neither file is in the repo yet — SPO-267 is still resolving contact channels
 and SPO-280 is populating the audience. The paths above are where they land.
 
 `--roster` — JSON array (or `{"roster": [...]}`). `id` must be stable and unique,
-and no two rows may share an email: that would be one recipient with two decision
-lines, and if the rows disagree about first name or handle, which greeting and
-which suppression apply becomes order-dependent.
+and no two rows may share an email — nor an `xHandle`. Either collision is one
+recipient with two decision lines. On email, if the rows disagree about first
+name or handle, which greeting and which suppression apply becomes
+order-dependent; on DM the handle is the only recipient key, so a shared one
+prints two `SEND` lines and DMs one person twice at the same touch. Both are hard
+errors, and both compare *normalized* values, so `@SamStream` and `samstream`
+collide. Rows with no handle at all (`"xHandle": null`, the email-only cohort) do
+not collide with each other.
 
 ```json
 [
@@ -162,7 +167,23 @@ Reasons: `replied`, `stop_requested`, `unsubscribed`, `bounced`, `complained`,
 - Emails and handles are matched case-insensitively, with a leading `@` stripped.
   An opt-out that misses because the ledger recorded `Ada@Example.com` is exactly
   the failure this gate exists to prevent.
+- **A contact read it cannot prove is complete is an error, not a short list.**
+  If Resend returns a full page and omits `has_more`, the gate exits 2 instead of
+  paginating no further. Truncation looks like the safe direction — a dropped
+  contact makes its roster row read `not-in-audience` and blocks — but it also
+  hides a contact on *no* roster row, so the "in the audience but on no roster
+  row" section under-reports and the audience reads clean when it is not. An
+  explicit `has_more: false` on a full page is fine; only an absent field is not.
 
 The decision rules themselves are in `packages/shared/src/wave1-suppression.ts`
-with tests alongside — `scripts/**` is outside every vitest `include` glob, so
-logic parked here would ship untested.
+with tests alongside. `wave1-preflight.test.ts` covers the CLI's own guards by
+spawning it against a stub Resend server and asserting on the exit code —
+`scripts/**/*.test.ts` is inside `scripts/vitest-api.config.ts`'s `include`, so
+it runs in CI. It exercises the real binary deliberately: SPO-278's F1 was a
+defect a unit test hand-supplying inputs reported as covered while the CLI could
+not reach the path at all.
+
+`WAVE1_PREFLIGHT_RESEND_API_BASE` exists for that test and nothing else. Setting
+it points the gate at a fake audience, so any run that does prints a banner on
+stdout *and* stderr. If you see that line in preflight evidence, the evidence is
+worthless — re-run without it.

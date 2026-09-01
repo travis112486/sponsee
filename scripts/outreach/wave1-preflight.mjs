@@ -41,7 +41,25 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
 const SHARED_DIST = path.join(REPO_ROOT, "packages", "shared", "dist", "wave1-suppression.js");
 
-const RESEND_API = "https://api.resend.com";
+const RESEND_API_DEFAULT = "https://api.resend.com";
+
+// Test seam, and nothing else. This file has no import-time surface a unit test
+// can reach — `main()` runs on import — so the only way to exercise the Resend
+// read paths is to spawn the real CLI against a stub server, and that needs a
+// base URL to point at. See scripts/outreach/wave1-preflight.test.ts.
+//
+// Setting this on send day would gate the touch on a fake audience and
+// manufacture a false green, so it is deliberately unmissable: every run that
+// sets it prints the banner below on BOTH streams. If that line appears in
+// preflight evidence, the evidence is worthless — re-run without it.
+const RESEND_API = process.env.WAVE1_PREFLIGHT_RESEND_API_BASE ?? RESEND_API_DEFAULT;
+if (RESEND_API !== RESEND_API_DEFAULT) {
+  const banner =
+    `\n!! WAVE1_PREFLIGHT_RESEND_API_BASE is set to ${RESEND_API} — this run did NOT read live Resend\n` +
+    `!! contact state. It proves nothing about a real touch. Do not use it as send-day evidence.\n\n`;
+  process.stdout.write(banner);
+  process.stderr.write(banner);
+}
 
 function usage(message) {
   process.stderr.write(
@@ -121,13 +139,16 @@ async function resolveAudienceId(apiKey, audience) {
   throw new Error(`No Resend audience matches "${audience}". Existing audiences: ${known}`);
 }
 
+const CONTACT_PAGE_LIMIT = 100;
+const CONTACT_PAGE_CAP = 100;
+
 async function fetchContacts(apiKey, audienceId) {
   const contacts = [];
   let after;
   // Bounded rather than `while (true)`: a pagination contract change that never
   // clears has_more would otherwise hang the gate on send day.
-  for (let page = 0; page < 100; page++) {
-    const query = new URLSearchParams({ limit: "100" });
+  for (let page = 0; page < CONTACT_PAGE_CAP; page++) {
+    const query = new URLSearchParams({ limit: String(CONTACT_PAGE_LIMIT) });
     if (after) query.set("after", after);
     const body = await resend(apiKey, `/audiences/${audienceId}/contacts?${query}`);
     const rows = body?.data ?? [];
@@ -139,10 +160,33 @@ async function fetchContacts(apiKey, audienceId) {
         firstName: row.first_name ?? null,
       });
     }
-    if (!body?.has_more || rows.length === 0) return contacts;
-    after = rows[rows.length - 1].id;
+    if (rows.length === 0) return contacts;
+    if (body?.has_more) {
+      after = rows[rows.length - 1].id;
+      continue;
+    }
+
+    // has_more is falsy, so this is the last page — unless it is *absent*.
+    // `false` is a statement that the read is complete; a missing field on a
+    // FULL page is indistinguishable from a provider that caps `data` and never
+    // shipped the flag, and treating that as complete truncates the audience
+    // silently. Truncation is not the safe direction here even though it looks
+    // like one: a dropped contact makes its roster row read `not-in-audience`
+    // and blocks (safe), but it also hides a contact on NO roster row, so
+    // `plan.unknownRecipients` under-reports and the audience reads clean when
+    // it is not — a false green on the exact stray-recipient check F4 added.
+    // Refuse rather than adjudicate a send list we cannot prove is whole.
+    if (body?.has_more == null && rows.length >= CONTACT_PAGE_LIMIT) {
+      throw new Error(
+        `Resend returned a full page of ${rows.length} contacts for audience ${audienceId} with no ` +
+          `"has_more" field, so this read cannot be told apart from a truncated one. A truncated ` +
+          `contact list hides audience strays instead of reporting them. Refusing to gate a touch ` +
+          `on a possibly partial send list — check the Resend pagination contract before re-running.`,
+      );
+    }
+    return contacts;
   }
-  throw new Error("Resend contact pagination did not terminate after 100 pages");
+  throw new Error(`Resend contact pagination did not terminate after ${CONTACT_PAGE_CAP} pages`);
 }
 
 async function readRoster(file, rules) {
@@ -151,6 +195,7 @@ async function readRoster(file, rules) {
   if (!Array.isArray(rows)) throw new Error(`${file}: expected an array of roster rows`);
   const seenIds = new Set();
   const seenEmails = new Map();
+  const seenHandles = new Map();
   for (const row of rows) {
     if (typeof row.id !== "string" || row.id.length === 0) {
       throw new Error(`${file}: every roster row needs a stable string "id"`);
@@ -170,6 +215,21 @@ async function readRoster(file, rules) {
         throw new Error(`${file}: rows "${prior}" and "${row.id}" share the email ${email}`);
       }
       seenEmails.set(email, row.id);
+    }
+
+    // Same argument, applied to the handle: it is the DM channel's only
+    // recipient key, so two rows sharing one produce two SEND lines for one
+    // person — a double-DM at the same touch, from a plan that reads clear.
+    // The email guard above catches this pair only when both rows also carry
+    // the same address, and the DM-only rows (`"email": null`) that make up
+    // most of the DM cohort carry no address to collide on.
+    const xHandle = rules.normalizeHandle(row.xHandle);
+    if (xHandle !== null) {
+      const prior = seenHandles.get(xHandle);
+      if (prior !== undefined) {
+        throw new Error(`${file}: rows "${prior}" and "${row.id}" share the X handle @${xHandle}`);
+      }
+      seenHandles.set(xHandle, row.id);
     }
   }
   return rows;
