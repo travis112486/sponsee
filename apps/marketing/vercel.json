@@ -5,7 +5,6 @@
   "rewrites": [
     { "source": "/waitlist/confirmed", "destination": "/waitlist-confirmed.html" }
   ],
-  "//redirects": "SPO-199: the three SPO-20 static blog pages (commit c020060) are retired in favour of the real /blog/<slug> posts. how-to-chase-late-payments cannibalised the new sponsor-paying-late post's keywords, so it 301s to its successor; rate-calculator-for-streamers has no successor post (there is still no /calculator route) and falls back to the blog index per the CoS rule on SPO-33. statusCode is set explicitly because Vercel's `permanent: true` emits 308, and the issue calls for 301.",
   "redirects": [
     {
       "source": "/blog/how-to-chase-late-payments.html",
