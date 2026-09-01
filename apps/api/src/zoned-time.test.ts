@@ -13,11 +13,38 @@ import {
   startOfZonedYear,
   zonedMonthKey,
   zonedWallClockToUtc,
+  type ZonedParts,
 } from "./zoned-time.js";
 
 const NY = "America/New_York";
 const SYDNEY = "Australia/Sydney";
 const KATHMANDU = "Asia/Kathmandu"; // UTC+05:45, no DST — catches offsets assumed whole-hour
+
+// Zones that schedule DST changes at local midnight, so a transition lands on a
+// day/month boundary rather than safely inside one. Egypt, Jordan, Lebanon,
+// Syria, Palestine and Morocco change these rules by decree and the changes
+// ship in Node's bundled tzdata, so this list is a moving target — the sweep
+// below is what actually guards the invariant.
+const BEIRUT = "Asia/Beirut";
+const CAIRO = "Africa/Cairo";
+const MIDNIGHT_TRANSITION_ZONES = [
+  BEIRUT,
+  CAIRO,
+  "Asia/Amman",
+  "Asia/Damascus",
+  "Asia/Gaza",
+  "Asia/Hebron",
+  "Africa/Casablanca",
+  "Africa/El_Aaiun",
+  "Asia/Tehran",
+  "America/Havana",
+  "America/Santiago",
+  "Atlantic/Azores",
+  "Antarctica/Casey",
+  "Antarctica/Davis",
+  "Asia/Chita",
+  "Asia/Magadan",
+];
 
 describe("getZonedParts", () => {
   it("reads the local civil clock, not the UTC one", () => {
@@ -59,8 +86,11 @@ describe("zonedWallClockToUtc", () => {
     }
   });
 
-  it("resolves a wall clock skipped by spring-forward to the first instant after the gap", () => {
+  it("shifts a wall clock skipped by spring-forward forward by the width of the gap", () => {
     // 2026-03-08 02:30 does not exist in New York; the clock jumps 02:00 → 03:00.
+    // The gap is an hour wide, so 02:30 lands on 03:30 local — NOT on 02:00's
+    // successor 07:00Z, which is what "the first instant after the gap" would
+    // mean. The two coincide only when the gap starts at the wall clock itself.
     const resolved = zonedWallClockToUtc(
       { year: 2026, month: 3, day: 8, hour: 2, minute: 30 },
       NY
@@ -74,6 +104,15 @@ describe("zonedWallClockToUtc", () => {
     expect(
       zonedWallClockToUtc({ year: 2026, month: 11, day: 1, hour: 1, minute: 30 }, NY).toISOString()
     ).toBe("2026-11-01T05:30:00.000Z");
+  });
+
+  it("resolves a midnight gap onto the transition instant, not the previous local day", () => {
+    // SPO-245. Asia/Beirut springs forward AT midnight: 2026-03-29 00:00 → 01:00.
+    // Resolving the offset by iterating reads used to land on 21:00Z — 23:00 on
+    // the 28th — because the as-if-UTC guess fell on the pre-transition side.
+    const resolved = zonedWallClockToUtc({ year: 2026, month: 3, day: 29 }, BEIRUT);
+    expect(resolved.toISOString()).toBe("2026-03-28T22:00:00.000Z");
+    expect(getZonedParts(resolved, BEIRUT).day).toBe(29);
   });
 });
 
@@ -110,6 +149,106 @@ describe("start-of-period helpers", () => {
       "2026-02-01T05:00:00.000Z"
     );
   });
+});
+
+describe("period starts across a midnight DST transition (SPO-245)", () => {
+  it("starts the local day on the transition instant when the gap opens at midnight", () => {
+    // Asia/Beirut 2026-03-29 and Africa/Cairo 2026-04-24 both jump 00:00 → 01:00.
+    // The first instant of the local day is the transition itself; the old
+    // iterate-the-offset resolution returned 21:00Z, i.e. the *previous* day.
+    expect(startOfZonedDay(new Date("2026-03-29T13:30:00Z"), BEIRUT).toISOString()).toBe(
+      "2026-03-28T22:00:00.000Z"
+    );
+    expect(startOfZonedDay(new Date("2026-04-24T13:30:00Z"), CAIRO).toISOString()).toBe(
+      "2026-04-23T22:00:00.000Z"
+    );
+    // Recurs annually — pin a second year so a one-off tzdata edit cannot hide it.
+    expect(startOfZonedDay(new Date("2030-03-31T13:30:00Z"), BEIRUT).toISOString()).toBe(
+      "2030-03-30T22:00:00.000Z"
+    );
+  });
+
+  it("starts the local month on the transition instant when the gap opens on the 1st", () => {
+    // No zone currently schedules a midnight change on the 1st, but Egypt,
+    // Jordan and Syria all have, by decree, within tzdata's live range. These
+    // are the dates that made startOfZonedMonth disagree with zonedMonthKey.
+    expect(startOfZonedMonth(new Date("2014-08-15T12:00:00Z"), CAIRO).toISOString()).toBe(
+      "2014-07-31T22:00:00.000Z"
+    );
+    expect(startOfZonedMonth(new Date("2016-04-15T12:00:00Z"), "Asia/Amman").toISOString()).toBe(
+      "2016-03-31T22:00:00.000Z"
+    );
+    expect(startOfZonedMonth(new Date("2011-04-15T12:00:00Z"), "Asia/Damascus").toISOString()).toBe(
+      "2011-03-31T22:00:00.000Z"
+    );
+  });
+
+  it("takes the earlier midnight when a fall-back repeats it", () => {
+    // Antarctica/Casey fell back 3h at 02:00 on 2010-03-05, so the local clock
+    // crossed midnight *backwards*: local Mar 5 00:00 happened at 13:00Z (+11),
+    // ran to 02:00, rewound to Mar 4 23:00, and reached Mar 5 00:00 again at
+    // 16:00Z (+08). The day starts the first time the zone reaches it.
+    // (05:00Z is Mar 5 13:00 local, unambiguously inside the local day.)
+    expect(startOfZonedDay(new Date("2010-03-05T05:00:00Z"), "Antarctica/Casey").toISOString()).toBe(
+      "2010-03-04T13:00:00.000Z"
+    );
+  });
+
+  // The pinned dates above are samples. This is the invariant: every start-of-
+  // period helper must return the FIRST instant the zone reaches that local
+  // period. Two assertions pin that uniquely — the result is inside the period
+  // the probe belongs to, and the millisecond before it is not.
+  const periodKey = {
+    day: (p: ZonedParts) => `${p.year}-${p.month}-${p.day}`,
+    week: (p: ZonedParts) => {
+      const civil = Date.UTC(p.year, p.month - 1, p.day);
+      const sinceMonday = (new Date(civil).getUTCDay() + 6) % 7;
+      return new Date(civil - sinceMonday * 86_400_000).toISOString().slice(0, 10);
+    },
+    month: (p: ZonedParts) => `${p.year}-${p.month}`,
+    quarter: (p: ZonedParts) => `${p.year}-Q${Math.floor((p.month - 1) / 3) + 1}`,
+    year: (p: ZonedParts) => `${p.year}`,
+  };
+  const starts = {
+    day: startOfZonedDay,
+    week: startOfZonedWeek,
+    month: startOfZonedMonth,
+    quarter: startOfZonedQuarter,
+    year: startOfZonedYear,
+  };
+
+  it.each(MIDNIGHT_TRANSITION_ZONES)(
+    "returns the first instant of every local day/week/month/quarter/year in %s, 2024-2040",
+    (tz) => {
+      const end = Date.UTC(2041, 0, 1);
+      const failures: string[] = [];
+      // Each period is asserted once per distinct local period — checking the
+      // same month start again from all 30 of its days costs 30x and proves
+      // nothing new, since the helpers derive the boundary from the parts.
+      const seen: Record<string, string> = {};
+      // 12h steps: no local day in range is shorter than that, so every real
+      // local day is visited (and days a zone skips entirely are never invented).
+      for (let t = Date.UTC(2024, 0, 1); t < end; t += 12 * 60 * 60 * 1000) {
+        const probe = new Date(t);
+        const parts = getZonedParts(probe, tz);
+        for (const name of ["day", "week", "month", "quarter", "year"] as const) {
+          const key = periodKey[name];
+          const k = key(parts);
+          if (seen[name] === k) continue;
+          seen[name] = k;
+
+          const start = starts[name](probe, tz);
+          if (key(getZonedParts(start, tz)) !== k) {
+            failures.push(`${tz} ${name} ${k}: start ${start.toISOString()} is a different ${name}`);
+          } else if (key(getZonedParts(new Date(start.getTime() - 1), tz)) === k) {
+            failures.push(`${tz} ${name} ${k}: ${start.toISOString()} is not the FIRST instant`);
+          }
+        }
+      }
+      expect(failures.slice(0, 10)).toEqual([]);
+    },
+    30_000
+  );
 });
 
 describe("startOfZonedWeek", () => {
