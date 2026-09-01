@@ -84,6 +84,11 @@ const PIPELINE = [
 
 function overview(over: Record<string, unknown> = {}) {
   return {
+    // SPO-239 ships the zone every boundary below was computed in. The client
+    // must label months with it rather than re-deriving them from
+    // `periodStart`, which is an instant and lands in the wrong civil month
+    // for every creator east of UTC.
+    timeZone: "UTC",
     revenue: {
       period: "month",
       periodStart: new Date(Date.UTC(2026, 8, 1)),
@@ -215,6 +220,46 @@ describe("revenue is on the screen at all (SPO-194 headline gap)", () => {
     // Aug $3,000 → Sep $3,847 is +28%.
     expect(screen.getByText("▲ 28%")).toBeInTheDocument();
     expect(screen.getByText("vs $3,000 last month")).toBeInTheDocument();
+  });
+
+  // ── Creator-local periods (SPO-239) ──────────────────────────────────────
+  //
+  // `periodStart` is an *instant*, not a civil date. For a creator east of UTC
+  // the start of their local September is still August in UTC, so reading the
+  // month back out of it in UTC names the wrong month and keys the wrong
+  // bucket. The server ships `timeZone` precisely so the client never has to
+  // make that inference. Tokyo is UTC+9, the widest common case.
+  function tokyoOverview() {
+    const o = overview({ timeZone: "Asia/Tokyo" });
+    // 2026-09-01T00:00 in Tokyo === 2026-08-31T15:00Z.
+    o.revenue.periodStart = new Date("2026-08-31T15:00:00.000Z");
+    o.revenue.periodEnd = new Date("2026-09-30T15:00:00.000Z");
+    // Distinct July and August totals: comparing against the wrong month shows
+    // a wrong number rather than merely dropping the chip.
+    const m = o.revenue.monthly as Month[];
+    m.find((x) => x.month === "2026-07")!.valueCents = 1_000_00;
+    m.find((x) => x.month === "2026-08")!.valueCents = 3_000_00;
+    return o;
+  }
+
+  it("labels the revenue card in the creator's zone, not UTC", () => {
+    mockOverview(tokyoOverview());
+    renderDashboard();
+
+    // Reading periodStart as UTC yields "Aug" — the month before the one the
+    // card is actually reporting.
+    expect(screen.getByText("Revenue (Sep)")).toBeInTheDocument();
+    expect(screen.queryByText("Revenue (Aug)")).not.toBeInTheDocument();
+  });
+
+  it("picks the previous month's bucket in the creator's zone", () => {
+    mockOverview(tokyoOverview());
+    renderDashboard();
+
+    // Sep $3,847 vs Aug $3,000 is +28%. A UTC-derived key reads "2026-07" and
+    // would compare against July's $1,000, showing +285%.
+    expect(screen.getByText("vs $3,000 last month")).toBeInTheDocument();
+    expect(screen.queryByText("vs $1,000 last month")).not.toBeInTheDocument();
   });
 
   it("shows no delta at all when the previous period earned nothing", () => {

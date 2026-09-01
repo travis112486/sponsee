@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addMonthsToKey,
   formatAxisCents,
   formatCents,
   formatDueChip,
   formatRelativeTime,
   monthLabels,
+  zonedMonthKey,
+  zonedMonthShort,
 } from "./format";
 
 // Literals throughout, not values re-derived from the functions under test —
@@ -78,5 +81,52 @@ describe("formatDueChip", () => {
 
   it("stays total when the row somehow has no date", () => {
     expect(formatDueChip(null, null, now)).toBe("No date");
+  });
+});
+
+describe("zonedMonthKey", () => {
+  // The instant Tokyo's September begins. In UTC it is still 31 August.
+  const tokyoSeptStart = new Date("2026-08-31T15:00:00.000Z");
+
+  it("names the month the creator is actually in", () => {
+    expect(zonedMonthKey(tokyoSeptStart, "Asia/Tokyo")).toBe("2026-09");
+  });
+
+  it("names a different month for the same instant read in UTC", () => {
+    // Not a curiosity — this is the bucket-selection bug it exists to prevent.
+    expect(zonedMonthKey(tokyoSeptStart, "UTC")).toBe("2026-08");
+  });
+
+  it("handles zones behind UTC", () => {
+    // 2026-09-01T00:00 in Los Angeles is 07:00Z the same day.
+    expect(zonedMonthKey(new Date("2026-09-01T07:00:00.000Z"), "America/Los_Angeles")).toBe(
+      "2026-09"
+    );
+    // An hour earlier is still August there.
+    expect(zonedMonthKey(new Date("2026-09-01T06:00:00.000Z"), "America/Los_Angeles")).toBe(
+      "2026-08"
+    );
+  });
+
+  it("falls back to UTC rather than throwing on a bad zone", () => {
+    expect(zonedMonthKey(tokyoSeptStart, "Not/AZone")).toBe("2026-08");
+    expect(zonedMonthShort(tokyoSeptStart, "Not/AZone")).toBe("Aug");
+  });
+});
+
+describe("addMonthsToKey", () => {
+  it("steps back within a year", () => {
+    expect(addMonthsToKey("2026-09", -1)).toBe("2026-08");
+    expect(addMonthsToKey("2026-09", -3)).toBe("2026-06");
+  });
+
+  it("crosses the year boundary in both directions", () => {
+    expect(addMonthsToKey("2026-01", -1)).toBe("2025-12");
+    expect(addMonthsToKey("2026-01", -13)).toBe("2024-12");
+    expect(addMonthsToKey("2026-12", 1)).toBe("2027-01");
+  });
+
+  it("is a no-op at zero", () => {
+    expect(addMonthsToKey("2026-09", 0)).toBe("2026-09");
   });
 });

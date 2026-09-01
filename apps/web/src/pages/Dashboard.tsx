@@ -36,10 +36,13 @@ import { cn } from "@/lib/utils";
 
 import { RevenueChart } from "./dashboard/RevenueChart";
 import {
+  addMonthsToKey,
   formatCents,
   formatDueChip,
   formatExactTime,
   formatRelativeTime,
+  zonedMonthKey,
+  zonedMonthShort,
 } from "./dashboard/format";
 
 type Period = "month" | "quarter";
@@ -57,14 +60,6 @@ type Overview = inferRouterOutputs<AppRouter>["dashboard"]["overview"];
 
 /* ─────────────────────────── Period comparison ─────────────────────────── */
 
-function monthKeyUtc(d: Date): string {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-function addMonthsUtc(d: Date, n: number): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, 1));
-}
-
 /**
  * Previous-period revenue, summed out of the server's own trailing-12-month
  * buckets.
@@ -74,23 +69,31 @@ function addMonthsUtc(d: Date, n: number): Date {
  * previous calendar month / quarter is exactly a subset of them. Returns `null`
  * when the comparison window falls outside the twelve buckets, so the card
  * shows no delta rather than an invented one.
+ *
+ * Keyed in the creator's zone (SPO-239): the buckets are creator-local months,
+ * so a UTC-derived key silently selects the wrong one for every creator east of
+ * UTC — comparing September against July and reporting the result as "last
+ * month".
  */
-function previousPeriodCents(revenue: Overview["revenue"]): number | null {
+function previousPeriodCents(
+  revenue: Overview["revenue"],
+  timeZone: string
+): number | null {
   const span = revenue.period === "quarter" ? 3 : 1;
   const byKey = new Map(revenue.monthly.map((m) => [m.month, m.valueCents]));
-  const prevStart = addMonthsUtc(new Date(revenue.periodStart), -span);
+  const currentKey = zonedMonthKey(new Date(revenue.periodStart), timeZone);
 
   let sum = 0;
-  for (let i = 0; i < span; i++) {
-    const cents = byKey.get(monthKeyUtc(addMonthsUtc(prevStart, i)));
+  for (let i = span; i >= 1; i--) {
+    const cents = byKey.get(addMonthsToKey(currentKey, -i));
     if (cents === undefined) return null;
     sum += cents;
   }
   return sum;
 }
 
-function revenueDelta(revenue: Overview["revenue"]) {
-  const prev = previousPeriodCents(revenue);
+function revenueDelta(revenue: Overview["revenue"], timeZone: string) {
+  const prev = previousPeriodCents(revenue, timeZone);
   // A percentage change from zero is undefined, not "+100%".
   if (prev === null || prev === 0) return undefined;
   const pct = Math.round(((revenue.totalCents - prev) / prev) * 100);
@@ -273,14 +276,14 @@ function OverdueAlert({
 
 function KpiRow({ overview, now }: { overview: Overview; now: Date }) {
   const navigate = useNavigate();
-  const { revenue, pipeline, deliverablesDue, overdue } = overview;
+  const { revenue, pipeline, deliverablesDue, overdue, timeZone } = overview;
 
   const isMonth = revenue.period === "month";
-  const periodName = new Date(revenue.periodStart).toLocaleDateString("en-US", {
-    month: "short",
-    timeZone: "UTC",
-  });
-  const delta = revenueDelta(revenue);
+  // The creator's zone, not UTC and not the browser's: `periodStart` is the
+  // instant their local month began, so any other zone can name the month
+  // before the one this card is reporting (SPO-239).
+  const periodName = zonedMonthShort(new Date(revenue.periodStart), timeZone);
+  const delta = revenueDelta(revenue, timeZone);
   const spark = revenue.monthly.slice(-6).map((m) => m.valueCents / 100);
 
   const stageCount = (s: DealStage) =>
