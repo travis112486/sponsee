@@ -131,10 +131,10 @@ export function HeroDashboard() {
         <div className="grid grid-cols-3 gap-3 max-sm:grid-cols-1">
           <StatMini
             label="Pipeline value"
-            figure="$12,400"
+            figure="$9,200"
             chip="+18%"
             chipTone="accent"
-            context="8 open deals"
+            context="7 open deals"
           />
           <StatMini
             label="Outstanding"
@@ -267,9 +267,9 @@ export function CalculatorMock() {
           </span>
           <div className="mt-2 grid grid-cols-3 gap-2">
             {[
-              { band: "Floor", amount: "$420", hot: false },
-              { band: "Mid", amount: "$720", hot: true },
-              { band: "High", amount: "$1,050", hot: false },
+              { band: "Floor", amount: "$2,160", hot: false },
+              { band: "Mid", amount: "$3,600", hot: true },
+              { band: "High", amount: "$5,400", hot: false },
             ].map((t) => (
               <div
                 key={t.band}
@@ -288,8 +288,9 @@ export function CalculatorMock() {
           </div>
           <div className="mt-3">
             <div className="relative h-1.5 rounded-full bg-hairline">
-              <div className="absolute left-[28%] right-[22%] h-1.5 rounded-full bg-pine/30" />
-              <div className="absolute left-[46%] top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border-2 border-surface bg-pine shadow-warm" />
+              {/* Track is $0–$2.00/vh: band $0.60–$1.50 → 30%–75%, marker at the $1.00 mid → 50% */}
+              <div className="absolute left-[30%] right-[25%] h-1.5 rounded-full bg-pine/30" />
+              <div className="absolute left-[50%] top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-surface bg-pine shadow-warm" />
             </div>
             <p className="tnum mt-2 text-[10px] text-ink-3">
               Benchmark: $0.60–$1.50 per viewer-hour for live sponsorships
