@@ -22,6 +22,7 @@ export type ActivityEventLike = {
   actor: string;
   entityType: string;
   entityId: string;
+  kind: string;
   payload: unknown;
   createdAt: string | Date;
 };
@@ -65,7 +66,7 @@ export function buildNotifications({
   for (const event of activity ?? []) {
     items.push({
       id: `activity:${event.id}`,
-      title: describeActivity(event.actor, event.payload),
+      title: describeActivity(event.actor, event.payload, event.kind),
       at: toIso(event.createdAt),
       href: activityHref(event),
       tone: "default",

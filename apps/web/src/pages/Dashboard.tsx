@@ -730,7 +730,7 @@ function ActivityCard({
                   <Icon className="h-3.5 w-3.5 text-ink-2" aria-hidden />
                 </span>
                 <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">
-                  {describeActivity(e.actor, e.payload)}
+                  {describeActivity(e.actor, e.payload, e.kind)}
                 </span>
                 <time
                   dateTime={new Date(e.createdAt).toISOString()}

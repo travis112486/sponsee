@@ -1,4 +1,13 @@
-import { proofKindLabels, type ProofKind } from "@sponsee/shared";
+import {
+  contractStatusLabels,
+  platformLabels,
+  proofKindLabels,
+  stageLabels,
+  type ContractStatus,
+  type DealStage,
+  type Platform,
+  type ProofKind,
+} from "@sponsee/shared";
 
 export type ActivityPayload = {
   step?: number;
@@ -6,12 +15,46 @@ export type ActivityPayload = {
   action?: string;
   reason?: string;
   proofKind?: string;
+  from?: string;
+  to?: string;
+  trigger?: string;
+  platform?: string;
+  handle?: string;
 };
+
+function lowerFirst(value: string): string {
+  return value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
+}
 
 // Shared by the Dashboard activity feed and the Topbar notification bell so the
 // two surfaces can never describe the same event differently (SPO-153).
-export function describeActivity(actor: string, payload: unknown): string {
+export function describeActivity(actor: string, payload: unknown, kind?: string): string {
   const p = (payload ?? {}) as ActivityPayload;
+
+  // Contract, stage and platform events share no fields with a chase event, so
+  // they have to be named from `kind` — a payload-only switch mislabeled every
+  // one of them "Chase updated" / "Chase activity" (SPO-334).
+  if (kind === "contract") {
+    if (p.action === "status_change") {
+      const to = p.to ? contractStatusLabels[p.to as ContractStatus] ?? p.to : "";
+      return to ? `Contract ${lowerFirst(to)}` : "Contract status changed";
+    }
+    if (p.action === "attached") return "Contract attached";
+    if (p.action === "updated") return "Contract updated";
+    if (p.action === "removed") return "Contract removed";
+    return actor === "system" ? "Contract activity" : "Contract updated";
+  }
+
+  if (kind === "stage_change") {
+    const to = p.to ? stageLabels[p.to as DealStage] ?? p.to : "";
+    return to ? `Deal moved to ${to}` : "Deal stage changed";
+  }
+
+  if (kind === "platform_sync") {
+    const platform = p.platform ? platformLabels[p.platform as Platform] ?? p.platform : "";
+    return platform ? `${platform} stats synced` : "Platform stats synced";
+  }
+
   const step = p.step !== undefined ? `step ${p.step}` : "chase";
 
   const proofKind = p.proofKind ? proofKindLabels[p.proofKind as ProofKind] ?? p.proofKind : "";
