@@ -437,7 +437,11 @@ describe("Effective CPVH card (founder-ratified null rule)", () => {
     });
     renderDashboard();
 
-    const card = screen.getByLabelText("Loading effective CPVH");
+    // Query by role, not label: aria-busy and aria-label only reach assistive
+    // tech on a live region, so the skeleton must expose role="status". This
+    // assertion is coverage, not the guard — testing-library's tree is more
+    // permissive than a real AT tree (SPO-331).
+    const card = screen.getByRole("status", { name: "Loading effective CPVH" });
     expect(card).toHaveAttribute("aria-busy", "true");
     expect(screen.queryByText("Not enough data yet")).not.toBeInTheDocument();
     expect(within(card).queryByText(/^\$/)).not.toBeInTheDocument();
@@ -472,7 +476,7 @@ describe("Effective CPVH card (founder-ratified null rule)", () => {
       refetch: vi.fn(),
     });
     const loading = renderDashboard();
-    const skeleton = screen.getByLabelText("Loading effective CPVH");
+    const skeleton = screen.getByRole("status", { name: "Loading effective CPVH" });
     expect(skeleton.className).toContain("sm:col-span-2");
     expect(skeleton.className).toContain("lg:col-span-1");
     loading.unmount();
@@ -730,7 +734,7 @@ describe("page states", () => {
     mockOverview(undefined, { isLoading: true });
     renderDashboard();
 
-    const region = screen.getByLabelText("Loading your dashboard");
+    const region = screen.getByRole("status", { name: "Loading your dashboard" });
     expect(region).toHaveAttribute("aria-busy", "true");
     expect(region.querySelectorAll(".animate-pulse").length).toBeGreaterThan(5);
   });
