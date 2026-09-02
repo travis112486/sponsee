@@ -46,7 +46,7 @@ export default {
         ink: {
           DEFAULT: "#1B1815",
           2: "#57504A",
-          3: "#8A8178",
+          3: "#757069",
         },
         hairline: "#E8E3DB",
         pine: {
@@ -65,11 +65,17 @@ export default {
         twitch: "#8B5CF6",
         youtube: "#E5484D",
         kick: "#58A617",
+        // TikTok's brand mark is black; kept inside the warm set instead of
+        // neon cyan/magenta (SPO-193) — mirrors apps/web.
+        tiktok: "#1B1815",
+      },
+      transitionTimingFunction: {
+        // The house easing curve from apps/web/src/lib/motion.ts.
+        house: "cubic-bezier(0.22, 1, 0.36, 1)",
       },
       fontFamily: {
         sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
         serif: ["'Instrument Serif'", "Georgia", "serif"],
-        mono: ["'JetBrains Mono'", "ui-monospace", "monospace"],
       },
       borderRadius: {
         xl: "calc(var(--radius) + 4px)",
