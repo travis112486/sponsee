@@ -697,9 +697,9 @@ describe("recent activity", () => {
   });
 
   it("names contract, stage-change and platform-sync events instead of chase copy (SPO-334)", () => {
-    // `kind` is an optional third param on describeActivity, so dropping it at
-    // this call site is not a type error — it just regresses these three rows
-    // to "Chase updated" with CI green. Assert the rendered copy, not the arg.
+    // Assert the rendered copy, not just the arg. `kind` is now a required
+    // `ActivityKind` param (SPO-345), but this still guards against routing
+    // these kinds back to chase copy.
     activityQuery.mockReturnValue({
       data: [
         {

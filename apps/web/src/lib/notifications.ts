@@ -1,3 +1,4 @@
+import type { ActivityKind } from "@sponsee/shared";
 import { describeActivity } from "./activity-label";
 
 // The Topbar bell (SPO-153). Notifications are derived on the client from data
@@ -22,7 +23,7 @@ export type ActivityEventLike = {
   actor: string;
   entityType: string;
   entityId: string;
-  kind: string;
+  kind: ActivityKind;
   payload: unknown;
   createdAt: string | Date;
 };

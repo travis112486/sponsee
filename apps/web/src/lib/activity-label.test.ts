@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { activityKinds } from "@sponsee/shared";
 import { describeActivity } from "./activity-label";
 
 describe("describeActivity", () => {
@@ -40,5 +41,29 @@ describe("describeActivity", () => {
     expect(describeActivity("creator", { action: "pause", reason: "manual" }, "chase_sent")).toBe(
       "Chase paused (manual)"
     );
+  });
+
+  it("names the remaining six kinds by their own noun, never chase copy (SPO-345)", () => {
+    expect(describeActivity("creator", {}, "invoice")).toBe("Invoice updated");
+    expect(describeActivity("system", {}, "invoice")).toBe("Invoice activity");
+    expect(describeActivity("creator", {}, "payment")).toBe("Payment updated");
+    expect(describeActivity("creator", {}, "inquiry")).toBe("Inquiry updated");
+    expect(describeActivity("creator", {}, "note")).toBe("Note updated");
+    expect(describeActivity("creator", {}, "deliverable")).toBe("Deliverable updated");
+    expect(describeActivity("system", {}, "deliverable")).toBe("Deliverable activity");
+  });
+
+  it("keeps 'Chase …' copy exclusive to the chase_sent kind (SPO-345)", () => {
+    expect(describeActivity("creator", {}, "chase_sent")).toBe("Chase updated");
+    expect(describeActivity("system", {}, "chase_sent")).toBe("Chase activity");
+  });
+
+  it("never renders chase copy for any non-chase kind, whatever the actor (SPO-345)", () => {
+    for (const kind of activityKinds) {
+      if (kind === "chase_sent") continue;
+      for (const actor of ["creator", "system"] as const) {
+        expect(describeActivity(actor, {}, kind)).not.toMatch(/chase/i);
+      }
+    }
   });
 });
