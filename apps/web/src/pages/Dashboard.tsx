@@ -367,7 +367,11 @@ function KpiRow({
           span — sm:col-span-2 lg:col-span-1 — so a loading or failed card
           cannot re-shape the row. */}
       {cpvh.kind === "loading" ? (
+        // No entrance() on the loading/error tiles: a skeleton must reserve
+        // layout instantly, and the real StatCard plays entrance(4) when it
+        // mounts — animating both would enter the same tile twice (SPO-331).
         <div
+          role="status"
           className="rounded-xl border border-hairline bg-surface p-5 shadow-warm sm:col-span-2 lg:col-span-1"
           aria-busy="true"
           aria-label="Loading effective CPVH"
@@ -735,7 +739,12 @@ function ActivityCard({
 
 function DashboardSkeleton() {
   return (
-    <div className="space-y-4" aria-busy="true" aria-label="Loading your dashboard">
+    <div
+      role="status"
+      className="space-y-4"
+      aria-busy="true"
+      aria-label="Loading your dashboard"
+    >
       <div className="flex items-end justify-between gap-4">
         <div>
           <Skeleton className="h-8 w-64" />
