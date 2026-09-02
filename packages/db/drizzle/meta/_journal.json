@@ -113,6 +113,13 @@
       "when": 1788311043679,
       "tag": "0015_blue_warhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788359093690,
+      "tag": "0016_huge_demogoblin",
+      "breakpoints": true
     }
   ]
 }

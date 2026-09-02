@@ -1,55 +1,47 @@
 import { DeleteObjectsCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { db } from "@sponsee/db";
-import { deals } from "@sponsee/db/schema";
-import { inArray } from "drizzle-orm";
+import { creatorFiles } from "@sponsee/db/schema";
+import { and, inArray, isNull } from "drizzle-orm";
 import { buildS3Client } from "./client.js";
 import { getStorageConfig } from "./config.js";
 
 /**
- * Grace period before an orphaned object is actually deleted. A placeholder
- * pending the founder's retention-policy decision (SPO-155 card) — bump this
- * constant once that lands, nothing else needs to change.
+ * Grace period before an unreferenced object is actually deleted. Exists for
+ * one narrow race: a client presigns an upload, PUTs the object, and the
+ * commit mutation (proof.create / contract.upsert) that inserts the
+ * `creator_files` row hasn't run yet when a sweep happens to land in that
+ * window. It is not a retention policy — see SPO-155/SPO-348 for that — this
+ * only protects objects that are moments away from being registered.
  */
 export const STORAGE_ORPHAN_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
-
-const DEAL_ID_FROM_KEY = /^creators\/[^/]+\/deals\/([^/]+)\//;
-
-/**
- * `deals.id` is a `uuid` column, so a captured segment that isn't one would
- * fail the `inArray` query below — and since that query batches every
- * candidate id from the page in one call, a single bad key would throw for
- * the whole page instead of just that key. Keys are always server-generated
- * via `buildObjectKey` (see keys.ts), but the bucket can still contain a
- * hand-uploaded object or a leftover from a migration/manual test whose path
- * merely resembles the convention, so this can't be assumed away.
- */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface StorageSweepResult {
   scanned: number;
   deleted: number;
-  skippedUnrecognized: number;
   skippedUnconfigured: boolean;
 }
 
 /**
- * Reconciliation sweep for objects orphaned by a hard `deals` row deletion.
+ * Reconciliation sweep for objects nothing references any more.
  *
- * `proofs` and `contracts` FK-cascade off `deals` at the DB level (see
- * packages/db/src/schema/index.ts), so once a deal row is actually deleted,
- * Postgres removes its proof/contract rows itself — no application code runs,
- * so nothing calls `deleteObject` for whatever those rows pointed at. This
- * job is the backstop for exactly that gap; a creator-initiated delete of a
- * single proof/contract should call `deleteObject` directly at the call site
- * instead (see the doc comment on `deleteObject` in delete.ts) and never
- * needs to wait for this to run.
+ * The `creator_files` table (packages/db/src/schema/index.ts) is the single
+ * source of truth for whether an object is still "alive": every commit path
+ * that finishes an upload (proof.create, contract.upsert) inserts a row
+ * there in the same transaction as the proof/contract row, and that row's
+ * `originDealId` goes `set null` — not cascade — when the deal it was
+ * uploaded against is deleted, so the file survives even though the deal
+ * doesn't (SPO-155's retention call: keep files indefinitely until
+ * explicitly deleted). So this sweep does not care whether an object's deal
+ * still exists — it asks only "does a live `creator_files` row reference
+ * this key," which is exactly the set of objects an explicit
+ * proof/contract delete has not already tombstoned (see registry.ts) and a
+ * commit mutation has not yet abandoned mid-upload.
  *
- * The key convention (`creators/{creatorId}/deals/{dealId}/{scope}/{uuid}.ext`)
- * embeds the owning deal id, so detecting an orphan needs no tracking table:
- * list every key, read the deal id back out of it, and check whether that
- * deal still exists. Anything whose deal is gone — and whose `LastModified`
- * is older than the grace period, so an object doesn't get swept in the
- * narrow window before its deal row exists — is deleted.
+ * Anything under the `creators/` prefix with no such row — a presigned
+ * upload the client PUT but never committed, or a tombstoned explicit
+ * delete whose synchronous object delete failed — is a candidate, subject
+ * to the grace period below so a request that's mid-flight right now isn't
+ * swept out from under it.
  *
  * Registered as a scheduled pg-boss job in jobs/index.ts. Safe to call with
  * storage unconfigured: it no-ops rather than throwing, same as the rest of
@@ -61,7 +53,7 @@ export async function runStorageOrphanSweep(
 ): Promise<StorageSweepResult> {
   const config = getStorageConfig(env);
   if (!config) {
-    return { scanned: 0, deleted: 0, skippedUnrecognized: 0, skippedUnconfigured: true };
+    return { scanned: 0, deleted: 0, skippedUnconfigured: true };
   }
 
   const client = buildS3Client(config);
@@ -73,7 +65,6 @@ export async function runStorageOrphanSweep(
 
   let scanned = 0;
   let deleted = 0;
-  let skippedUnrecognized = 0;
   let continuationToken: string | undefined;
 
   do {
@@ -88,25 +79,17 @@ export async function runStorageOrphanSweep(
     const objects = page.Contents ?? [];
     scanned += objects.length;
 
-    const dealIdByKey = new Map<string, string>();
-    for (const obj of objects) {
-      const match = obj.Key ? DEAL_ID_FROM_KEY.exec(obj.Key) : null;
-      const dealId = match?.[1];
-      if (dealId && UUID_PATTERN.test(dealId)) {
-        dealIdByKey.set(obj.Key!, dealId);
-      } else if (obj.Key) {
-        skippedUnrecognized++;
-      }
-    }
+    const keys = objects.map((obj) => obj.Key).filter((key): key is string => Boolean(key));
 
-    if (dealIdByKey.size > 0) {
-      const candidateDealIds = [...new Set(dealIdByKey.values())];
-      const existing = await db.select({ id: deals.id }).from(deals).where(inArray(deals.id, candidateDealIds));
-      const existingIds = new Set(existing.map((row) => row.id));
+    if (keys.length > 0) {
+      const referenced = await db
+        .select({ storageKey: creatorFiles.storageKey })
+        .from(creatorFiles)
+        .where(and(inArray(creatorFiles.storageKey, keys), isNull(creatorFiles.deletedAt)));
+      const referencedKeys = new Set(referenced.map((row) => row.storageKey));
 
       const toDelete = objects.filter((obj) => {
-        const dealId = obj.Key ? dealIdByKey.get(obj.Key) : undefined;
-        if (!dealId || existingIds.has(dealId)) return false;
+        if (!obj.Key || referencedKeys.has(obj.Key)) return false;
         const modifiedAt = obj.LastModified?.getTime() ?? 0;
         return modifiedAt <= cutoff;
       });
@@ -125,5 +108,5 @@ export async function runStorageOrphanSweep(
     continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
   } while (continuationToken);
 
-  return { scanned, deleted, skippedUnrecognized, skippedUnconfigured: false };
+  return { scanned, deleted, skippedUnconfigured: false };
 }

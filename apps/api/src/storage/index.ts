@@ -33,3 +33,10 @@ export {
   type PresignedUpload,
 } from "./presign.js";
 export { runStorageOrphanSweep, STORAGE_ORPHAN_GRACE_PERIOD_MS, type StorageSweepResult } from "./sweep.js";
+export {
+  registerCreatorFile,
+  removeCreatorFile,
+  tombstoneCreatorFile,
+  type CreatorFileScope,
+  type RegisterCreatorFileParams,
+} from "./registry.js";

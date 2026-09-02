@@ -65,6 +65,7 @@ export const platformSyncStatusEnum = pgEnum("platform_sync_status", ["never", "
 export const planTierEnum = pgEnum("plan_tier", ["starter", "creator", "pro"]);
 export const proofKindEnum = pgEnum("proof_kind", ["vod", "clip", "chat", "overlay", "link", "file"]);
 export const contractStatusEnum = pgEnum("contract_status", ["draft", "sent", "viewed", "signed"]);
+export const creatorFileScopeEnum = pgEnum("creator_file_scope", ["evidence", "contract"]);
 
 // Mirrors Stripe's `Subscription.status`. `paused` is the one Stripe sends that
 // isn't part of the normal lifecycle — it only appears once someone sets
@@ -308,6 +309,39 @@ export const contracts = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("contracts_deal_idx").on(t.dealId)]
+);
+
+// Creator-scoped file registry (SPO-348). Owns the storage object's lifecycle
+// independently of the deal it was uploaded against: `proofs.dealId` and
+// `contracts.dealId` cascade-delete with their deal, but a creator's files
+// must survive that (the founder's retention call on SPO-155 is "keep files
+// indefinitely until explicitly deleted"), so this table's link back to the
+// deal is `set null`, not `cascade`. `originDealTitle` is denormalized at
+// insert time so a file can still say what it was attached to after the deal
+// row itself is gone. The orphan sweep (storage/sweep.ts) treats a row here —
+// not deal existence — as the signal that an object is still referenced.
+export const creatorFiles = pgTable(
+  "creator_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    creatorId: uuid("creator_id")
+      .notNull()
+      .references(() => creators.id, { onDelete: "cascade" }),
+    storageKey: text("storage_key").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    originalFilename: text("original_filename"),
+    originDealId: uuid("origin_deal_id").references(() => deals.id, { onDelete: "set null" }),
+    originDealTitle: text("origin_deal_title"),
+    scope: creatorFileScopeEnum("scope").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("creator_files_storage_key_idx").on(t.storageKey),
+    index("creator_files_creator_idx").on(t.creatorId),
+    index("creator_files_origin_deal_idx").on(t.originDealId),
+  ]
 );
 
 // Invoices

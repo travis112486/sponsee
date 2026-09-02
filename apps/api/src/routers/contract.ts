@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import { eq, and, isNull } from "drizzle-orm";
+import type { DB } from "@sponsee/db";
 import { contracts, deals, activityEvents } from "@sponsee/db/schema";
 import { contractStatuses } from "@sponsee/shared";
 import { httpUrl } from "./validators.js";
@@ -13,7 +14,10 @@ import {
   extensionFromKey,
   keyBelongsToDeal,
   mimeTypeForExtension,
+  registerCreatorFile,
+  removeCreatorFile,
   sanitizeFilename,
+  tombstoneCreatorFile,
 } from "../storage/index.js";
 
 import { type db as Db } from "@sponsee/db";
@@ -91,6 +95,9 @@ export const contractRouter = createTRPCRouter({
         .refine((v) => Boolean(v.bodyText?.trim()) || Boolean(v.fileUrl) || Boolean(v.storageKey), {
           message: "Provide a contract link, pasted text, or an uploaded PDF",
         })
+        .refine((v) => !v.storageKey || v.sizeBytes != null, {
+          message: "A file needs its sizeBytes",
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const deal = await getOwnedDeal(ctx, input.dealId);
@@ -141,21 +148,45 @@ export const contractRouter = createTRPCRouter({
       // Concurrent double-clicks race on the select-then-insert above, so the
       // unique index on deal_id is the real guard — onConflictDoUpdate makes
       // the loser of the race converge on an update instead of a 23505.
-      const [contract] = await ctx.db
-        .insert(contracts)
-        .values({ dealId: input.dealId, ...values })
-        .onConflictDoUpdate({
-          target: contracts.dealId,
-          set: { ...values, updatedAt: new Date() },
-        })
-        .returning();
+      const contract = await ctx.db.transaction(async (tx) => {
+        const [upserted] = await tx
+          .insert(contracts)
+          .values({ dealId: input.dealId, ...values })
+          .onConflictDoUpdate({
+            target: contracts.dealId,
+            set: { ...values, updatedAt: new Date() },
+          })
+          .returning();
+
+        // Registered in the same transaction as the contract row (SPO-348):
+        // a crash between the two must never leave an object the orphan
+        // sweep can't see as referenced.
+        if (input.storageKey) {
+          await registerCreatorFile(tx as unknown as DB, {
+            creatorId: ctx.creatorId,
+            storageKey: input.storageKey,
+            mimeType: "application/pdf",
+            sizeBytes: input.sizeBytes!,
+            originalFilename: upserted.originalFilename,
+            originDealId: input.dealId,
+            originDealTitle: deal.title,
+            scope: "contract",
+          });
+        }
+
+        return upserted;
+      });
 
       // contracts.dealId is uniquely indexed (SPO-115: one contract per
       // deal), so replacing an uploaded PDF — or overwriting it with a pasted
       // link/text — never creates a second row. The superseded object has to
-      // be deleted here or it orphans in the bucket (see delete.ts).
+      // be deleted here or it orphans in the bucket (see delete.ts); its
+      // registry row is tombstoned first (SPO-348) so the orphan sweep can
+      // still reclaim the object if this delete throws.
       if (existing?.storageKey && existing.storageKey !== contract.storageKey) {
+        await tombstoneCreatorFile(ctx.db, existing.storageKey);
         await deleteObject(existing.storageKey);
+        await removeCreatorFile(ctx.db, existing.storageKey);
       }
 
       const action: "attached" | "updated" = existedBefore ? "updated" : "attached";
@@ -250,7 +281,9 @@ export const contractRouter = createTRPCRouter({
       await ctx.db.delete(contracts).where(eq(contracts.id, existing.id));
 
       if (existing.storageKey) {
+        await tombstoneCreatorFile(ctx.db, existing.storageKey);
         await deleteObject(existing.storageKey);
+        await removeCreatorFile(ctx.db, existing.storageKey);
       }
 
       await ctx.db.insert(activityEvents).values({

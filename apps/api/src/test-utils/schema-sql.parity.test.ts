@@ -141,6 +141,7 @@ const ENUM_COLUMN_ALLOWLIST = new Set([
   "activity_events.kind",
   "chase_events.status",
   "contracts.status",
+  "creator_files.scope",
   "creator_platforms.platform",
   "creator_platforms.sync_status",
   "creators.plan",
