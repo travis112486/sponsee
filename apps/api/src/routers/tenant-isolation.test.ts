@@ -920,6 +920,33 @@ describe("deals router tenant isolation", () => {
     });
   });
 
+  describe("list", () => {
+    it("returns owned deals with deliverables and invoices attached", async () => {
+      const caller = dealsRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.list();
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(dealAId);
+      expect(result[0].deliverables).toHaveLength(1);
+      expect(result[0].deliverables[0].id).toBe(deliverableAId);
+      expect(result[0].invoices).toHaveLength(1);
+      expect(result[0].invoices[0].id).toBe(invoiceAId);
+    });
+
+    it("does not surface creator B's deliverables or invoices", async () => {
+      const caller = dealsRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.list();
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(dealAId);
+      // The seed owns deliverableBId / invoiceBId on creator B's deal. Creator A's
+      // board must surface only their own rows — this fails if the child queries
+      // ever widen beyond the creator-scoped dealIds.
+      expect(result[0].deliverables.map((d) => d.id)).toEqual([deliverableAId]);
+      expect(result[0].deliverables.map((d) => d.id)).not.toContain(deliverableBId);
+      expect(result[0].invoices.map((i) => i.id)).toEqual([invoiceAId]);
+      expect(result[0].invoices.map((i) => i.id)).not.toContain(invoiceBId);
+    });
+  });
+
   describe("create", () => {
     it("creates a deal with an owned brand", async () => {
       const caller = dealsRouter.createCaller(mockCtx(creatorAId));
