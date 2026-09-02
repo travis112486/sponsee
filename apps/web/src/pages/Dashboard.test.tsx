@@ -142,6 +142,13 @@ function overview(over: Record<string, unknown> = {}) {
         },
       },
     },
+    // Deliberately larger than `overdue.totalCents`: outstanding is every OPEN
+    // invoice (late or not), and the Outstanding-card tests pin that the KPI
+    // reads this figure, not the overdue subset (SPO-237).
+    outstanding: {
+      count: 4,
+      totalCents: 5_150_00,
+    },
     ...over,
   };
 }
@@ -273,6 +280,54 @@ describe("revenue is on the screen at all (SPO-194 headline gap)", () => {
     expect(
       screen.getByText("Paid invoices, dated by when the money landed")
     ).toBeInTheDocument();
+  });
+});
+
+/* ─────────────────────────── Outstanding card ──────────────────────────── */
+
+describe("Outstanding card (SPO-237, all-open total)", () => {
+  it("shows the all-open total, not the overdue subset", () => {
+    renderDashboard();
+
+    const card = screen.getByText("Outstanding").closest("button")!;
+    // The fixture pins overdue ($2,400) as a strict subset of outstanding
+    // ($5,150); relabelling `overdue.totalCents` would fail here.
+    expect(within(card).getByText("$5,150")).toBeInTheDocument();
+    expect(within(card).queryByText("$2,400")).not.toBeInTheDocument();
+    expect(within(card).getByText("All open invoices")).toBeInTheDocument();
+  });
+
+  it("renders a genuine zero as $0, never the empty affordance", () => {
+    // The mirror-image of the CPVH null rule: `outstanding.totalCents` is
+    // non-nullable in the contract, so 0 is a real balance. Any coalescing in
+    // the wiring (`?? null`) would render "Not enough data yet" and fail here.
+    mockOverview(overview({ outstanding: { count: 0, totalCents: 0 } }));
+    renderDashboard();
+
+    const card = screen.getByText("Outstanding").closest("button")!;
+    expect(within(card).getByText("$0")).toBeInTheDocument();
+    expect(within(card).queryByText("Not enough data yet")).not.toBeInTheDocument();
+  });
+
+  it("carries no delta chip — the contract has no prior-period window for it", () => {
+    renderDashboard();
+
+    const card = screen.getByText("Outstanding").closest("button")!;
+    expect(card.querySelector(".rounded-full")).toBeNull();
+  });
+
+  it("keeps five cards in a 5/3/2/1 grid with CPVH spanning the 2-col row", () => {
+    renderDashboard();
+
+    const grid = screen.getByText("Outstanding").closest(".grid")!;
+    for (const cls of ["sm:grid-cols-2", "lg:grid-cols-3", "xl:grid-cols-5"]) {
+      expect(grid.className).toContain(cls);
+    }
+    // The entrance wrapper around the CPVH card carries the span that stops a
+    // fifth card from wrapping into a stranded half-width orphan at 2-col.
+    const cpvh = screen.getByText("Effective CPVH").closest("button")!;
+    expect(cpvh.parentElement!.className).toContain("sm:col-span-2");
+    expect(cpvh.parentElement!.className).toContain("lg:col-span-1");
   });
 });
 
