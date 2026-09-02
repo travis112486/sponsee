@@ -309,8 +309,10 @@ export function PaymentsMock() {
       <div className="space-y-3">
         <div className="grid grid-cols-4 gap-2 max-sm:grid-cols-2">
           {[
-            { bucket: "Current", amount: "$2,400", tone: "text-ink" },
-            { bucket: "1–30 days", amount: "$1,850", tone: "text-amber" },
+            // Buckets total $3,150 — the hero dashboard's Outstanding figure,
+            // with its "2 overdue" split across the two aged buckets.
+            { bucket: "Current", amount: "$1,200", tone: "text-ink" },
+            { bucket: "1–30 days", amount: "$1,350", tone: "text-amber" },
             { bucket: "31–60 days", amount: "$600", tone: "text-brick" },
             { bucket: "60+ days", amount: "$0", tone: "text-ink-3" },
           ].map((b) => (
