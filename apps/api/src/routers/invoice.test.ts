@@ -208,21 +208,20 @@ describe("invoice.update — paidAt orphan guard (SPO-265)", () => {
     expect(updated.paidAt).toEqual(corrected);
   });
 
-  // The residual gap this fix deliberately does not close: the 0013 CHECK is
-  // one-directional, so the orphan stays *representable* even though no router
-  // path writes one. Pinned as a positive control — if someone makes the
-  // constraint a biconditional (SPO-265 option 1), this test fails loudly and
-  // tells them the router guards above are now belt-and-braces.
-  it("documents that the storage layer still permits an orphan paid_at", async () => {
+  // The 0013 CHECK was one-directional, so this same write used to succeed and
+  // leave an orphan paid_at representable in the DB even though no router path
+  // wrote one — see the SPO-265 git history for that version of this test. The
+  // 0014 CHECK (SPO-273) makes the constraint a biconditional, so the storage
+  // layer itself now rejects it: the router guards above are belt-and-braces,
+  // not the only thing enforcing the invariant.
+  it("rejects a direct write that orphans paid_at on a non-paid row at the storage layer", async () => {
     const invoice = await insertInvoice({ status: "open" });
 
-    await db
-      .update(schema.invoices)
-      .set({ paidAt: new Date("2026-04-01T00:00:00Z") })
-      .where(sql`id = ${invoice.id}`);
-
-    const [row] = await db.select().from(schema.invoices).where(sql`id = ${invoice.id}`);
-    expect(row.status).toBe("open");
-    expect(row.paidAt).not.toBeNull();
+    await expect(
+      db
+        .update(schema.invoices)
+        .set({ paidAt: new Date("2026-04-01T00:00:00Z") })
+        .where(sql`id = ${invoice.id}`)
+    ).rejects.toMatchObject({ cause: { constraint: "invoices_paid_requires_paid_at" } });
   });
 });
