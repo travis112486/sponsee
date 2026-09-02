@@ -22,17 +22,20 @@ export default function Layout({
   return (
     <div className="min-h-screen bg-paper">
       <header
-        className={`sticky top-0 z-50 bg-paper/92 backdrop-blur transition-shadow ${
+        className={`sticky top-0 z-50 bg-paper/90 backdrop-blur transition-shadow duration-150 ${
           navBorder ? "shadow-warm border-b border-hairline" : ""
         }`}
       >
-        <div className="mx-auto flex max-w-[1120px] items-center justify-between px-6 py-4">
-          <a href="/" className="font-serif text-[22px] text-ink">
+        <div className="mx-auto flex h-16 max-w-[1120px] items-center justify-between px-6">
+          <a
+            href="/"
+            className="rounded-lg font-serif text-[22px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+          >
             Sponsee<sup className="text-[13px]">™</sup>
           </a>
           <a
             href="/"
-            className="rounded-[10px] bg-pine px-4 py-2 text-sm font-medium text-white transition hover:bg-pine-hover"
+            className="inline-flex h-9 items-center rounded-lg bg-pine px-4 text-[13px] font-medium text-white transition-all duration-150 hover:bg-pine-hover active:scale-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
           >
             Back to home
           </a>
