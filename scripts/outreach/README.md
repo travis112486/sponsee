@@ -101,6 +101,16 @@ roster is only our description of it.
 - **Audience ∖ roster** blocks too, when the stray contact is *subscribed*: it
   receives Wave 1 while appearing in no decision line and in no audit record.
   An unsubscribed stray is reported and not blocked, because Resend skips it.
+- **A roster row the ledger suppresses, and the audience does not have yet, must
+  be created `unsubscribed: true` — never subscribed.** Resend creates a contact
+  subscribed by default, so obeying the first bullet on such a row arms exactly
+  the send the ledger recorded an opt-out to prevent. The preflight tags these
+  `CREATE UNSUBSCRIBED (ledger suppresses them)` under "Not yet in the audience"
+  and blocks the touch until the contact exists. **`--apply-suppressions` does
+  not clear this one.** That flag flips an *existing* subscribed contact, and a
+  contact Resend has never seen cannot be flipped, so the row never enters its
+  list. The two blockers read alike in the output and have different remedies:
+  this one is fixed by hand, by creating the contact unsubscribed.
 
 Neither direction is a block on `--channel dm`, and deliberately so: most of the
 DM cohort carries `"email": null`, so a `not-in-audience` block would make the
