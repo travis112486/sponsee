@@ -1,4 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -18,27 +19,100 @@ export function brandInitials(brand: string): string {
 }
 
 /**
- * Brand monogram tile — initials on a tinted neutral (ported from the mockup's
- * `DealCard.tsx`).
- *
- * There is no logo image path: the `brands` table has `name`, `category` and
- * `domain` but no logo column, so a logo would be invented data. If brand logos
- * are added later, this is the one component to change.
+ * Normalize a user-entered website to a bare registrable domain:
+ * "https://www.redbull.com/energydrink" → "redbull.com". Returns null when
+ * nothing domain-shaped is left, so callers can treat "no domain" and
+ * "garbage domain" the same way. Exported for the New-deal brand form.
+ */
+export function normalizeBrandDomain(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  let d = raw.trim().toLowerCase();
+  d = d.replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/^www\./, "");
+  d = d.split(/[/?#]/, 1)[0] ?? "";
+  if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/.test(d)) return null;
+  return d;
+}
+
+/**
+ * unavatar.io aggregates favicon/logo sources and, with `fallback=false`,
+ * answers 404 with an EMPTY body when it finds nothing — which is what lets
+ * the <img> onError path (→ monogram) actually fire. The obvious alternatives
+ * fail here: Google's favicon endpoints and DuckDuckGo's ip3 both ship their
+ * placeholder as the 404 *body*, and browsers render a 404 image body without
+ * raising onError, so unknown brands would show a grey globe instead of our
+ * monogram (verified against redbull.com / bangenergy.com / voltaic.energy).
+ */
+function brandIconUrl(domain: string): string {
+  return `https://unavatar.io/${encodeURIComponent(domain)}?fallback=false`;
+}
+
+/**
+ * Deterministic warm tint for the monogram fallback, keyed on the name so a
+ * brand keeps its color across screens. Stays inside the warm-paper set —
+ * brick is excluded because red tiles would read as overdue/error states.
+ */
+const monogramTints = [
+  "bg-pine-tint text-pine",
+  "bg-amber-tint text-amber",
+  "bg-ink/[.06] text-ink-2",
+];
+
+function tintFor(brand: string): string {
+  let h = 0;
+  for (let i = 0; i < brand.length; i++) h = (h * 31 + brand.charCodeAt(i)) | 0;
+  return monogramTints[Math.abs(h) % monogramTints.length];
+}
+
+/**
+ * Brand mark tile. With a resolvable `domain` it shows the brand's real icon
+ * (inset on white so odd-shaped favicons still read as a tidy tile); without
+ * one — or when the icon 404s — it falls back to the initials monogram from
+ * the mockup's `DealCard.tsx`, now on a deterministic warm tint.
  */
 export function BrandMark({
   brand,
+  domain,
   size = 28,
   className,
 }: {
   brand: string;
+  domain?: string | null;
   size?: number;
   className?: string;
 }) {
+  const [logoFailed, setLogoFailed] = useState(false);
+  const cleanDomain = normalizeBrandDomain(domain);
+
+  if (cleanDomain && !logoFailed) {
+    const inset = Math.round(size * 0.66);
+    return (
+      <span
+        aria-hidden
+        className={cn(
+          "flex shrink-0 items-center justify-center overflow-hidden rounded-md bg-white ring-1 ring-inset ring-hairline",
+          className
+        )}
+        style={{ width: size, height: size }}
+      >
+        <img
+          src={brandIconUrl(cleanDomain)}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setLogoFailed(true)}
+          className="object-contain"
+          style={{ width: inset, height: inset }}
+        />
+      </span>
+    );
+  }
+
   return (
     <span
       aria-hidden
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-md bg-surface-subtle font-semibold text-ink-2 ring-1 ring-inset ring-hairline",
+        "flex shrink-0 items-center justify-center rounded-md font-semibold ring-1 ring-inset ring-hairline",
+        tintFor(brand),
         className
       )}
       style={{ width: size, height: size, fontSize: Math.round(size * 0.36) }}

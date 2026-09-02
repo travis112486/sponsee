@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { platformBgClasses } from "@/lib/platform-tokens";
 import { startOfZonedQuarterMs } from "@/lib/zoned-quarter";
 import { formatCount, useCountUp } from "@/hooks/useCountUp";
-import { BrandMark } from "@/components/shared/BrandMark";
+import { BrandMark, normalizeBrandDomain } from "@/components/shared/BrandMark";
 import { PlatformDots } from "@/components/shared/PlatformDot";
 import { Progress } from "@/components/ui/progress";
 import { ContactPicker } from "@/components/ContactPicker";
@@ -132,7 +132,7 @@ type PipelineDeal = {
   valueNote?: string | null;
   stageEnteredAt?: string | Date | null;
   primaryContactId?: string | null;
-  brand?: { name?: string | null } | null;
+  brand?: { name?: string | null; domain?: string | null } | null;
   platforms?: readonly string[] | null;
   notes?: string | null;
   deliverables?: DeliverableRow[] | null;
@@ -231,10 +231,15 @@ function DealCardBody({ deal }: { deal: PipelineDeal }) {
   return (
     <>
       <div className="flex items-start gap-2.5">
-        <BrandMark brand={deal.brand?.name ?? "?"} size={30} />
+        <BrandMark
+          brand={deal.brand?.name ?? "?"}
+          domain={deal.brand?.domain}
+          size={32}
+          className="rounded-lg"
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <p className="truncate text-[13px] font-semibold text-ink">
+            <p className="truncate text-[13px] font-semibold leading-4 tracking-[-0.01em] text-ink">
               {deal.brand?.name ?? "Unknown brand"}
             </p>
             <span
@@ -246,14 +251,14 @@ function DealCardBody({ deal }: { deal: PipelineDeal }) {
               {dealTypeLabels[type]}
             </span>
           </div>
-          <p className="mt-0.5 line-clamp-2 text-[12px] leading-[18px] text-ink-2">
+          <p className="mt-0.5 line-clamp-2 text-[12px] leading-[17px] text-ink-2">
             {deal.title}
           </p>
         </div>
       </div>
 
-      <div className="mt-2.5 flex items-center justify-between gap-2">
-        <span className="font-mono text-[13px] font-semibold tabular-nums text-ink">
+      <div className="mt-2.5 flex items-baseline justify-between gap-2">
+        <span className="min-w-0 truncate font-mono text-[14px] font-semibold tabular-nums text-ink">
           {formatCents(deal.valueCents)}
           {deal.valueNote && (
             <span className="ml-1 font-sans text-[10px] font-normal text-ink-3">
@@ -324,7 +329,10 @@ function DroppableStageColumn({
     <div
       ref={setNodeRef}
       className={cn(
-        "flex w-[260px] shrink-0 flex-col rounded-xl border transition-colors",
+        // Fixed 260px + horizontal scroll on small screens; from lg up the six
+        // columns split the row evenly (basis-0 + min-w floor), so the whole
+        // board fits on one screen and only overflows below ~1400px viewports.
+        "flex w-[260px] shrink-0 flex-col rounded-xl border transition-colors lg:w-auto lg:min-w-[176px] lg:shrink lg:flex-1 lg:basis-0",
         isOver ? "border-pine bg-pine-tint/40" : "border-hairline bg-surface-subtle"
       )}
     >
@@ -391,7 +399,7 @@ function DraggableDealCard({
           : undefined
       }
       className={cn(
-        "group relative min-h-[118px] cursor-grab touch-manipulation rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-shadow hover:border-pine/30 hover:shadow-warm-md active:cursor-grabbing",
+        "group relative min-h-[118px] cursor-grab touch-manipulation rounded-[10px] border border-hairline bg-surface p-3 shadow-warm transition-shadow hover:border-pine/30 hover:shadow-warm-md active:cursor-grabbing",
         isDragging && "opacity-40",
         deal.stage === "paid" && "opacity-70"
       )}
@@ -880,7 +888,7 @@ export default function Pipeline() {
           <div
             ref={boardRef}
             role="region"
-            aria-label="Pipeline stages — six stages, scroll horizontally or use arrow keys for more"
+            aria-label="Pipeline stages — six stages; scroll horizontally or use arrow keys when they overflow"
             tabIndex={0}
             onKeyDown={(e) => {
               if (e.target !== e.currentTarget) return;
@@ -937,7 +945,7 @@ export default function Pipeline() {
         {/* Follows the cursor so the card being dragged stays legible over other columns */}
         <DragOverlay dropAnimation={null}>
           {activeDeal && (
-            <div className="group w-[244px] rotate-[1.5deg] cursor-grabbing rounded-lg border border-pine/40 bg-surface p-3 shadow-warm-lg">
+            <div className="group w-[244px] rotate-[1.5deg] cursor-grabbing rounded-[10px] border border-pine/40 bg-surface p-3 shadow-warm-lg">
               <DealCardBody deal={activeDeal} />
             </div>
           )}
@@ -973,6 +981,7 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
   const [selectedBrandId, setSelectedBrandId] = useState("");
   const [newBrandName, setNewBrandName] = useState("");
   const [newBrandCategory, setNewBrandCategory] = useState("");
+  const [newBrandDomain, setNewBrandDomain] = useState("");
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   // Inline contact fields for the "new brand" path, where the brand (and so the
   // contact's brandId) does not exist until the deal is submitted.
@@ -1059,6 +1068,7 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
         const brand = await createBrand.mutateAsync({
           name: newBrandName.trim(),
           category: newBrandCategory.trim() || undefined,
+          domain: normalizeBrandDomain(newBrandDomain) ?? undefined,
         });
         brandId = brand.id;
       } catch {
@@ -1188,6 +1198,13 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
                   value={newBrandCategory}
                   onChange={(e) => setNewBrandCategory(e.target.value)}
                   placeholder="Category (optional)"
+                  className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
+                />
+                <input
+                  value={newBrandDomain}
+                  onChange={(e) => setNewBrandDomain(e.target.value)}
+                  placeholder="Website (optional — shows the brand's logo)"
+                  aria-label="Brand website"
                   className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
                 />
               </div>
