@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   ChevronDown,
   FileText,
+  Files,
   Plus,
   Radio,
   Menu,
@@ -38,6 +39,7 @@ const navItems = [
   { to: "/payments", label: "Payments", icon: Wallet },
   { to: "/calendar", label: "Calendar", icon: Calendar },
   { to: "/calculator", label: "Calculator", icon: Calculator },
+  { to: "/files", label: "Files", icon: Files },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

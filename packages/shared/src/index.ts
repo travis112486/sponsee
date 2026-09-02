@@ -174,3 +174,12 @@ export const planLabels: Record<PlanTier, string> = {
   creator: "Creator",
   pro: "Pro",
 };
+
+// Per-tier storage cap (SPO-155/SPO-349) in GiB — 5/25/100 for the three
+// tiers. Kept here alongside planPricesCents so the Files usage meter and the
+// presign quota gate read from one source of truth instead of drifting apart.
+export const planStorageCapGiB: Record<PlanTier, number> = {
+  starter: 5,
+  creator: 25,
+  pro: 100,
+};

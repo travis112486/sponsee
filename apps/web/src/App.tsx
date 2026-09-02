@@ -8,6 +8,7 @@ const Pipeline = lazy(() => import("./pages/Pipeline"));
 const DealDetail = lazy(() => import("./pages/DealDetail"));
 const Payments = lazy(() => import("./pages/Payments"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const FilesPage = lazy(() => import("./pages/FilesPage"));
 const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const Calculator = lazy(() => import("./pages/Calculator"));
 const LoginPage = lazy(() => import("./pages/auth/LoginPage"));
@@ -74,6 +75,14 @@ export default function App() {
           element={
             <Suspense fallback={<PageSpinner />}>
               <SettingsPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="files"
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <FilesPage />
             </Suspense>
           }
         />

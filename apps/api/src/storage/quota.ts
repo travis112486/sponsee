@@ -2,19 +2,21 @@ import { and, eq, isNull, sum } from "drizzle-orm";
 import type { DB } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import type { PlanTier } from "@sponsee/shared";
+import { planStorageCapGiB } from "@sponsee/shared";
 import { QuotaExceededError } from "./errors.js";
 
 const GIB = 1024 * 1024 * 1024;
 
 /**
  * Per-tier storage cap (SPO-349), founder-confirmed on SPO-155: 5/25/100 GiB
- * for starter/creator/pro. `creators.plan` is already `planTierEnum`, so this
- * is the only piece the tier -> cap mapping needs — no schema change.
+ * for starter/creator/pro. Derived from `planStorageCapGiB` in
+ * `@sponsee/shared` so the Files usage meter and this presign gate read from
+ * one source of truth instead of drifting apart.
  */
 export const STORAGE_QUOTA_BYTES_BY_PLAN: Record<PlanTier, number> = {
-  starter: 5 * GIB,
-  creator: 25 * GIB,
-  pro: 100 * GIB,
+  starter: planStorageCapGiB.starter * GIB,
+  creator: planStorageCapGiB.creator * GIB,
+  pro: planStorageCapGiB.pro * GIB,
 };
 
 export interface StorageUsage {

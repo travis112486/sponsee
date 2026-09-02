@@ -62,6 +62,7 @@ describe("Sidebar navigation", () => {
       ["Payments", "/payments"],
       ["Calendar", "/calendar"],
       ["Calculator", "/calculator"],
+      ["Files", "/files"],
       ["Settings", "/settings"],
     ]) {
       expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);
