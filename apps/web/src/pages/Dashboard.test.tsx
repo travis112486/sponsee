@@ -410,6 +410,36 @@ describe("Effective CPVH card (founder-ratified null rule)", () => {
     expect(refetch).toHaveBeenCalled();
     expect(screen.queryByText("Not enough data yet")).not.toBeInTheDocument();
   });
+
+  it("keeps the SPO-237 row span while the summary loads and when it fails", () => {
+    // The loading and error tiles are hand-rolled divs, not StatCards, so the
+    // grid-child span has to be restated on each — losing it would wrap the
+    // row into the stranded half-width orphan the 5/3/2/1 tuning removed.
+    cpvhQuery.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    const loading = renderDashboard();
+    const skeleton = screen.getByLabelText("Loading effective CPVH");
+    expect(skeleton.className).toContain("sm:col-span-2");
+    expect(skeleton.className).toContain("lg:col-span-1");
+    loading.unmount();
+
+    cpvhQuery.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+    const errorTile = screen
+      .getByRole("button", { name: /retry effective cpvh/i })
+      .closest(".rounded-xl")!;
+    expect(errorTile.className).toContain("sm:col-span-2");
+    expect(errorTile.className).toContain("lg:col-span-1");
+  });
 });
 
 /* ───────────────────────────── Period switching ────────────────────────── */
