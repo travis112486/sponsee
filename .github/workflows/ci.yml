@@ -126,12 +126,17 @@ jobs:
       # command — so this starts it directly instead, the same way the
       # Mailpit step above installs and backgrounds a binary rather than
       # using a service container.
+      #
+      # Pinned (SPO-351): unpinned `minio/minio` tracks `latest`, and a future
+      # MinIO release that starts validating checksums would fail this job on
+      # an unrelated PR with a confusing error — see storage.test.ts's
+      # "no checksum query parameters" test for the underlying issue.
       - name: Start MinIO
         run: |
           docker run -d --name minio -p 9000:9000 -p 9001:9001 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio server /data --console-address ":9001"
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data --console-address ":9001"
           for _ in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/ready >/dev/null; then
               echo "MinIO ready on :9000"

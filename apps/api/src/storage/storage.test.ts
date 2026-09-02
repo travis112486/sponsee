@@ -208,6 +208,29 @@ describe("createUploadUrl", () => {
     expect(url.pathname).toContain(upload.key);
     expect(url.searchParams.get("X-Amz-Expires")).toBe("300");
   });
+
+  // SPO-351: the SDK defaults to signing a CRC32 checksum into the query
+  // string, computed from the (nonexistent, at presign time) request body.
+  // Every real upload's actual checksum then disagrees with what was signed,
+  // and a provider that validates it — R2, real S3 — 400s the PUT. MinIO
+  // doesn't check, so this is provider-independent by design rather than
+  // relying on the e2e suite's MinIO server to reproduce it.
+  it("presigns a PUT with no checksum query parameters", async () => {
+    const upload = await createUploadUrl({
+      creatorId: CREATOR_ID,
+      dealId: DEAL_ID,
+      scope: "proofs",
+      mimeType: "image/png",
+      sizeBytes: 2048,
+      filename: "screenshot.png",
+      env: FAKE_ENV,
+    });
+
+    const url = new URL(upload.url);
+    for (const key of url.searchParams.keys()) {
+      expect(key.toLowerCase()).not.toMatch(/^x-amz-(sdk-)?checksum/);
+    }
+  });
 });
 
 describe("createDownloadUrl", () => {
