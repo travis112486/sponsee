@@ -14,6 +14,7 @@ const awaitingReviewItem = {
     bodySnapshot: "Please pay",
   },
   invoice: { title: "Q4 Campaign", number: "INV-1" },
+  recipientEmail: "brand@example.com",
 };
 
 /** Options the page hands to useMutation, so tests can fire onError directly. */
