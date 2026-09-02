@@ -90,6 +90,25 @@ const BUDGET_KB = {
    */
   motion: 35,
   /**
+   * Pipeline route. 51.66 measured at SPO-195, the deal-card fill-out.
+   *
+   * This is ordinary feature growth — 554 lines of board + card content, no new
+   * dependencies — which is exactly the thing the `*` ceiling is documented not
+   * to police. It is not the library-absorption regression this guard exists to
+   * catch: framer-motion's engine is still confined to `motion-*` (rule 1 is
+   * green; Pipeline.tsx imports neither `framer-motion` nor `@/lib/motion` at
+   * this head), and dnd-kit is already route-owned, present before this change.
+   *
+   * 60 is ~16% headroom, the roomiest of the route ceilings on purpose —
+   * Pipeline is the core loop and has more deal-card work queued behind
+   * SPO-195. It still sits below the one route regression we have actually
+   * measured: deleting `manualChunks` and importing `framer-motion` directly
+   * puts the engine in Pipeline at 65.10 gzip, which 60 trips with margin and
+   * 65 would not. The `*` ceiling stays at 40 for every other route, so the
+   * 49.37 Dashboard regression is still caught there.
+   */
+  Pipeline: 60,
+  /**
    * Every route chunk. The Dashboard regression measured 49.37 gzip, so 40
    * would have caught it. Largest route today is Settings at 32.80.
    */
