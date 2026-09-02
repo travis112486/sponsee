@@ -72,6 +72,21 @@ describe("Slider", () => {
     expect(container.querySelector('[data-slot="slider-range"]')).toHaveClass("bg-pine");
     expect(container.querySelector('[data-slot="slider-track"]')).toHaveClass("bg-hairline");
   });
+
+  it("puts the accessible name and value text on the thumb, not the root", () => {
+    render(
+      <Slider
+        value={[8]}
+        min={0}
+        max={20}
+        onValueChange={() => {}}
+        aria-label="Volume"
+        formatValueText={(v) => `${v} out of 20`}
+      />
+    );
+    const thumb = screen.getByRole("slider", { name: "Volume" });
+    expect(thumb).toHaveAttribute("aria-valuetext", "8 out of 20");
+  });
 });
 
 describe("Progress", () => {

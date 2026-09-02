@@ -6,6 +6,10 @@ import { cn } from "@/lib/utils";
 /**
  * Styled range input. Replaces the native `<input type="range">` — the single
  * most visible unstyled-browser-control tell on the Calculator screen.
+ *
+ * `role="slider"` lives on the Thumb, not the Root, so the accessible name and
+ * value text are per-thumb props here rather than passed to Root like a plain
+ * `aria-label` would be.
  */
 function Slider({
   className,
@@ -13,8 +17,13 @@ function Slider({
   value,
   min = 0,
   max = 100,
+  "aria-label": ariaLabel,
+  formatValueText,
   ...props
-}: React.ComponentProps<typeof SliderPrimitive.Root>) {
+}: React.ComponentProps<typeof SliderPrimitive.Root> & {
+  /** Value text for each thumb, e.g. `(v) => `${v} concurrent viewers``. */
+  formatValueText?: (value: number, index: number) => string;
+}) {
   const values = React.useMemo(
     () =>
       Array.isArray(value)
@@ -48,10 +57,12 @@ function Slider({
           className="absolute bg-pine data-[orientation=horizontal]:h-full data-[orientation=vertical]:w-full"
         />
       </SliderPrimitive.Track>
-      {values.map((_, index) => (
+      {values.map((v, index) => (
         <SliderPrimitive.Thumb
           data-slot="slider-thumb"
           key={index}
+          aria-label={ariaLabel}
+          aria-valuetext={formatValueText?.(v, index)}
           className="block size-4 shrink-0 rounded-full border border-pine bg-surface shadow-warm transition-shadow hover:ring-4 hover:ring-pine/20 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-pine/30 disabled:pointer-events-none disabled:opacity-50"
         />
       ))}
