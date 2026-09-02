@@ -94,6 +94,7 @@ function overview(over: Record<string, unknown> = {}) {
       periodStart: new Date(Date.UTC(2026, 8, 1)),
       periodEnd: new Date(Date.UTC(2026, 9, 1)),
       totalCents: 3_847_00,
+      previousTotalCents: 3_000_00 as number | null,
       byType: { flat: 2_000_00, bounty: 1_000_00, hybrid: 847_00 },
       monthly: monthly({
         "2026-08": { valueCents: 3_000_00, flatCents: 3_000_00 },
@@ -222,11 +223,44 @@ describe("revenue is on the screen at all (SPO-194 headline gap)", () => {
     expect(screen.getByText("Revenue (Sep)")).toBeInTheDocument();
   });
 
-  it("compares against the previous month using the server's own buckets", () => {
+  it("compares against the previous month using the server's like-for-like field", () => {
     renderDashboard();
-    // Aug $3,000 → Sep $3,847 is +28%.
+    // Sep $3,847 vs previousTotalCents $3,000 is +28%.
     expect(screen.getByText("▲ 28%")).toBeInTheDocument();
     expect(screen.getByText("vs $3,000 last month")).toBeInTheDocument();
+  });
+
+  it("trusts previousTotalCents over the whole-month buckets (mid-period truncation)", () => {
+    // Period-to-date September is only 9 days in; the server truncates the
+    // prior window to the same offset, but the Aug *bucket* is the full month.
+    const o = overview();
+    o.revenue.totalCents = 1_200_00;
+    o.revenue.previousTotalCents = 900_00;
+    (o.revenue.monthly as Month[]).find((m) => m.month === "2026-08")!.valueCents = 3_000_00;
+    mockOverview(o);
+    renderDashboard();
+
+    // Like-for-like: $1,200 vs $900 is +33%. A whole-Aug rollup would compare
+    // $1,200 vs $3,000 and print a fabricated ▼ 60%.
+    expect(screen.getByText("▲ 33%")).toBeInTheDocument();
+    expect(screen.getByText("vs $900 last month")).toBeInTheDocument();
+    expect(screen.queryByText(/▼/)).not.toBeInTheDocument();
+  });
+
+  it("labels the revenue card's basis for each period, not hardcoded", () => {
+    mockOverview(overview({ revenue: { ...overview().revenue, period: "quarter" } }));
+    renderDashboard();
+    expect(screen.getByText("Revenue (this quarter)")).toBeInTheDocument();
+    expect(screen.getByText("vs $3,000 last quarter")).toBeInTheDocument();
+  });
+
+  it("renders the YTD eyebrow and basis instead of collapsing into the quarter branch", () => {
+    mockOverview(overview({ revenue: { ...overview().revenue, period: "ytd" } }));
+    renderDashboard();
+    // A boolean on period would call YTD "this quarter" and "last quarter".
+    expect(screen.getByText("Revenue (this year)")).toBeInTheDocument();
+    expect(screen.queryByText("Revenue (this quarter)")).not.toBeInTheDocument();
+    expect(screen.getByText("vs $3,000 Jan–now last year")).toBeInTheDocument();
   });
 
   // ── Creator-local periods (SPO-239) ──────────────────────────────────────
@@ -241,8 +275,8 @@ describe("revenue is on the screen at all (SPO-194 headline gap)", () => {
     // 2026-09-01T00:00 in Tokyo === 2026-08-31T15:00Z.
     o.revenue.periodStart = new Date("2026-08-31T15:00:00.000Z");
     o.revenue.periodEnd = new Date("2026-09-30T15:00:00.000Z");
-    // Distinct July and August totals: comparing against the wrong month shows
-    // a wrong number rather than merely dropping the chip.
+    // Distinct July and August totals: a client that re-derived the prior month
+    // from the buckets in UTC would name July, not August.
     const m = o.revenue.monthly as Month[];
     m.find((x) => x.month === "2026-07")!.valueCents = 1_000_00;
     m.find((x) => x.month === "2026-08")!.valueCents = 3_000_00;
@@ -259,23 +293,39 @@ describe("revenue is on the screen at all (SPO-194 headline gap)", () => {
     expect(screen.queryByText("Revenue (Aug)")).not.toBeInTheDocument();
   });
 
-  it("picks the previous month's bucket in the creator's zone", () => {
-    mockOverview(tokyoOverview());
+  it("renders the server's zone-correct delta rather than re-bucketing client-side", () => {
+    const o = tokyoOverview();
+    // The server already computed the baseline in Tokyo; the client must read
+    // it, not re-derive it from the buckets.
+    o.revenue.previousTotalCents = 3_000_00;
+    mockOverview(o);
     renderDashboard();
 
-    // Sep $3,847 vs Aug $3,000 is +28%. A UTC-derived key reads "2026-07" and
-    // would compare against July's $1,000, showing +285%.
+    // Reading the buckets in UTC would name July's $1,000 as "last month".
     expect(screen.getByText("vs $3,000 last month")).toBeInTheDocument();
     expect(screen.queryByText("vs $1,000 last month")).not.toBeInTheDocument();
   });
 
   it("shows no delta at all when the previous period earned nothing", () => {
     const o = overview();
-    (o.revenue.monthly as Month[]).find((m) => m.month === "2026-08")!.valueCents = 0;
+    o.revenue.previousTotalCents = 0;
     mockOverview(o);
     renderDashboard();
 
     // A percentage change from zero is undefined — it must not read "+100%".
+    expect(screen.queryByText(/▲|▼/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Paid invoices, dated by when the money landed")
+    ).toBeInTheDocument();
+  });
+
+  it("shows no delta at all when the prior window has no paid invoice (null)", () => {
+    const o = overview();
+    o.revenue.previousTotalCents = null;
+    mockOverview(o);
+    renderDashboard();
+
+    // null means "no prior window data" — never a fabricated +100%.
     expect(screen.queryByText(/▲|▼/)).not.toBeInTheDocument();
     expect(
       screen.getByText("Paid invoices, dated by when the money landed")
