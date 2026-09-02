@@ -273,6 +273,7 @@ describe("SPO-71 visual parity safeguards", () => {
         ],
         deliverablesDue: [],
         overdue: { count: 0, totalCents: 0, mostUrgent: null },
+        outstanding: { count: 0, totalCents: 0 },
       },
       isLoading: false,
       isError: false,
