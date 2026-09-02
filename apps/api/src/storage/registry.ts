@@ -24,18 +24,29 @@ export interface RegisterCreatorFileParams {
  * `storageKey`: a crash between the two would leave an object referenced by
  * a proof/contract row but invisible to the registry the orphan sweep reads
  * (sweep.ts).
+ *
+ * `storageKey` carries a UNIQUE index, and this insert shares a transaction
+ * with the proof/contract write that references it (SPO-353): a bare insert
+ * would raise 23505 on a repeat key and take that write down too. The row's
+ * content is fully derivable from the key, so a repeat has nothing to
+ * update — `onConflictDoNothing` makes re-registering the same key a no-op
+ * instead of an error, mirroring how `contract.upsert` already converges
+ * concurrent writes via `onConflictDoUpdate` rather than throwing.
  */
 export async function registerCreatorFile(tx: DB, params: RegisterCreatorFileParams): Promise<void> {
-  await tx.insert(creatorFiles).values({
-    creatorId: params.creatorId,
-    storageKey: params.storageKey,
-    mimeType: params.mimeType,
-    sizeBytes: params.sizeBytes,
-    originalFilename: params.originalFilename ?? null,
-    originDealId: params.originDealId,
-    originDealTitle: params.originDealTitle,
-    scope: params.scope,
-  });
+  await tx
+    .insert(creatorFiles)
+    .values({
+      creatorId: params.creatorId,
+      storageKey: params.storageKey,
+      mimeType: params.mimeType,
+      sizeBytes: params.sizeBytes,
+      originalFilename: params.originalFilename ?? null,
+      originDealId: params.originDealId,
+      originDealTitle: params.originDealTitle,
+      scope: params.scope,
+    })
+    .onConflictDoNothing({ target: creatorFiles.storageKey });
 }
 
 /**
