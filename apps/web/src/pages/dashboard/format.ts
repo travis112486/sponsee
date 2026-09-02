@@ -50,40 +50,10 @@ export function monthLabels(key: string): { short: string; long: string } {
 }
 
 /**
- * `YYYY-MM` for an instant as it reads in `timeZone` — the same key the API
- * builds its revenue buckets from (`zonedMonthKey` in `apps/api/src/zoned-time`).
- *
- * SPO-239 made every period boundary creator-local, so `periodStart` is an
- * instant whose UTC calendar month is *not* the month being reported: the start
- * of September in Tokyo is 2026-08-31T15:00Z. Reading it in UTC names August
- * and keys August's bucket. The zone is read from the payload rather than the
- * browser because a creator on a laptop set to another zone is still billed,
- * bucketed and chased in the zone on their account.
- *
- * An unparseable zone falls back to UTC: a mislabelled month is bad, a
- * `RangeError` that blanks the whole dashboard is worse, and the server
- * validates the zone before it ever reaches here.
- */
-export function zonedMonthKey(d: Date, timeZone: string): string {
-  let parts: Intl.DateTimeFormatPart[];
-  try {
-    parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-    }).formatToParts(d);
-  } catch {
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-  }
-  const year = parts.find((p) => p.type === "year")!.value;
-  const month = parts.find((p) => p.type === "month")!.value;
-  return `${year}-${month}`;
-}
-
-/**
- * Short month name (`"Sep"`) for an instant as it reads in `timeZone`, with the
- * same UTC fallback as {@link zonedMonthKey} so a bad zone cannot throw a
- * `RangeError` out of a render.
+ * Short month name (`"Sep"`) for an instant as it reads in `timeZone`. An
+ * unparseable zone falls back to UTC so a bad zone cannot throw a
+ * `RangeError` out of a render (the server validates the zone before it ever
+ * reaches here).
  */
 export function zonedMonthShort(d: Date, timeZone: string): string {
   try {
@@ -91,21 +61,6 @@ export function zonedMonthShort(d: Date, timeZone: string): string {
   } catch {
     return d.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" });
   }
-}
-
-/**
- * Shift a `YYYY-MM` key by whole months.
- *
- * Deliberately civil arithmetic on the key itself rather than date math on an
- * instant: months have no fixed length and a DST transition can move a
- * constructed midnight across a boundary. Keys have neither problem.
- */
-export function addMonthsToKey(key: string, n: number): string {
-  const [y, m] = key.split("-").map(Number);
-  const index = y * 12 + (m - 1) + n;
-  const year = Math.floor(index / 12);
-  const month = (index % 12) + 1;
-  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
 }
 
 const MINUTE = 60_000;

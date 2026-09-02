@@ -35,12 +35,10 @@ import { cn } from "@/lib/utils";
 
 import { RevenueChart } from "./dashboard/RevenueChart";
 import {
-  addMonthsToKey,
   formatCents,
   formatDueChip,
   formatExactTime,
   formatRelativeTime,
-  zonedMonthKey,
   zonedMonthShort,
 } from "./dashboard/format";
 
@@ -60,40 +58,23 @@ type Overview = inferRouterOutputs<AppRouter>["dashboard"]["overview"];
 /* ─────────────────────────── Period comparison ─────────────────────────── */
 
 /**
- * Previous-period revenue, summed out of the server's own trailing-12-month
- * buckets.
+ * Signed period-over-period change for the Revenue card, from the server's
+ * own like-for-like baseline (`revenue.previousTotalCents`), not a rollup of
+ * the trailing-12 `monthly` buckets re-done in the browser.
  *
- * This is a rollup of authoritative data, not a second definition of revenue:
- * the buckets are calendar months attributed by `paidAt` on the API, and the
- * previous calendar month / quarter is exactly a subset of them. Returns `null`
- * when the comparison window falls outside the twelve buckets, so the card
- * shows no delta rather than an invented one.
+ * `previousTotalCents` is the *same elapsed offset* into the immediately
+ * preceding period, truncated exactly the way `totalCents` is truncated at
+ * `now` — so mid-month the card compares 9 days of September against 9 days of
+ * August, not against all 30. The monthly buckets have no sub-month
+ * resolution, so no client-side sum of them can reproduce that; summing whole
+ * calendar months under-reports for most of every month. The field is the
+ * source of truth precisely to kill that bug (SPO-294).
  *
- * Keyed in the creator's zone (SPO-239): the buckets are creator-local months,
- * so a UTC-derived key silently selects the wrong one for every creator east of
- * UTC — comparing September against July and reporting the result as "last
- * month".
+ * `null` means the prior window has no paid invoice at all, and `0` makes the
+ * percentage undefined — either way there is no honest delta to show.
  */
-function previousPeriodCents(
-  revenue: Overview["revenue"],
-  timeZone: string
-): number | null {
-  const span = revenue.period === "quarter" ? 3 : 1;
-  const byKey = new Map(revenue.monthly.map((m) => [m.month, m.valueCents]));
-  const currentKey = zonedMonthKey(new Date(revenue.periodStart), timeZone);
-
-  let sum = 0;
-  for (let i = span; i >= 1; i--) {
-    const cents = byKey.get(addMonthsToKey(currentKey, -i));
-    if (cents === undefined) return null;
-    sum += cents;
-  }
-  return sum;
-}
-
-function revenueDelta(revenue: Overview["revenue"], timeZone: string) {
-  const prev = previousPeriodCents(revenue, timeZone);
-  // A percentage change from zero is undefined, not "+100%".
+function revenueDelta(revenue: Overview["revenue"]) {
+  const prev = revenue.previousTotalCents;
   if (prev === null || prev === 0) return undefined;
   const pct = Math.round(((revenue.totalCents - prev) / prev) * 100);
   if (pct === 0) return { text: "flat", tone: "neutral" as const, prev };
@@ -297,13 +278,25 @@ function KpiRow({
   const navigate = useNavigate();
   const { revenue, pipeline, deliverablesDue, outstanding, timeZone } = overview;
 
-  const isMonth = revenue.period === "month";
   // The creator's zone, not UTC and not the browser's: `periodStart` is the
   // instant their local month began, so any other zone can name the month
   // before the one this card is reporting (SPO-239).
   const periodName = zonedMonthShort(new Date(revenue.periodStart), timeZone);
-  const delta = revenueDelta(revenue, timeZone);
+  const delta = revenueDelta(revenue);
   const spark = revenue.monthly.slice(-6).map((m) => m.valueCents / 100);
+
+  // Three-way on the period, not an `isMonth` boolean: a boolean silently
+  // collapses YTD into the quarter branch — wrong eyebrow, wrong basis label.
+  const periodEyebrow: Record<Overview["revenue"]["period"], string> = {
+    month: `Revenue (${periodName})`,
+    quarter: "Revenue (this quarter)",
+    ytd: "Revenue (this year)",
+  };
+  const basisLabel: Record<Overview["revenue"]["period"], string> = {
+    month: "last month",
+    quarter: "last quarter",
+    ytd: "Jan–now last year",
+  };
 
   const stageCount = (s: DealStage) =>
     pipeline.find((p) => p.stage === s)?.count ?? 0;
@@ -327,13 +320,13 @@ function KpiRow({
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
       <StatCard
         index={0}
-        eyebrow={`Revenue (${isMonth ? periodName : "this quarter"})`}
+        eyebrow={periodEyebrow[revenue.period]}
         value={revenue.totalCents / 100}
         currency
         delta={delta && { text: delta.text, tone: delta.tone }}
         context={
           delta
-            ? `vs ${formatCents(delta.prev)} ${isMonth ? "last month" : "last quarter"}`
+            ? `vs ${formatCents(delta.prev)} ${basisLabel[revenue.period]}`
             : "Paid invoices, dated by when the money landed"
         }
         sparkline={spark.length >= 2 ? spark : undefined}
