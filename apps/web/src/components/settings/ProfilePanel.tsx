@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -8,13 +8,21 @@ import { Loader2 } from "lucide-react";
 import QueryError from "@/components/QueryError";
 import { httpsUrlOrEmpty } from "@/lib/url-schema";
 import { applyServerFieldErrors, serverErrorMessage } from "@/lib/trpc-error";
+import { isValidTimeZone, listTimeZones, TIME_ZONE_ERROR_MESSAGE } from "@sponsee/shared";
+
+/**
+ * The picker's options, straight from this browser's ICU. Same source of truth
+ * the router validates against, so nothing offered here can be rejected on
+ * save (SPO-246).
+ */
+const TIME_ZONES = listTimeZones();
 
 const profileSchema = z.object({
   displayName: z.string().min(1, "Display name is required").max(255),
   pronouns: z.string().max(64).optional(),
   category: z.string().max(128).optional(),
   avatarUrl: httpsUrlOrEmpty.optional(),
-  timezone: z.string().max(64).optional(),
+  timezone: z.string().max(64).refine(isValidTimeZone, TIME_ZONE_ERROR_MESSAGE).optional(),
   defaultCurrency: z.string().length(3).optional(),
 });
 
@@ -25,7 +33,7 @@ type ProfileForm = z.infer<typeof profileSchema>;
  * other field has nowhere to go inline, so it falls back to the toast rather
  * than being set and never shown.
  */
-const INLINE_ERROR_FIELDS = ["displayName", "avatarUrl"] as const;
+const INLINE_ERROR_FIELDS = ["displayName", "avatarUrl", "timezone"] as const;
 
 export default function ProfilePanel() {
   const utils = trpc.useUtils();
@@ -75,6 +83,24 @@ export default function ProfilePanel() {
       });
     }
   }, [profile, reset]);
+
+  const savedTimezone = profile?.timezone ?? "";
+  const savedTimezoneIsUnusable = savedTimezone !== "" && !isValidTimeZone(savedTimezone);
+
+  /**
+   * A saved zone that isn't in this browser's list still has to appear as an
+   * option — otherwise the `<select>` falls back to its first entry and the
+   * next save silently rewrites the creator's timezone. That covers both a
+   * legacy unusable row and a link name (`US/Eastern`, `Asia/Kolkata`) that
+   * this ICU build doesn't consider canonical.
+   */
+  const timezoneOptions = useMemo(
+    () =>
+      savedTimezone === "" || TIME_ZONES.includes(savedTimezone)
+        ? TIME_ZONES
+        : [savedTimezone, ...TIME_ZONES],
+    [savedTimezone]
+  );
 
   const onSubmit = (data: ProfileForm) => {
     update.mutate({
@@ -164,11 +190,28 @@ export default function ProfilePanel() {
           <label htmlFor="timezone" className="mb-1.5 block text-[12.5px] font-medium text-ink">
             Timezone
           </label>
-          <input
+          <select
             id="timezone"
             {...register("timezone")}
-            className="h-10 w-full rounded-lg border border-hairline bg-surface px-3 text-[13.5px] text-ink outline-none transition-colors placeholder:text-ink-3 focus:border-pine focus:ring-1 focus:ring-pine"
-          />
+            className="h-10 w-full rounded-lg border border-hairline bg-surface px-3 text-[13.5px] text-ink outline-none transition-colors focus:border-pine focus:ring-1 focus:ring-pine"
+          >
+            {timezoneOptions.map((zone) => (
+              <option key={zone} value={zone}>
+                {zone === savedTimezone && savedTimezoneIsUnusable
+                  ? `${zone} — not a valid timezone`
+                  : zone}
+              </option>
+            ))}
+          </select>
+          {savedTimezoneIsUnusable ? (
+            <p className="mt-1 text-[12px] text-brick">
+              Your saved timezone isn&apos;t one your dashboard can use, so revenue months are
+              being counted in UTC. Pick a region/city timezone to fix it.
+            </p>
+          ) : null}
+          {errors.timezone && (
+            <p className="mt-1 text-[12px] text-brick">{errors.timezone.message}</p>
+          )}
         </div>
 
         <div>

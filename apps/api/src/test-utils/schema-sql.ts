@@ -284,7 +284,8 @@ CREATE TABLE invoices (
   rails_snapshot JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(creator_id, number)
+  UNIQUE(creator_id, number),
+  CONSTRAINT invoices_paid_requires_paid_at CHECK ((status = 'paid') = (paid_at IS NOT NULL))
 );
 
 CREATE INDEX invoices_creator_idx ON invoices(creator_id);

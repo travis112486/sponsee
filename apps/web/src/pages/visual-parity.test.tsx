@@ -36,10 +36,16 @@ globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserv
 vi.mock("@/trpc", () => ({
   trpc: {
     useUtils: () => ({}),
+    dashboard: {
+      overview: { useQuery: vi.fn() },
+    },
     deals: {
       list: { useQuery: vi.fn() },
       updateStage: { useMutation: vi.fn() },
       create: { useMutation: vi.fn() },
+    },
+    deliverable: {
+      update: { useMutation: vi.fn() },
     },
     invoice: {
       list: { useQuery: vi.fn() },
@@ -66,6 +72,7 @@ vi.mock("@/trpc", () => ({
     },
     settings: {
       getProfile: { useQuery: vi.fn() },
+      getPlatforms: { useQuery: vi.fn() },
       updateProfile: { useMutation: vi.fn() },
     },
   },
@@ -135,6 +142,11 @@ beforeEach(() => {
   mockQuery(trpc.calendar.events.useQuery, idleQuery());
   mockQuery(trpc.brand.list.useQuery, idleQuery());
   mockQuery(trpc.settings.getProfile.useQuery, idleQuery());
+  mockQuery(trpc.settings.getPlatforms.useQuery, idleQuery());
+  mockQuery(trpc.dashboard.overview.useQuery, idleQuery());
+  (trpc.deliverable.update.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
+    idleMutation()
+  );
 
   (trpc.deals.updateStage.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
     idleMutation()
@@ -167,6 +179,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 describe("SPO-71 visual parity safeguards", () => {
@@ -226,9 +239,41 @@ describe("SPO-71 visual parity safeguards", () => {
     expect(title).not.toHaveClass("truncate");
   });
 
-  it("renders Dashboard KPI values at the serif scale", () => {
-    mockQuery(trpc.deals.list.useQuery, {
-      data: [deal],
+  // DELIBERATE UPDATE (SPO-194). This previously asserted `font-serif` on a
+  // hand-rolled `KpiCard <p>`. SPO-193 landed the approved mockup's shared
+  // `StatCard`, whose figure is sans-serif tabular numerals, and SPO-194's
+  // accepted plan builds the KPI row on it. So the old assertion described the
+  // pre-foundation dashboard, not a regression away from the approved design.
+  // What is worth guarding now is that the Dashboard still renders the *shared*
+  // card rather than a local copy that drifts from Payments.
+  it("renders Dashboard KPI figures through the shared StatCard treatment", () => {
+    // `useCountUp` tweens on rAF, which jsdom never drives. Reduced motion makes
+    // it snap to the target so the assertion reads the settled figure.
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    );
+    mockQuery(trpc.dashboard.overview.useQuery, {
+      data: {
+        revenue: {
+          period: "month",
+          periodStart: new Date(Date.UTC(2026, 0, 1)),
+          periodEnd: new Date(Date.UTC(2026, 1, 1)),
+          totalCents: 0,
+          byType: { flat: 0, bounty: 0, hybrid: 0 },
+          monthly: [],
+        },
+        pipeline: [
+          { stage: "inbound", count: 1, valueCents: 50000 },
+          { stage: "negotiating", count: 0, valueCents: 0 },
+          { stage: "contract_sent", count: 0, valueCents: 0 },
+          { stage: "live", count: 0, valueCents: 0 },
+          { stage: "delivered", count: 0, valueCents: 0 },
+          { stage: "paid", count: 0, valueCents: 0 },
+        ],
+        deliverablesDue: [],
+        overdue: { count: 0, totalCents: 0, mostUrgent: null },
+      },
       isLoading: false,
       isError: false,
       refetch: vi.fn(),
@@ -242,8 +287,12 @@ describe("SPO-71 visual parity safeguards", () => {
 
     const card = screen.getByText("Active deals").closest("button")!;
     const value = within(card).getByText("1");
-    expect(value.tagName).toBe("P");
-    expect(value).toHaveClass("font-serif");
+    // `tnum` is the token that keeps money and counts from jittering as they
+    // tween; a hand-rolled replacement card would lose it.
+    expect(value).toHaveClass("tnum");
+    expect(value.className).not.toMatch(
+      /text-(?:slate|gray|zinc|neutral|stone|red|blue|purple|green)-\d/
+    );
   });
 
   it("renders Payments money totals at the serif scale and surfaces chase details", () => {

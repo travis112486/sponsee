@@ -15,6 +15,14 @@ vi.mock("nodemailer", () => ({
 const { smtpTransportOptions, rateLimitEnabled } = await import("./auth.js");
 const { ipAddressHeaders, resolvesAuthClientIp, clientIp, DEFAULT_IP_HEADERS } =
   await import("./client-ip.js");
+const { FRONT_DOOR_HEADER } = await import("./front-door.js");
+
+// SPO-200: x-vercel-forwarded-for is only trusted when the request demonstrably
+// came through the Vercel front door — i.e. it carries the shared secret Vercel
+// injects. The "through Vercel" fixtures carry it; the direct-to-origin fixture
+// does not.
+const FRONT_DOOR_SECRET = "front-door-test-secret";
+const FRONT_DOOR_ENV = { FRONT_DOOR_SECRET };
 
 /**
  * Headers as they actually arrived at the container, captured 2026-08-30 by
@@ -37,6 +45,7 @@ const LIVE_HEADERS_VIA_VERCEL = {
   "true-client-ip": "54.226.216.119",
   forwarded: `for=${LIVE_CLIENT_IP};host=sponsee.onrender.com;proto=https`,
   "x-forwarded-host": "sponsee.vercel.app",
+  [FRONT_DOOR_HEADER]: FRONT_DOOR_SECRET,
 };
 
 const LIVE_HEADERS_DIRECT_TO_RENDER = {
@@ -126,8 +135,27 @@ describe("client IP resolution", () => {
     const headers = new Headers({
       "x-vercel-forwarded-for": "203.0.113.7",
       "x-forwarded-for": "198.51.100.1",
+      [FRONT_DOOR_HEADER]: FRONT_DOOR_SECRET,
     });
-    expect(clientIp(headers, {})).toBe("203.0.113.7");
+    expect(clientIp(headers, FRONT_DOOR_ENV)).toBe("203.0.113.7");
+  });
+
+  it("does not trust x-vercel-forwarded-for without the front door (SPO-200)", () => {
+    // Same single-hop header, no front-door secret: the value is client-supplied
+    // and forgeable, so it must not key the caller. Resolution falls through to
+    // x-forwarded-for.
+    const headers = new Headers({
+      "x-vercel-forwarded-for": "203.0.113.7",
+      "x-forwarded-for": "198.51.100.1",
+    });
+    expect(clientIp(headers, FRONT_DOOR_ENV)).toBe("198.51.100.1");
+    expect(resolvesAuthClientIp(headers, FRONT_DOOR_ENV)).toBe(true);
+
+    // With no fallback header at all, a forged x-vercel-forwarded-for resolves
+    // to nothing rather than the attacker's chosen bucket.
+    const forgedOnly = new Headers({ "x-vercel-forwarded-for": "203.0.113.7" });
+    expect(clientIp(forgedOnly, FRONT_DOOR_ENV)).toBeNull();
+    expect(resolvesAuthClientIp(forgedOnly, FRONT_DOOR_ENV)).toBe(false);
   });
 
   it("falls back to x-forwarded-for and takes the client-most hop", () => {
@@ -153,8 +181,8 @@ describe("client IP resolution against the deployed topology", () => {
 
     // The acceptance test for LOW-1. If this is false, every caller shares one
     // bucket and the sign-in rules become a site-wide cap.
-    expect(resolvesAuthClientIp(headers, PROD_ENV)).toBe(true);
-    expect(clientIp(headers, PROD_ENV)).toBe(LIVE_CLIENT_IP);
+    expect(resolvesAuthClientIp(headers, FRONT_DOOR_ENV)).toBe(true);
+    expect(clientIp(headers, FRONT_DOOR_ENV)).toBe(LIVE_CLIENT_IP);
   });
 
   it("rejects the three-hop x-forwarded-for that made the bucket shared", () => {
@@ -188,12 +216,21 @@ describe("client IP resolution against the deployed topology", () => {
 
   it("treats a malformed single hop as unresolved rather than a bucket name", () => {
     for (const value of ["unknown", "not-an-ip", "203.0.113.7:443", ""]) {
-      const headers = new Headers({ "x-vercel-forwarded-for": value });
-      expect(resolvesAuthClientIp(headers, PROD_ENV)).toBe(false);
+      const headers = new Headers({
+        "x-vercel-forwarded-for": value,
+        [FRONT_DOOR_HEADER]: FRONT_DOOR_SECRET,
+      });
+      expect(resolvesAuthClientIp(headers, FRONT_DOOR_ENV)).toBe(false);
     }
-    expect(resolvesAuthClientIp(new Headers({ "x-vercel-forwarded-for": "::1" }), PROD_ENV)).toBe(
-      true,
-    );
+    expect(
+      resolvesAuthClientIp(
+        new Headers({
+          "x-vercel-forwarded-for": "::1",
+          [FRONT_DOOR_HEADER]: FRONT_DOOR_SECRET,
+        }),
+        FRONT_DOOR_ENV,
+      ),
+    ).toBe(true);
   });
 
   it("rejects an IPv6 zone ID, which node:net accepts and Better Auth does not", () => {
@@ -209,9 +246,15 @@ describe("client IP resolution against the deployed topology", () => {
     // loosening, and it took a single header to trigger.
     for (const zoned of ["fe80::1%eth0", "fe80::1%1", "FE80::1%eth0"]) {
       expect(isIP(zoned)).not.toBe(0);
-      expect(resolvesAuthClientIp(new Headers({ "x-vercel-forwarded-for": zoned }), PROD_ENV)).toBe(
-        false,
-      );
+      expect(
+        resolvesAuthClientIp(
+          new Headers({
+            "x-vercel-forwarded-for": zoned,
+            [FRONT_DOOR_HEADER]: FRONT_DOOR_SECRET,
+          }),
+          FRONT_DOOR_ENV,
+        ),
+      ).toBe(false);
     }
   });
 
@@ -245,7 +288,13 @@ describe("client IP resolution against the deployed topology", () => {
     for (const value of values) {
       const expected = getIPFromHeader(value) !== null;
       expect(
-        resolvesAuthClientIp(new Headers({ "x-vercel-forwarded-for": value }), PROD_ENV),
+        resolvesAuthClientIp(
+          new Headers({
+            "x-vercel-forwarded-for": value,
+            [FRONT_DOOR_HEADER]: FRONT_DOOR_SECRET,
+          }),
+          FRONT_DOOR_ENV,
+        ),
         `disagreed on ${JSON.stringify(value)}`,
       ).toBe(expected);
     }
@@ -263,10 +312,13 @@ describe("client IP resolution against the deployed topology", () => {
   it("accepts a Request as well as Headers, so callers pass what Better Auth sees", () => {
     const request = new Request("https://sponsee.app/api/auth/sign-in/magic-link", {
       method: "POST",
-      headers: { "x-vercel-forwarded-for": LIVE_CLIENT_IP },
+      headers: {
+        "x-vercel-forwarded-for": LIVE_CLIENT_IP,
+        [FRONT_DOOR_HEADER]: FRONT_DOOR_SECRET,
+      },
     });
 
-    expect(resolvesAuthClientIp(request, PROD_ENV)).toBe(true);
+    expect(resolvesAuthClientIp(request, FRONT_DOOR_ENV)).toBe(true);
   });
 
   it("assumes a resolvable address off production, as Better Auth does", () => {

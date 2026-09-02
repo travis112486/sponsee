@@ -1,9 +1,12 @@
 import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
+import { hydrateRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
 
-createRoot(document.getElementById("root")!).render(
+// The markup is pre-rendered into index.html at build time (scripts/prerender.mjs)
+// so crawlers and no-JS visitors get the full page; here we only hydrate it.
+hydrateRoot(
+  document.getElementById("root")!,
   <StrictMode>
     <App />
   </StrictMode>
