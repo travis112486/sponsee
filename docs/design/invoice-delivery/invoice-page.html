@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Invoice {{invoiceNumberFormatted}} — {{creatorDisplayName}}</title>
+<!--
+  Sponsee hosted invoice page (/i/:token) — design reference (SPO-366).
+  The print layout IS the deliverable: a brand's AP team prints this to PDF
+  and files it. No app chrome, no nav, no marketing in print.
+  Font paths assume apps/web self-hosted fonts (see index.css).
+-->
+<style>
+  @font-face {
+    font-family: "Inter";
+    font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/fonts/inter-latin-400-normal.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Inter";
+    font-style: normal; font-weight: 500; font-display: swap;
+    src: url("/fonts/inter-latin-500-normal.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Inter";
+    font-style: normal; font-weight: 600; font-display: swap;
+    src: url("/fonts/inter-latin-600-normal.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Instrument Serif";
+    font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/fonts/instrument-serif-latin-400-normal.woff2") format("woff2");
+  }
+
+  :root {
+    --paper: #F7F5F1;
+    --ink: #1B1815;
+    --muted: #8A8178;
+    --border: #E8E3DB;
+    --pine: #0E7A5F;
+    --card: #FFFFFF;
+    --wash: #FBFAF7;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .serif { font-family: "Instrument Serif", Georgia, serif; letter-spacing: 0; }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  .sheet {
+    max-width: 760px;
+    margin: 40px auto 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 56px 64px;
+  }
+
+  /* ---- Header ---- */
+  .head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 24px;
+    padding-bottom: 28px;
+    border-bottom: 2px solid var(--ink);
+  }
+  .head .from-name {
+    font-size: 28px;
+    line-height: 1.2;
+    margin: 0;
+  }
+  .head .from-sub {
+    color: var(--muted);
+    font-size: 13px;
+    margin-top: 4px;
+  }
+  .head .doc-id { text-align: right; white-space: nowrap; }
+  .head .doc-label {
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .head .doc-number {
+    font-size: 20px;
+    font-weight: 600;
+    margin-top: 2px;
+  }
+  .chip-paid {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 3px 10px;
+    border: 1.5px solid var(--pine);
+    border-radius: 999px;
+    color: var(--pine);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+  }
+
+  /* ---- Meta grid ---- */
+  .meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    padding: 28px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .meta h2 {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 8px;
+  }
+  .meta .bill-to .org { font-weight: 600; font-size: 15px; }
+  .meta .bill-to .attn { color: var(--muted); margin-top: 2px; }
+  .meta .dates { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; align-content: start; }
+  .meta .dates dt { color: var(--muted); margin: 0; }
+  .meta .dates dd { margin: 0; }
+
+  /* ---- Line ---- */
+  .line { padding: 28px 0; border-bottom: 1px solid var(--border); }
+  .line h2 {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 8px;
+  }
+  .line .deal-title {
+    font-size: 16px;
+    font-weight: 500;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .line .milestone {
+    color: var(--muted);
+    margin: 6px 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* ---- Amount ---- */
+  .amount {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 24px;
+    padding: 28px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .amount .label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .amount .value { font-size: 36px; line-height: 1.1; }
+  .amount .value .cur { font-size: 17px; color: var(--muted); margin-left: 4px; }
+
+  /* ---- Payment rails ---- */
+  .pay { padding: 28px 0 8px; }
+  .pay > h2 {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 16px;
+  }
+  .rail {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 16px;
+    padding: 12px 0;
+    border-top: 1px solid var(--border);
+    break-inside: avoid;
+  }
+  .rail:first-of-type { border-top: 0; padding-top: 0; }
+  .rail .rail-name { font-weight: 600; }
+  .rail .rail-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .rail .rail-body a { color: var(--pine); }
+  .pay .no-rails { color: var(--ink); margin: 0; }
+  .paid-note {
+    background: var(--wash);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin: 0;
+  }
+  .paid-note strong { color: var(--pine); }
+
+  /* ---- Screen-only chrome ---- */
+  .screen-bar {
+    max-width: 760px;
+    margin: 0 auto 48px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 0 8px;
+  }
+  .print-btn {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+    font-weight: 500;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .print-btn:hover { border-color: var(--pine); color: var(--pine); }
+  .print-btn:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
+
+  @media (max-width: 640px) {
+    .sheet { margin: 16px; padding: 32px 24px; border-radius: 10px; }
+    .head { flex-direction: column; gap: 8px; }
+    .head .doc-id { text-align: left; }
+    .meta { grid-template-columns: 1fr; gap: 20px; }
+    .amount { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .rail { grid-template-columns: 1fr; gap: 2px; }
+  }
+
+  /* ---- Print: a clean single-page paper invoice ---- */
+  @media print {
+    @page { margin: 14mm; }
+    body { background: #fff; font-size: 12px; }
+    .screen-bar { display: none; }
+    .sheet {
+      max-width: none;
+      margin: 0;
+      border: 0;
+      border-radius: 0;
+      padding: 0;
+    }
+    .head { padding-bottom: 16px; }
+    .head .from-name { font-size: 24px; }
+    .meta, .line, .amount { padding: 16px 0; }
+    .pay { padding: 16px 0 0; }
+    .amount .value { font-size: 30px; }
+    .rail .rail-body a { color: var(--ink); text-decoration: none; }
+    .meta, .line, .amount, .pay { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+
+  <main class="sheet">
+    <header class="head">
+      <div>
+        <h1 class="from-name serif">{{creatorDisplayName}}</h1>
+        <div class="from-sub">Invoice for sponsorship services</div>
+      </div>
+      <div class="doc-id">
+        <div class="doc-label">Invoice</div>
+        <div class="doc-number tnum">{{invoiceNumberFormatted}}</div>
+        {{#if isPaid}}<span class="chip-paid">Paid</span>{{/if}}
+      </div>
+    </header>
+
+    <section class="meta">
+      <div class="bill-to">
+        <h2>Billed to</h2>
+        <div class="org">{{brandName}}</div>
+        {{#if contactName}}<div class="attn">Attn: {{contactName}}</div>{{/if}}
+      </div>
+      <dl class="dates tnum">
+        <dt>Issued</dt><dd>{{issuedDate}}</dd>
+        <dt>Due</dt><dd>{{dueDateValue}}</dd>
+        <dt>Terms</dt><dd>{{termsLabel}}</dd>
+        {{#if isPaid}}<dt>Paid</dt><dd>{{paidDate}}</dd>{{/if}}
+      </dl>
+    </section>
+
+    <section class="line">
+      <h2>For</h2>
+      <p class="deal-title">{{dealTitle}}</p>
+      {{#if milestoneNote}}<p class="milestone">{{milestoneNote}}</p>{{/if}}
+    </section>
+
+    <section class="amount">
+      <span class="label">{{#if isPaid}}Amount paid{{/if}}{{#if isUnpaid}}Amount due{{/if}}</span>
+      <span class="value serif tnum">{{amountFormatted}}<span class="cur">{{currency}}</span></span>
+    </section>
+
+    <section class="pay">
+      {{#if isPaid}}
+      <p class="paid-note"><strong>This invoice has been paid.</strong> Paid {{paidDate}}. No further action is needed.</p>
+      {{/if}}
+      {{#if isUnpaid}}
+      <h2>How to pay</h2>
+      {{#if paypalLink}}
+      <div class="rail">
+        <div class="rail-name">PayPal</div>
+        <div class="rail-body"><a href="{{paypalLink}}">{{paypalLink}}</a></div>
+      </div>
+      {{/if}}
+      {{#if wiseText}}
+      <div class="rail">
+        <div class="rail-name">Wise</div>
+        <div class="rail-body">{{wiseText}}</div>
+      </div>
+      {{/if}}
+      {{#if bankText}}
+      <div class="rail">
+        <div class="rail-name">Bank transfer</div>
+        <div class="rail-body">{{bankText}}</div>
+      </div>
+      {{/if}}
+      {{#if noRails}}
+      <p class="no-rails">To arrange payment, reply to the invoice email and {{creatorDisplayName}} will send payment details.</p>
+      {{/if}}
+      {{/if}}
+    </section>
+  </main>
+
+  <footer class="screen-bar">
+    <span>Questions about this invoice? Reply to the invoice email — it reaches {{creatorDisplayName}} directly.</span>
+    <button type="button" class="print-btn" onclick="window.print()">Print / save PDF</button>
+  </footer>
+
+</body>
+</html>
