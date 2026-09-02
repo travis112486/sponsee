@@ -16,6 +16,9 @@ globalThis.ResizeObserver =
 const invalidate = vi.fn();
 const createInvoice = vi.fn();
 const updateDeliverable = vi.fn();
+const createDeal = vi.fn();
+const createBrand = vi.fn().mockResolvedValue({ id: "b1" });
+const addContact = vi.fn().mockResolvedValue({ id: "c1" });
 
 const deal = {
   id: "d1",
@@ -71,12 +74,14 @@ const dealWithoutInvoice = {
 
 let dealsFixture: typeof deal[] = [deal];
 let invoicePending = false;
+let brandsFixture: { id: string; name: string }[] = [];
+let contactsFixture: { id: string; name: string; email: string; role: string | null }[] = [];
 
 vi.mock("@/trpc", () => ({
   trpc: {
     useUtils: () => ({
       deals: { list: { invalidate } },
-      brand: { list: { invalidate } },
+      brand: { list: { invalidate }, contacts: { invalidate } },
       invoice: { list: { invalidate } },
     }),
     deals: {
@@ -87,7 +92,7 @@ vi.mock("@/trpc", () => ({
         useMutation: () => ({ mutate: vi.fn(), isPending: false }),
       },
       create: {
-        useMutation: () => ({ mutate: vi.fn(), isPending: false }),
+        useMutation: () => ({ mutate: createDeal, isPending: false }),
       },
     },
     invoice: {
@@ -112,10 +117,16 @@ vi.mock("@/trpc", () => ({
     },
     brand: {
       list: {
-        useQuery: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
+        useQuery: () => ({ data: brandsFixture, isLoading: false, isError: false, refetch: vi.fn() }),
       },
       create: {
-        useMutation: () => ({ mutateAsync: vi.fn().mockResolvedValue({ id: "b1" }) }),
+        useMutation: () => ({ mutateAsync: createBrand }),
+      },
+      contacts: {
+        useQuery: () => ({ data: contactsFixture, isLoading: false, isError: false, refetch: vi.fn() }),
+      },
+      addContact: {
+        useMutation: () => ({ mutate: addContact, mutateAsync: addContact, isPending: false }),
       },
     },
   },
@@ -126,6 +137,8 @@ beforeEach(() => {
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
   dealsFixture = [deal];
   invoicePending = false;
+  brandsFixture = [];
+  contactsFixture = [];
 });
 
 afterEach(() => {
@@ -310,5 +323,60 @@ describe("NewDealModal accessibility", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("New deal contact capture (SPO-298)", () => {
+  it("creates a contact inline when adding a deal for a new brand", async () => {
+    renderPipeline("/pipeline?new=1");
+
+    fireEvent.click(screen.getByRole("button", { name: "New brand" }));
+    fireEvent.change(screen.getByPlaceholderText("Brand name"), {
+      target: { value: "New Brand" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("e.g. Q4 Stream Fuel Campaign"), {
+      target: { value: "Q4 Deal" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Contact name"), {
+      target: { value: "Jane Buyer" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Contact email"), {
+      target: { value: "jane@example.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Role (optional)"), {
+      target: { value: "Sponsorships" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
+
+    await waitFor(() => {
+      expect(createBrand).toHaveBeenCalledWith({ name: "New Brand", category: undefined });
+    });
+    await waitFor(() => {
+      expect(addContact).toHaveBeenCalledWith({
+        brandId: "b1",
+        name: "Jane Buyer",
+        email: "jane@example.com",
+        role: "Sponsorships",
+      });
+    });
+    await waitFor(() => {
+      expect(createDeal).toHaveBeenCalledWith(
+        expect.objectContaining({ brandId: "b1", primaryContactId: "c1" })
+      );
+    });
+  });
+
+  it("offers a contact picker once an existing brand is selected", () => {
+    brandsFixture = [{ id: "b1", name: "Acme" }];
+    renderPipeline("/pipeline?new=1");
+
+    fireEvent.change(screen.getByLabelText("Brand"), { target: { value: "b1" } });
+
+    expect(screen.getByLabelText("Primary contact")).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "No primary contact" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add contact" })).toBeInTheDocument();
   });
 });
