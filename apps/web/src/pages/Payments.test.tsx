@@ -5,7 +5,19 @@ import { render, screen, cleanup } from "@testing-library/react";
 import { toast } from "sonner";
 import Payments from "./Payments";
 
-const awaitingReviewItem = {
+type AwaitingReviewItem = {
+  event: {
+    id: string;
+    step: number;
+    toEmail: string | null;
+    subjectSnapshot: string;
+    bodySnapshot: string;
+  };
+  invoice: { title: string; number: string };
+  recipientEmail: string | null;
+};
+
+let awaitingReviewItem: AwaitingReviewItem = {
   event: {
     id: "e1",
     step: 1,
@@ -102,5 +114,47 @@ describe("Payments chase approve/editAndSend error handling", () => {
     expect(toast.error).toHaveBeenCalledWith(
       "Failed to send chase email. Please try again."
     );
+  });
+});
+
+describe("Payments awaiting-review recipient hint", () => {
+  it("shows the missing-contact hint and disables Approve when recipientEmail is null even if toEmail is stale", () => {
+    awaitingReviewItem = {
+      event: {
+        id: "e1",
+        step: 1,
+        toEmail: "stale@example.com",
+        subjectSnapshot: "Quick reminder",
+        bodySnapshot: "Please pay",
+      },
+      invoice: { title: "Q4 Campaign", number: "INV-1" },
+      recipientEmail: null,
+    };
+
+    render(<Payments />);
+
+    expect(screen.getByText(/No recipient email/)).toBeInTheDocument();
+    expect(screen.queryByText(/stale@example\.com/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+  });
+
+  it("renders the recipient and enables Approve when recipientEmail resolves but toEmail is null", () => {
+    awaitingReviewItem = {
+      event: {
+        id: "e1",
+        step: 1,
+        toEmail: null,
+        subjectSnapshot: "Quick reminder",
+        bodySnapshot: "Please pay",
+      },
+      invoice: { title: "Q4 Campaign", number: "INV-1" },
+      recipientEmail: "late@example.com",
+    };
+
+    render(<Payments />);
+
+    expect(screen.getByText(/To:\s+late@example\.com/)).toBeInTheDocument();
+    expect(screen.queryByText(/No recipient email/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
   });
 });
