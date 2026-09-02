@@ -13,6 +13,7 @@ import {
   type FlattenedZodError,
 } from "./error-formatter.js";
 import { createTRPCRouter, publicProcedure } from "./trpc.js";
+import { QuotaExceededError } from "./storage/errors.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -184,6 +185,24 @@ describe("formatTRPCError", () => {
     // The blob this issue exists to kill: a JSON array literal in a toast.
     expect(formatted.message).not.toContain("[");
     expect(formatted.message).not.toContain('"code"');
+  });
+
+  // SPO-349: the UI needs a real "X of Y used" message, not a generic
+  // FORBIDDEN — so this cause's message and its extra fields both survive
+  // the scrub that would otherwise apply to a non-500 with no authored text.
+  it("publishes a QuotaExceededError's message and structured fields", () => {
+    const cause = new QuotaExceededError(5_368_198_246, 5 * 1024 * 1024 * 1024, "starter");
+    const error = new TRPCError({ code: "FORBIDDEN", cause });
+    const shape = { ...baseShape, message: cause.message, data: { ...baseShape.data, code: "FORBIDDEN" } };
+
+    const formatted = formatTRPCError({ shape, error });
+
+    expect(formatted.message).toBe(cause.message);
+    expect(formatted.message).toMatch(/starter plan's storage limit/);
+    expect(formatted.data.usedBytes).toBe(5_368_198_246);
+    expect(formatted.data.capBytes).toBe(5 * 1024 * 1024 * 1024);
+    expect(formatted.data.planTier).toBe("starter");
+    expect(formatted.data.zodError).toBeNull();
   });
 
   it("leaves non-Zod errors completely untouched", () => {

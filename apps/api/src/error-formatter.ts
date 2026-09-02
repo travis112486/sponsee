@@ -1,5 +1,6 @@
 import type { TRPCError } from "@trpc/server";
 import { ZodError } from "zod";
+import { QuotaExceededError } from "./storage/errors.js";
 
 /**
  * Flattened Zod failure, as it crosses the wire on `error.data.zodError`.
@@ -176,6 +177,16 @@ function isInputValidationFailure(error: TRPCError): boolean {
 }
 
 /**
+ * Storage quota rejection (SPO-349). Like the ZodError case above, this is a
+ * cause the client needs structured, not just a sentence: the UI renders a
+ * real "X of Y GB used" message from `usedBytes`/`capBytes`/`planTier` rather
+ * than parsing them back out of prose.
+ */
+function isQuotaExceededFailure(error: TRPCError): error is TRPCError & { cause: QuotaExceededError } {
+  return error.cause instanceof QuotaExceededError;
+}
+
+/**
  * Did a procedure deliberately phrase this message, or did it fall out of
  * whatever was thrown?
  *
@@ -251,6 +262,20 @@ export function formatTRPCError<TShape extends ErrorShapeLike>({
       ...shape,
       message: summarizeZodError(zodError),
       data: { ...data, zodError },
+    };
+  }
+
+  if (isQuotaExceededFailure(error)) {
+    return {
+      ...shape,
+      message: error.cause.message,
+      data: {
+        ...data,
+        zodError: null,
+        usedBytes: error.cause.usedBytes,
+        capBytes: error.cause.capBytes,
+        planTier: error.cause.planTier,
+      },
     };
   }
 

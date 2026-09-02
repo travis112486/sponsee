@@ -6,10 +6,13 @@ import { z } from "zod";
 import {
   FileTooLargeError,
   InvalidSizeError,
+  QuotaExceededError,
   StorageNotConfiguredError,
   UnsupportedMimeTypeError,
+  assertStorageQuotaAvailable,
   createDownloadUrl,
   createUploadUrl,
+  getStorageUsage,
   keyBelongsToDeal,
   storageScopes,
 } from "../storage/index.js";
@@ -28,6 +31,12 @@ function throwAsTRPCError(err: unknown): never {
   }
   if (err instanceof InvalidSizeError) {
     throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+  }
+  if (err instanceof QuotaExceededError) {
+    // No `message` here — tRPC falls back to `cause.message`, and the
+    // error-formatter's `isQuotaExceededFailure` branch republishes both that
+    // message and the structured usedBytes/capBytes/planTier from the cause.
+    throw new TRPCError({ code: "FORBIDDEN", cause: err });
   }
   throw err;
 }
@@ -58,6 +67,9 @@ export const storageRouter = createTRPCRouter({
       await requireOwnedDeal(ctx.db, ctx.creatorId, input.dealId);
 
       try {
+        // SPO-349: checked before signing, not after the creator has already
+        // uploaded the bytes — a rejection here costs nothing but a request.
+        await assertStorageQuotaAvailable(ctx.db, ctx.creatorId, input.sizeBytes);
         return await createUploadUrl({
           creatorId: ctx.creatorId,
           dealId: input.dealId,
@@ -94,4 +106,10 @@ export const storageRouter = createTRPCRouter({
         throwAsTRPCError(err);
       }
     }),
+
+  // SPO-349: lets the UI show a real usage meter instead of a creator only
+  // discovering their cap when an upload gets refused.
+  usage: creatorScopedProcedure.query(async ({ ctx }) => {
+    return await getStorageUsage(ctx.db, ctx.creatorId);
+  }),
 });
