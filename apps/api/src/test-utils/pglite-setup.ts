@@ -23,8 +23,9 @@ const globalLock = globalThis as unknown as {
 //
 // Set below the 60s hookTimeout in scripts/vitest-api.config.ts and
 // apps/api/vitest.config.ts so our message — not vitest's generic "Hook
-// timed out" — is what actually fires.
-const SCHEMA_INIT_TIMEOUT_MS = 55_000;
+// timed out" — is what actually fires. Exported so vitest-config.test.ts can
+// assert that ordering directly instead of relying on this comment.
+export const SCHEMA_INIT_TIMEOUT_MS = 55_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {

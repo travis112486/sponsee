@@ -38,24 +38,22 @@ describe("initPgliteSchema", () => {
   });
 
   it("settles the shared promise once, so a second concurrent caller fails fast instead of queueing its own timeout", async () => {
-    vi.spyOn(pgliteClient!, "exec").mockImplementation(() => new Promise(() => {}));
+    const execSpy = vi.spyOn(pgliteClient!, "exec").mockImplementation(() => new Promise(() => {}));
 
-    const start = performance.now();
     const [first, second] = await Promise.allSettled([
       initPgliteSchema("SELECT 1;", 50),
       initPgliteSchema("SELECT 1;", 50),
     ]);
-    const elapsed = performance.now() - start;
 
     expect(first.status).toBe("rejected");
     expect(second.status).toBe("rejected");
-    // Both callers share one promise. If the second caller paid its own
-    // separate 50ms timeout on top of the first's, this would still pass at
-    // ~100ms — the real failure mode (an unbounded exec cascading a full
-    // hookTimeout onto every dependent suite) only shows up at real scale,
-    // but a wide margin here still catches a regression back to "await a
-    // fresh promise per caller".
-    expect(elapsed).toBeLessThan(200);
+    // A timing check here (e.g. "settles in under Xms") doesn't discriminate:
+    // a regression to "await a fresh promise per caller" still resolves both
+    // within a couple of timeouts and can pass a generous bound. Asserting
+    // the call count directly proves only one caller ever reached exec() —
+    // the second genuinely awaited the first's promise instead of racing its
+    // own.
+    expect(execSpy).toHaveBeenCalledTimes(1);
   });
 
   it("resolves normally and marks the schema applied when exec succeeds within budget", async () => {
