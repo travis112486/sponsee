@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import Pipeline from "./Pipeline";
 
@@ -14,31 +14,100 @@ globalThis.ResizeObserver =
   ResizeObserverStub as unknown as typeof ResizeObserver;
 
 const invalidate = vi.fn();
+const createInvoice = vi.fn();
+const updateDeliverable = vi.fn();
+
 const deal = {
   id: "d1",
   title: "Q4 Campaign",
+  type: "flat",
   stage: "inbound",
   valueCents: 50000,
+  valueNote: "per stream",
+  currency: "USD",
+  paymentTerms: "net_30",
+  stageEnteredAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
   brand: { name: "Acme" },
-  platforms: ["twitch"],
+  platforms: ["twitch", "youtube"],
   notes: null,
+  deliverables: [
+    {
+      id: "del1",
+      title: "VOD publish",
+      status: "not_started",
+      dueAt: null,
+      dueLabel: null,
+      progressDone: 137,
+      progressTotal: 200,
+      position: 0,
+    },
+  ],
+  invoices: [
+    {
+      id: "inv1",
+      status: "open",
+      dueAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+      paidAt: null,
+      amountCents: 50000,
+    },
+    {
+      id: "inv-paid",
+      status: "paid",
+      dueAt: null,
+      paidAt: new Date().toISOString(),
+      amountCents: 25000,
+    },
+  ],
 };
+
+// Deal with no non-void invoice — the only case where the quick-action
+// "invoice" button should actually mint a new invoice.
+const dealWithoutInvoice = {
+  ...deal,
+  id: "d2",
+  title: "Fresh Campaign",
+  invoices: [],
+};
+
+let dealsFixture: typeof deal[] = [deal];
+let invoicePending = false;
 
 vi.mock("@/trpc", () => ({
   trpc: {
     useUtils: () => ({
       deals: { list: { invalidate } },
       brand: { list: { invalidate } },
+      invoice: { list: { invalidate } },
     }),
     deals: {
       list: {
-        useQuery: () => ({ data: [deal], isLoading: false, isError: false, refetch: vi.fn() }),
+        useQuery: () => ({ data: dealsFixture, isLoading: false, isError: false, refetch: vi.fn() }),
       },
       updateStage: {
         useMutation: () => ({ mutate: vi.fn(), isPending: false }),
       },
       create: {
         useMutation: () => ({ mutate: vi.fn(), isPending: false }),
+      },
+    },
+    invoice: {
+      create: {
+        useMutation: () => ({ mutate: createInvoice, isPending: invoicePending }),
+      },
+    },
+    deliverable: {
+      update: {
+        useMutation: () => ({ mutate: updateDeliverable, isPending: false }),
+      },
+    },
+    settings: {
+      getProfile: {
+        useQuery: () => ({
+          data: { timezone: "UTC" },
+          isLoading: false,
+          isError: false,
+          refetch: vi.fn(),
+        }),
       },
     },
     brand: {
@@ -52,9 +121,17 @@ vi.mock("@/trpc", () => ({
   },
 }));
 
+beforeEach(() => {
+  // Reduced motion snaps count-ups to target so StageSum needs no rAF in jsdom.
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+  dealsFixture = [deal];
+  invoicePending = false;
+});
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function renderPipeline(initialEntry = "/pipeline") {
@@ -73,6 +150,100 @@ describe("Pipeline kanban card accessibility", () => {
     expect(openButton).toBeInTheDocument();
     // The card itself must not masquerade as a button.
     expect(screen.queryAllByRole("button").every((b) => b.tagName === "BUTTON")).toBe(true);
+  });
+});
+
+describe("Pipeline deal card content (SPO-195)", () => {
+  it("renders the brand mark, deal-type badge, value note and platform dots", () => {
+    renderPipeline();
+
+    const card = document.querySelector(
+      '[aria-roledescription="Draggable deal card"]'
+    ) as HTMLElement;
+
+    // Brand mark renders "AC" initials for single-word "Acme".
+    expect(within(card).getByText("AC")).toBeInTheDocument();
+    // Deal-type badge (scoped to the card; the filter bar also shows "Flat").
+    expect(within(card).getByText("Flat")).toBeInTheDocument();
+    // Value note next to the value.
+    expect(within(card).getByText("per stream")).toBeInTheDocument();
+    // Platform dots: role="img" with Twitch / YouTube labels.
+    expect(within(card).getByRole("img", { name: "Twitch" })).toBeInTheDocument();
+    expect(within(card).getByRole("img", { name: "YouTube" })).toBeInTheDocument();
+    // Raw uppercase platform text is gone.
+    expect(within(card).queryByText("TWITCH")).not.toBeInTheDocument();
+  });
+
+  it("renders days-in-stage and the next deliverable", () => {
+    renderPipeline();
+    expect(screen.getByText(/^Next: VOD publish$/)).toBeInTheDocument();
+    expect(screen.getByText("2d")).toBeInTheDocument();
+  });
+
+  it("renders the deliverable progress bar caption", () => {
+    renderPipeline();
+    expect(screen.getByText("137 / 200")).toBeInTheDocument();
+  });
+
+  it("renders the overdue danger strip for an overdue open invoice", () => {
+    renderPipeline();
+    expect(screen.getByText(/Invoice 5d overdue/)).toBeInTheDocument();
+  });
+
+  it("renders the header totals line", () => {
+    renderPipeline();
+    const header = screen.getByText((content, el) => {
+      return el?.tagName === "P" && content.includes("total pipeline");
+    });
+    expect(header).toHaveTextContent("1 deal");
+    expect(header).toHaveTextContent("$500");
+    // Positive control: the paid invoice ($250) must be summed, not just the
+    // "collected this quarter" label rendering.
+    expect(header).toHaveTextContent("$250 collected this quarter");
+  });
+});
+
+describe("Pipeline quick actions (SPO-195)", () => {
+  it("exposes open, invoice and mark-deliverable buttons", () => {
+    renderPipeline();
+    expect(screen.getByRole("button", { name: "Create invoice for Q4 Campaign" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mark next deliverable done for Q4 Campaign" })).toBeInTheDocument();
+  });
+
+  it("marking a deliverable done targets the first non-done deliverable", () => {
+    renderPipeline();
+    fireEvent.click(screen.getByRole("button", { name: "Mark next deliverable done for Q4 Campaign" }));
+    expect(updateDeliverable).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "del1", status: "done" })
+    );
+  });
+
+  it("creating an invoice posts the deal value for a deal with no non-void invoice", () => {
+    dealsFixture = [dealWithoutInvoice];
+    renderPipeline();
+    fireEvent.click(screen.getByRole("button", { name: "Create invoice for Fresh Campaign" }));
+    expect(createInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dealId: "d2",
+        title: "Fresh Campaign — Invoice",
+        amountCents: 50000,
+        currency: "USD",
+        terms: "net_30",
+      })
+    );
+  });
+
+  it("does not mint a duplicate invoice when the deal already has a non-void one", () => {
+    renderPipeline();
+    fireEvent.click(screen.getByRole("button", { name: "Create invoice for Q4 Campaign" }));
+    expect(createInvoice).not.toHaveBeenCalled();
+  });
+
+  it("disables the invoice button while a create is in flight", () => {
+    invoicePending = true;
+    dealsFixture = [dealWithoutInvoice];
+    renderPipeline();
+    expect(screen.getByRole("button", { name: "Create invoice for Fresh Campaign" })).toBeDisabled();
   });
 });
 
