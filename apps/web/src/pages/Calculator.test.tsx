@@ -1,9 +1,38 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, within, fireEvent } from "@testing-library/react";
 import { compute, defaultBenchmarkConfig } from "@sponsee/shared";
 import Calculator from "./Calculator";
+
+// The Radix Slider/Tooltip primitives call pointer-capture and layout APIs
+// jsdom doesn't implement (SPO-193's own primitives.test.tsx stubs the same
+// set for the same reason).
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+beforeAll(() => {
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false;
+    Element.prototype.setPointerCapture = () => {};
+    Element.prototype.releasePointerCapture = () => {};
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+  // `useCountUp` only reaches its target via requestAnimationFrame, which
+  // jsdom never flushes synchronously. Forcing prefers-reduced-motion snaps
+  // it straight to the target so assertions on rendered figures stay
+  // deterministic — the tween itself is covered by useCountUp.test.tsx.
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({ matches: true }))
+  );
+});
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -321,6 +350,27 @@ describe("Calculator accessibility", () => {
     expect(hours).toHaveAttribute("aria-valuetext", "2h of sponsored airtime");
   });
 
+  it("moves the CCV slider by keyboard and recomputes against the new value", () => {
+    render(<Calculator />);
+
+    const ccv = screen.getByRole("slider", { name: "Average concurrent viewers" });
+    fireEvent.keyDown(ccv, { key: "ArrowRight" });
+
+    expect(computeQuery).toHaveBeenLastCalledWith(expect.objectContaining({ ccv: 510 }));
+  });
+
+  it("commits the CCV slider's value to the saved profile", () => {
+    render(<Calculator />);
+
+    const ccv = screen.getByRole("slider", { name: "Average concurrent viewers" });
+    fireEvent.keyDown(ccv, { key: "ArrowRight" });
+    fireEvent.keyUp(ccv, { key: "ArrowRight" });
+
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ inputs: expect.objectContaining({ ccv: 510 }) })
+    );
+  });
+
   it("exposes deliverable type as real radios", () => {
     render(<Calculator />);
 
@@ -338,6 +388,35 @@ describe("Calculator accessibility", () => {
     render(<Calculator />);
 
     expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("explains the deliverable-type multiplier on hover/focus", async () => {
+    render(<Calculator />);
+
+    const trigger = screen.getByRole("button", { name: "About Deliverable type" });
+    fireEvent.focus(trigger);
+
+    expect(
+      await screen.findByText(/Deliverable type carries its own multiplier/)
+    ).toBeInTheDocument();
+  });
+
+  it("explains the platform mix multiplier on hover/focus", async () => {
+    render(<Calculator />);
+
+    const trigger = screen.getByRole("button", { name: "About Platforms in this activation" });
+    fireEvent.focus(trigger);
+
+    expect(await screen.findByText(/nudge the benchmark rate/)).toBeInTheDocument();
+  });
+
+  it("explains the benchmark band on hover/focus", async () => {
+    render(<Calculator />);
+
+    const trigger = screen.getByRole("button", { name: "About the benchmark band" });
+    fireEvent.focus(trigger);
+
+    expect(await screen.findByText(/walk-away number/)).toBeInTheDocument();
   });
 
   it("opens the CPVH explainer as a modal dialog and closes it on Escape", () => {
