@@ -555,6 +555,32 @@ describe("dashboard.overview", () => {
     expect(result.revenue.totalCents).toBe(10000);
     expect(result.revenue.previousTotalCents).toBe(20000);
   });
+
+  it("clamps the prior-month end so it never spills into the current month (Mar 31)", async () => {
+    // now = Mar 31. `addZonedMonths(Mar 31, -1)` rolls Feb 31 → Mar 3, so an
+    // unclamped prior window overlaps March and double-counts Mar 1–2 revenue.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 1, amountCents: 5000, status: "paid", paidAt: new Date("2026-03-02T00:00:00Z") });
+    await insertInvoice({ creatorId: creatorAId, dealId: dealABountyId, number: 2, amountCents: 20000, status: "paid", paidAt: new Date("2026-02-15T00:00:00Z") });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ period: "month", now: "2026-03-31T12:00:00Z" });
+
+    expect(result.revenue.totalCents).toBe(5000);
+    expect(result.revenue.previousTotalCents).toBe(20000);
+  });
+
+  it("clamps the prior-quarter end so it never spills into the current quarter (Dec 31)", async () => {
+    // now = Dec 31. `addZonedMonths(Dec 31, -3)` rolls Sep 31 → Oct 1, so an
+    // unclamped prior window overlaps Q4 and double-counts Oct 1 revenue.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 1, amountCents: 3000, status: "paid", paidAt: new Date("2026-10-01T06:00:00Z") });
+    await insertInvoice({ creatorId: creatorAId, dealId: dealABountyId, number: 2, amountCents: 7000, status: "paid", paidAt: new Date("2026-09-10T00:00:00Z") });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ period: "quarter", now: "2026-12-31T12:00:00Z" });
+
+    expect(result.revenue.totalCents).toBe(3000);
+    expect(result.revenue.previousTotalCents).toBe(7000);
+  });
 });
 
 describe("dashboard.overview period math is creator-local", () => {

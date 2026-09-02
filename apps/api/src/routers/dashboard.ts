@@ -71,10 +71,20 @@ function periodBounds(
 // `totalCents` is always period-to-date — `periodBounds` opens at the period
 // start, but a paidAt can never be in the future, so month/quarter revenue is
 // implicitly truncated at `now`. To keep the delta honest, the prior window is
-// truncated the same way: prior month/quarter end at `now` shifted back one
-// month / three months (the YTD branch already did this), never at the prior
-// period's full-width end. Comparing 18 days of March against all 28 of
-// February would manufacture a fake negative on every creator at a steady pace.
+// truncated the same way: it opens at the prior period's civil start and ends
+// at `now` shifted back one period, clamped to the current period's start.
+//
+// The clamp is not optional. `addZonedMonths` normalises through
+// `normalizeCivil`, which rolls *forward* rather than clamping (its own header
+// warns it is not how to derive a period end). So on the 7 days a year where
+// `now`'s day-of-month exceeds the prior month's length — Mar 29/30/31, May 31,
+// Jul 31, Oct 31, Dec 31 — `addZonedMonths(now, -1)` lands inside the current
+// month (Feb 31 → Mar 3), and the quarter branch does the same at Dec 31
+// (Sep 31 → Oct 1). The prior window then overlaps the current period and the
+// same invoice counts in the numerator and the baseline, manufacturing exactly
+// the fake negative the truncation exists to prevent. Clamping to the current
+// period's start keeps the prior window a strict subset of the prior period
+// (and yields the full prior period at period end, which is correct).
 // All boundaries are creator-local, matching `periodBounds`.
 function previousPeriodBounds(
   period: "month" | "quarter" | "ytd",
@@ -82,17 +92,20 @@ function previousPeriodBounds(
   timeZone: string
 ): { start: Date; end: Date } {
   if (period === "month") {
-    return {
-      start: startOfZonedMonthOffset(now, -1, timeZone),
-      end: addZonedMonths(now, -1, timeZone),
-    };
+    const priorStart = startOfZonedMonthOffset(now, -1, timeZone);
+    const currentStart = startOfZonedMonthOffset(now, 0, timeZone);
+    const shifted = addZonedMonths(now, -1, timeZone);
+    return { start: priorStart, end: shifted > currentStart ? currentStart : shifted };
   }
   if (period === "quarter") {
-    return {
-      start: startOfZonedQuarterOffset(now, -1, timeZone),
-      end: addZonedMonths(now, -3, timeZone),
-    };
+    const priorStart = startOfZonedQuarterOffset(now, -1, timeZone);
+    const currentStart = startOfZonedQuarterOffset(now, 0, timeZone);
+    const shifted = addZonedMonths(now, -3, timeZone);
+    return { start: priorStart, end: shifted > currentStart ? currentStart : shifted };
   }
+  // YTD: the shift back is always a full year, so it can never land inside the
+  // current year — no clamp needed (its leap-day overflow is a 1-day widening
+  // inside the prior year, not an overlap).
   const end = addZonedMonths(now, -12, timeZone);
   return { start: startOfZonedYear(end, timeZone), end };
 }
