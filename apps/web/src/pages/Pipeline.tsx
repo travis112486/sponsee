@@ -230,62 +230,68 @@ function DealCardBody({ deal }: { deal: PipelineDeal }) {
 
   return (
     <>
-      <div className="flex items-start gap-2.5">
+      {/* The brand name owns the full header row (the type chip lives on the
+          value row) so it survives the narrow lg column widths untruncated. */}
+      <div className="flex items-center gap-1.5">
         <BrandMark
           brand={deal.brand?.name ?? "?"}
           domain={deal.brand?.domain}
-          size={32}
+          size={28}
           className="rounded-lg"
         />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-2">
-            <p className="truncate text-[13px] font-semibold leading-4 tracking-[-0.01em] text-ink">
-              {deal.brand?.name ?? "Unknown brand"}
-            </p>
-            <span
-              className={cn(
-                "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-3",
-                dealTypeBadge[type]
-              )}
-            >
-              {dealTypeLabels[type]}
-            </span>
-          </div>
-          <p className="mt-0.5 line-clamp-2 text-[12px] leading-[17px] text-ink-2">
-            {deal.title}
-          </p>
-        </div>
+        <p
+          title={deal.brand?.name ?? undefined}
+          className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-4 tracking-[-0.01em] text-ink"
+        >
+          {deal.brand?.name ?? "Unknown brand"}
+        </p>
       </div>
+      <p className="mt-1.5 line-clamp-2 text-[12px] leading-[17px] text-ink-2">
+        {deal.title}
+      </p>
 
-      <div className="mt-2.5 flex items-baseline justify-between gap-2">
+      <div className="mt-2 flex items-center justify-between gap-2">
         <span className="min-w-0 truncate font-mono text-[14px] font-semibold tabular-nums text-ink">
           {formatCents(deal.valueCents)}
           {deal.valueNote && (
-            <span className="ml-1 font-sans text-[10px] font-normal text-ink-3">
+            // Hidden through the lg–1440 band where the narrow columns would
+            // clip it mid-word ("p…"); back at ≥1440 where it fits whole.
+            <span className="ml-1 font-sans text-[10px] font-normal text-ink-3 lg:hidden min-[1440px]:inline">
               {deal.valueNote}
             </span>
           )}
         </span>
-        {platformList.length > 0 && <PlatformDots platforms={platformList} />}
+        <span
+          className={cn(
+            "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-3",
+            dealTypeBadge[type]
+          )}
+        >
+          {dealTypeLabels[type]}
+        </span>
       </div>
 
       <div className="mt-2 flex items-center justify-between gap-2 border-t border-hairline pt-2">
         {next ? (
           <p
+            title={next.title}
             className={cn(
               "flex min-w-0 items-center gap-1 truncate text-[11px]",
               nextDue ? "font-medium text-amber" : "text-ink-3"
             )}
           >
             <CalendarDays className="h-3 w-3 shrink-0" />
-            <span className="truncate">Next: {next.title}</span>
+            <span className="truncate">{next.title}</span>
           </p>
         ) : (
           <span className="text-[11px] text-ink-3">No open deliverables</span>
         )}
-        <span className="flex shrink-0 items-center gap-1 rounded-full bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-ink-3">
-          {stale && <span className="h-1.5 w-1.5 rounded-full bg-amber" title="Stale" />}
-          {days}d
+        <span className="flex shrink-0 items-center gap-1.5">
+          {platformList.length > 0 && <PlatformDots platforms={platformList} />}
+          <span className="flex shrink-0 items-center gap-1 rounded-full bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-ink-3">
+            {stale && <span className="h-1.5 w-1.5 rounded-full bg-amber" title="Stale" />}
+            {days}d
+          </span>
         </span>
       </div>
 
@@ -330,9 +336,11 @@ function DroppableStageColumn({
       ref={setNodeRef}
       className={cn(
         // Fixed 260px + horizontal scroll on small screens; from lg up the six
-        // columns split the row evenly (basis-0 + min-w floor), so the whole
-        // board fits on one screen and only overflows below ~1400px viewports.
-        "flex w-[260px] shrink-0 flex-col rounded-xl border transition-colors lg:w-auto lg:min-w-[176px] lg:shrink lg:flex-1 lg:basis-0",
+        // columns split the row evenly (basis-0 + min-w floor). Through the app
+        // shell the content width is min(1360, vw - 232) - 48, so six 156px
+        // columns + five 8px gaps (976px) fit without scrolling from a 1280px
+        // viewport up; between lg (1024) and 1280 the board still scrolls.
+        "flex w-[260px] shrink-0 flex-col rounded-xl border transition-colors lg:w-auto lg:min-w-[156px] lg:shrink lg:flex-1 lg:basis-0",
         isOver ? "border-pine bg-pine-tint/40" : "border-hairline bg-surface-subtle"
       )}
     >
@@ -399,7 +407,7 @@ function DraggableDealCard({
           : undefined
       }
       className={cn(
-        "group relative min-h-[118px] cursor-grab touch-manipulation rounded-[10px] border border-hairline bg-surface p-3 shadow-warm transition-shadow hover:border-pine/30 hover:shadow-warm-md active:cursor-grabbing",
+        "group relative min-h-[118px] cursor-grab touch-manipulation rounded-[10px] border border-hairline bg-surface p-3 shadow-warm transition-shadow hover:border-pine/30 hover:shadow-warm-md active:cursor-grabbing lg:p-2.5",
         isDragging && "opacity-40",
         deal.stage === "paid" && "opacity-70"
       )}
@@ -521,10 +529,10 @@ function DraggableDealCard({
   );
 }
 
-function StageSum({ valueCents }: { valueCents: number }) {
+function StageSum({ valueCents, className }: { valueCents: number; className?: string }) {
   const dollars = useCountUp(valueCents / 100, 300);
   return (
-    <span className="font-mono text-[11px] font-medium tabular-nums text-ink-3">
+    <span className={cn("font-mono text-[11px] font-medium tabular-nums text-ink-3", className)}>
       {formatCount(dollars, { currency: true })}
     </span>
   );
@@ -895,29 +903,31 @@ export default function Pipeline() {
               if (e.key === "ArrowRight") scrollBoardBy(280);
               if (e.key === "ArrowLeft") scrollBoardBy(-280);
             }}
-            className="board-scroll flex gap-3 overflow-x-auto pb-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1 rounded-lg"
+            className="board-scroll flex gap-3 overflow-x-auto pb-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1 rounded-lg lg:gap-2"
           >
           {dealStages.map((stage) => {
             const cards = byStage[stage];
             const sum = cards.reduce((s, d) => s + d.valueCents, 0);
             return (
             <DroppableStageColumn key={stage} stage={stage} isOver={overStage === stage}>
-              {/* Column header */}
-              <div className="flex items-center justify-between px-3 py-2.5">
-                <div className="flex items-center gap-2">
-                  <span className={cn("inline-flex h-2 w-2 rounded-full", stageDotColors[stage])} />
-                  <span className="text-[13px] font-semibold text-ink">
+              {/* Column header — single row when the column is wide (sub-lg
+                  260px), stacked label/sum from lg up where the narrow columns
+                  would otherwise wrap "Contract Sent" and misalign card tops. */}
+              <div className="flex items-center justify-between gap-2 px-3 py-2.5 lg:flex-col lg:items-stretch lg:gap-0.5 lg:px-2.5">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className={cn("inline-flex h-2 w-2 shrink-0 rounded-full", stageDotColors[stage])} />
+                  <span className="truncate whitespace-nowrap text-[13px] font-semibold text-ink">
                     {stageLabels[stage]}
                   </span>
-                  <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-medium text-ink-3">
+                  <span className="rounded-full bg-surface px-1.5 py-0.5 text-[11px] font-medium text-ink-3">
                     {cards.length}
                   </span>
                 </div>
-                <StageSum valueCents={sum} />
+                <StageSum valueCents={sum} className="lg:pl-3.5" />
               </div>
 
               {/* Cards */}
-              <div className="flex flex-1 flex-col gap-2 px-2 pb-2">
+              <div className="flex flex-1 flex-col gap-2 px-2 pb-2 lg:px-1.5">
                 {cards.map((deal) => (
                   <DraggableDealCard
                     key={deal.id}

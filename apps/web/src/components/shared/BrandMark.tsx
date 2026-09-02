@@ -80,8 +80,11 @@ export function BrandMark({
   size?: number;
   className?: string;
 }) {
-  const [logoFailed, setLogoFailed] = useState(false);
+  // Failure is remembered per-domain, so editing a brand's website retries the
+  // new domain instead of staying stuck on the monogram forever.
+  const [failedDomain, setFailedDomain] = useState<string | null>(null);
   const cleanDomain = normalizeBrandDomain(domain);
+  const logoFailed = cleanDomain !== null && failedDomain === cleanDomain;
 
   if (cleanDomain && !logoFailed) {
     const inset = Math.round(size * 0.66);
@@ -95,11 +98,12 @@ export function BrandMark({
         style={{ width: size, height: size }}
       >
         <img
+          key={cleanDomain}
           src={brandIconUrl(cleanDomain)}
           alt=""
           loading="lazy"
           referrerPolicy="no-referrer"
-          onError={() => setLogoFailed(true)}
+          onError={() => setFailedDomain(cleanDomain)}
           className="object-contain"
           style={{ width: inset, height: inset }}
         />
