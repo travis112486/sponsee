@@ -134,7 +134,12 @@ export const proofKindLabels: Record<ProofKind, string> = {
   file: "File",
 };
 
-// Activity entity kinds
+// Activity entity kinds. Single source for the TypeScript vocabulary — the
+// web icon map keys off this union and the API parity test
+// (activity-kinds.parity.test.ts) holds it against the DDL enum
+// `activityKindEnum` in @sponsee/db, mirroring SPO-120's subscription-status
+// split: this package owns the vocabulary, the db schema owns the DDL, and
+// only the parity test keeps the two from drifting.
 export const activityKinds = [
   "invoice",
   "contract",
@@ -144,6 +149,7 @@ export const activityKinds = [
   "stage_change",
   "chase_sent",
   "note",
+  "platform_sync",
 ] as const;
 export type ActivityKind = (typeof activityKinds)[number];
 

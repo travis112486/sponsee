@@ -17,7 +17,8 @@ import {
   RefreshCw,
   Send,
 } from "lucide-react";
-import { stageLabels, type DealStage, type Platform } from "@sponsee/shared";
+import { stageLabels, type ActivityKind, type DealStage, type Platform } from "@sponsee/shared";
+import type { LucideIcon } from "lucide-react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@sponsee/api/routers";
 
@@ -641,9 +642,12 @@ function PipelineSnapshot({
 /* ────────────────────────── Section: recent activity ───────────────────── */
 
 /**
- * One icon per `activity_kind`. Keyed as a total record off the DB enum, so
- * adding a tenth kind reds this file instead of silently falling back to the
- * single generic Mail icon the shipped feed used for all nine.
+ * One icon per `activity_kind`. Total against the shared `ActivityKind` union
+ * (which `activity-kinds.parity.test.ts` holds against the DB enum), so adding
+ * a tenth kind to the schema reds this file instead of silently falling back
+ * to the generic FileText icon the shipped feed used for all nine. The
+ * `?? FileText` below is a runtime-only safety net for a kind that reaches the
+ * client before this build has shipped — it is not the totality guard.
  */
 const activityIcon = {
   invoice: FileText,
@@ -655,9 +659,7 @@ const activityIcon = {
   chase_sent: Send,
   note: StickyNote,
   platform_sync: RefreshCw,
-} as const;
-
-type ActivityKind = keyof typeof activityIcon;
+} as const satisfies Record<ActivityKind, LucideIcon>;
 
 function ActivityCard({
   events,
@@ -666,7 +668,7 @@ function ActivityCard({
   onRetry,
   now,
 }: {
-  events: { id: string; kind: string; actor: string; payload: unknown; createdAt: Date | string }[];
+  events: { id: string; kind: ActivityKind; actor: string; payload: unknown; createdAt: Date | string }[];
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
@@ -717,7 +719,7 @@ function ActivityCard({
       ) : (
         <ul className="mt-2 divide-y divide-hairline">
           {events.map((e, i) => {
-            const Icon = activityIcon[e.kind as ActivityKind] ?? FileText;
+            const Icon = activityIcon[e.kind] ?? FileText;
             return (
               <motion.li
                 key={e.id}
