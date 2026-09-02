@@ -273,7 +273,27 @@ function OverdueAlert({
 
 /* ────────────────────────────── Section: KPI row ───────────────────────── */
 
-function KpiRow({ overview, now }: { overview: Overview; now: Date }) {
+/**
+ * `deals.cpvhSummary` is a second source with its own lifecycle, so the card
+ * carries all three of its states instead of collapsing them into the value:
+ * a loading summary rendered as `null` would show "Not enough data yet" to a
+ * creator who has data — the founder-ratified truthfulness rule in a
+ * different costume.
+ */
+type CpvhCardState =
+  | { kind: "loading" }
+  | { kind: "error"; retry: () => void }
+  | { kind: "ready"; value: number | null };
+
+function KpiRow({
+  overview,
+  now,
+  cpvh,
+}: {
+  overview: Overview;
+  now: Date;
+  cpvh: CpvhCardState;
+}) {
   const navigate = useNavigate();
   const { revenue, pipeline, deliverablesDue, outstanding, timeZone } = overview;
 
@@ -299,14 +319,6 @@ function KpiRow({ overview, now }: { overview: Overview; now: Date }) {
       .join(", ") || "nothing in flight";
 
   const nextDue = deliverablesDue[0];
-
-  // ── Pending API integration ────────────────────────────────────────────
-  //  · SPO-197 landed `deals.cpvhSummary` on the API, but wiring it into this
-  //    screen is a separate owned lane (SPO-235 follow-up). Until that merges
-  //    the card renders its founder-ratified `null` state — which is also what
-  //    a creator with no CCV/duration on any deal sees, so this is the real
-  //    empty state and not a placeholder.
-  const effectiveCpvh: number | null = null;
 
   return (
     // Five cards: 5/3/2/1 columns (SPO-237). At the 2-col range CPVH spans the
@@ -358,17 +370,51 @@ function KpiRow({ overview, now }: { overview: Overview; now: Date }) {
         }
         onClick={() => navigate("/calendar")}
       />
-      <StatCard
-        index={4}
-        className="sm:col-span-2 lg:col-span-1"
-        eyebrow="Effective CPVH"
-        value={effectiveCpvh}
-        currency
-        decimals={2}
-        emptyLabel="Not enough data yet"
-        context="Add concurrent viewers and sponsored minutes to a deal"
-        onClick={() => navigate("/calculator")}
-      />
+      {/* Whatever state the summary is in, the fifth tile keeps SPO-237's
+          span — sm:col-span-2 lg:col-span-1 — so a loading or failed card
+          cannot re-shape the row. */}
+      {cpvh.kind === "loading" ? (
+        <div
+          className="rounded-xl border border-hairline bg-surface p-5 shadow-warm sm:col-span-2 lg:col-span-1"
+          aria-busy="true"
+          aria-label="Loading effective CPVH"
+        >
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="mt-3 h-7 w-28" />
+          <Skeleton className="mt-3 h-3 w-32" />
+        </div>
+      ) : cpvh.kind === "error" ? (
+        <div className="flex flex-col rounded-xl border border-hairline bg-surface p-5 shadow-warm sm:col-span-2 lg:col-span-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-3">
+            Effective CPVH
+          </span>
+          <p className="mt-2 text-[13px] text-ink-2">Couldn't load this figure.</p>
+          <button
+            type="button"
+            onClick={cpvh.retry}
+            aria-label="Retry effective CPVH"
+            className="mt-auto flex items-center gap-1 pt-2 text-[12.5px] font-medium text-pine transition-colors hover:text-pine-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40"
+          >
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Retry
+          </button>
+        </div>
+      ) : (
+        <StatCard
+          index={4}
+          className="sm:col-span-2 lg:col-span-1"
+          eyebrow="Effective CPVH"
+          value={cpvh.value}
+          currency
+          decimals={2}
+          emptyLabel="Not enough data yet"
+          context={
+            cpvh.value === null
+              ? "Add concurrent viewers and sponsored minutes to a deal"
+              : "Per viewer-hour, across deals with CCV and duration"
+          }
+          onClick={() => navigate("/calculator")}
+        />
+      )}
     </div>
   );
 }
@@ -737,6 +783,9 @@ export default function Dashboard() {
 
   const overviewQuery = trpc.dashboard.overview.useQuery({ period });
   const activityQuery = trpc.activity.list.useQuery({ limit: 8 });
+  // Account-level effective CPVH (SPO-197). A second source with its own
+  // failure modes, so it degrades card-by-card instead of gating the page.
+  const cpvhQuery = trpc.deals.cpvhSummary.useQuery();
 
   // One clock for the whole render pass, so the due chips, the relative
   // timestamps and the overdue copy cannot disagree by a tick.
@@ -791,7 +840,17 @@ export default function Dashboard() {
         />
       )}
 
-      <KpiRow overview={overview} now={now} />
+      <KpiRow
+        overview={overview}
+        now={now}
+        cpvh={
+          cpvhQuery.isError
+            ? { kind: "error", retry: () => cpvhQuery.refetch() }
+            : cpvhQuery.data === undefined
+              ? { kind: "loading" }
+              : { kind: "ready", value: cpvhQuery.data.effectiveCpvh }
+        }
+      />
 
       <RevenueChart months={revenue.monthly} />
 

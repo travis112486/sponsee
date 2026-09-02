@@ -30,6 +30,7 @@ vi.mock("@/trpc", () => ({
     }),
     dashboard: { overview: { useQuery: vi.fn() } },
     activity: { list: { useQuery: vi.fn() } },
+    deals: { cpvhSummary: { useQuery: vi.fn() } },
     deliverable: { update: { useMutation: vi.fn() } },
   },
 }));
@@ -38,6 +39,7 @@ import { trpc } from "@/trpc";
 
 const overviewQuery = trpc.dashboard.overview.useQuery as ReturnType<typeof vi.fn>;
 const activityQuery = trpc.activity.list.useQuery as ReturnType<typeof vi.fn>;
+const cpvhQuery = trpc.deals.cpvhSummary.useQuery as ReturnType<typeof vi.fn>;
 const deliverableUpdate = trpc.deliverable.update.useMutation as ReturnType<typeof vi.fn>;
 
 /**
@@ -184,6 +186,15 @@ beforeEach(() => {
   mockOverview(overview());
   activityQuery.mockReturnValue({
     data: [],
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  });
+  // The account has no CCV/duration data by default — the same shape the API
+  // returns for a brand-new creator, so the null-rule tests exercise the real
+  // wire format rather than a missing mock.
+  cpvhQuery.mockReturnValue({
+    data: { effectiveCpvh: null },
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -347,6 +358,57 @@ describe("Effective CPVH card (founder-ratified null rule)", () => {
     renderDashboard();
     const card = screen.getByText("Effective CPVH").closest("button")!;
     expect(within(card).queryByText(/midpoint/)).not.toBeInTheDocument();
+  });
+
+  it("renders the live account figure from deals.cpvhSummary (SPO-197)", () => {
+    // The API returns dollars per viewer-hour, already divided — the card must
+    // not divide by 100 again or recompute from deal rows.
+    cpvhQuery.mockReturnValue({
+      data: { effectiveCpvh: 3.21 },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+
+    const card = screen.getByText("Effective CPVH").closest("button")!;
+    expect(within(card).getByText("$3.21")).toBeInTheDocument();
+    expect(within(card).queryByText("Not enough data yet")).not.toBeInTheDocument();
+  });
+
+  it("shows a skeleton while the summary loads — not the empty affordance", () => {
+    // "Not enough data yet" during a fetch is the null-rule lie in a different
+    // costume: it tells a creator who has data that they don't.
+    cpvhQuery.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+
+    const card = screen.getByLabelText("Loading effective CPVH");
+    expect(card).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByText("Not enough data yet")).not.toBeInTheDocument();
+    expect(within(card).queryByText(/^\$/)).not.toBeInTheDocument();
+  });
+
+  it("offers a working retry when the summary fails, without failing the page", () => {
+    const refetch = vi.fn();
+    cpvhQuery.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      refetch,
+    });
+    renderDashboard();
+
+    // The rest of the dashboard still renders off `overview`.
+    expect(screen.getByText(/^Revenue \(/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /retry effective cpvh/i }));
+    expect(refetch).toHaveBeenCalled();
+    expect(screen.queryByText("Not enough data yet")).not.toBeInTheDocument();
   });
 });
 

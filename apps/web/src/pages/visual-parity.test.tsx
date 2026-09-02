@@ -41,6 +41,7 @@ vi.mock("@/trpc", () => ({
     },
     deals: {
       list: { useQuery: vi.fn() },
+      cpvhSummary: { useQuery: vi.fn() },
       updateStage: { useMutation: vi.fn() },
       create: { useMutation: vi.fn() },
     },
@@ -144,6 +145,12 @@ beforeEach(() => {
   mockQuery(trpc.settings.getProfile.useQuery, idleQuery());
   mockQuery(trpc.settings.getPlatforms.useQuery, idleQuery());
   mockQuery(trpc.dashboard.overview.useQuery, idleQuery());
+  mockQuery(trpc.deals.cpvhSummary.useQuery, {
+    data: { effectiveCpvh: null },
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  });
   (trpc.deliverable.update.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
     idleMutation()
   );
