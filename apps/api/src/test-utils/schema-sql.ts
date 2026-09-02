@@ -192,6 +192,8 @@ CREATE TABLE deals (
   value_cents INTEGER NOT NULL DEFAULT 0,
   currency CHAR(3) NOT NULL DEFAULT 'USD',
   value_note TEXT,
+  ccv INTEGER,
+  sponsored_minutes INTEGER,
   stage VARCHAR(32) NOT NULL DEFAULT 'inbound',
   platforms VARCHAR(32)[],
   payment_terms VARCHAR(32) NOT NULL DEFAULT 'net_30',

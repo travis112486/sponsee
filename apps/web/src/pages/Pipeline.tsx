@@ -552,6 +552,8 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
   const [title, setTitle] = useState("");
   const [type, setType] = useState<"flat" | "bounty" | "hybrid">("flat");
   const [valueDollars, setValueDollars] = useState("");
+  const [ccv, setCcv] = useState("");
+  const [durationHours, setDurationHours] = useState("");
   const [stage, setStage] = useState<DealStage>("inbound");
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
   const [paymentTerm, setPaymentTerm] = useState<"net_15" | "net_30" | "net_45">("net_30");
@@ -644,12 +646,18 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
     }
 
     const valueCents = Math.round(parseFloat(valueDollars || "0") * 100);
+    const ccvNum = ccv.trim() ? parseInt(ccv, 10) : undefined;
+    const sponsoredMinutes = durationHours.trim()
+      ? Math.round(parseFloat(durationHours) * 60)
+      : undefined;
 
     createDeal.mutate({
       brandId,
       title: title.trim(),
       type,
       valueCents,
+      ccv: ccvNum,
+      sponsoredMinutes,
       stage,
       platforms: selectedPlatforms.length > 0 ? selectedPlatforms as typeof platforms[number][] : undefined,
       paymentTerms: paymentTerm,
@@ -768,6 +776,38 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
                 value={valueDollars}
                 onChange={(e) => setValueDollars(e.target.value)}
                 placeholder="0.00"
+                className="mt-1.5 w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
+              />
+            </div>
+          </div>
+
+          {/* CCV + sponsored duration (SPO-197) — optional, drives Effective CPVH */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                Avg. CCV (optional)
+              </label>
+              <input
+                type="number"
+                min={1}
+                step="1"
+                value={ccv}
+                onChange={(e) => setCcv(e.target.value)}
+                placeholder="e.g. 500"
+                className="mt-1.5 w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                Sponsored hours (optional)
+              </label>
+              <input
+                type="number"
+                min={0.25}
+                step="0.25"
+                value={durationHours}
+                onChange={(e) => setDurationHours(e.target.value)}
+                placeholder="e.g. 2"
                 className="mt-1.5 w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
               />
             </div>
