@@ -38,7 +38,17 @@ vi.mock("./client.js", () => ({
 }));
 
 async function cleanTables() {
-  await db.execute(sql`TRUNCATE TABLE deals, brands, creators CASCADE`);
+  await db.execute(sql`TRUNCATE TABLE deals, brands, creators, creator_files CASCADE`);
+}
+
+async function seedCreator() {
+  const [creator] = await db.insert(schema.creators).values({ displayName: "Creator A" }).returning();
+  return creator;
+}
+
+function deletedKeysFrom(mock: typeof sendMock): string[] | undefined {
+  const deleteCall = mock.mock.calls.map(([command]) => command).find((c) => c instanceof DeleteObjectsCommand);
+  return (deleteCall as DeleteObjectsCommand | undefined)?.input.Delete?.Objects?.map((o) => o.Key!);
 }
 
 beforeAll(async () => {
@@ -52,45 +62,72 @@ beforeEach(async () => {
 });
 
 describe("runStorageOrphanSweep", () => {
-  it("skips a malformed key instead of failing the whole pass, and still deletes the valid orphan", async () => {
-    const [creator] = await db.insert(schema.creators).values({ displayName: "Creator A" }).returning();
-    const [brand] = await db.insert(schema.brands).values({ creatorId: creator.id, name: "Brand A" }).returning();
-    const [liveDeal] = await db
-      .insert(schema.deals)
-      .values({ creatorId: creator.id, brandId: brand.id, title: "Live Deal" })
-      .returning();
+  it("deletes a key with no creator_files row, keeps one with a live row", async () => {
+    const creator = await seedCreator();
+    const referencedKey = `creators/${creator.id}/deals/deadbeef/proofs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png`;
+    const unreferencedKey = `creators/${creator.id}/deals/deadbeef/proofs/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.png`;
 
-    const orphanDealId = "99999999-9999-9999-9999-999999999999"; // never inserted → orphan
-    const orphanKey = `creators/${creator.id}/deals/${orphanDealId}/proofs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.pdf`;
-    const liveKey = `creators/${creator.id}/deals/${liveDeal.id}/proofs/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.pdf`;
-    const malformedKey = `creators/${creator.id}/deals/not-a-uuid/proofs/manual-upload.pdf`;
+    await db.insert(schema.creatorFiles).values({
+      creatorId: creator.id,
+      storageKey: referencedKey,
+      mimeType: "image/png",
+      sizeBytes: 100,
+      scope: "evidence",
+    });
 
     listedObjects = [
-      { Key: orphanKey, LastModified: OLD_DATE },
-      { Key: liveKey, LastModified: OLD_DATE },
-      { Key: malformedKey, LastModified: OLD_DATE },
+      { Key: referencedKey, LastModified: OLD_DATE },
+      { Key: unreferencedKey, LastModified: OLD_DATE },
     ];
 
     const result = await runStorageOrphanSweep(FAKE_ENV);
 
     expect(result.skippedUnconfigured).toBe(false);
-    expect(result.scanned).toBe(3);
-    expect(result.skippedUnrecognized).toBe(1);
+    expect(result.scanned).toBe(2);
     expect(result.deleted).toBe(1);
-
-    const deleteCall = sendMock.mock.calls.map(([command]) => command).find((c) => c instanceof DeleteObjectsCommand);
-    expect(deleteCall).toBeDefined();
-    const deletedKeys = (deleteCall as DeleteObjectsCommand).input.Delete?.Objects?.map((o) => o.Key);
-    expect(deletedKeys).toEqual([orphanKey]);
+    expect(deletedKeysFrom(sendMock)).toEqual([unreferencedKey]);
   });
 
-  it("does not query the database at all when every key is unrecognizable", async () => {
-    listedObjects = [{ Key: "creators/x/deals/not-a-uuid/proofs/manual-upload.pdf", LastModified: OLD_DATE }];
+  it("treats a tombstoned creator_files row (deletedAt set) as unreferenced", async () => {
+    const creator = await seedCreator();
+    const tombstonedKey = `creators/${creator.id}/deals/deadbeef/contracts/cccccccc-cccc-cccc-cccc-cccccccccccc.pdf`;
+
+    await db.insert(schema.creatorFiles).values({
+      creatorId: creator.id,
+      storageKey: tombstonedKey,
+      mimeType: "application/pdf",
+      sizeBytes: 100,
+      scope: "contract",
+      deletedAt: new Date(),
+    });
+
+    listedObjects = [{ Key: tombstonedKey, LastModified: OLD_DATE }];
+
+    const result = await runStorageOrphanSweep(FAKE_ENV);
+
+    expect(result.deleted).toBe(1);
+    expect(deletedKeysFrom(sendMock)).toEqual([tombstonedKey]);
+  });
+
+  it("does not delete an unreferenced key inside the grace period", async () => {
+    const creator = await seedCreator();
+    const freshKey = `creators/${creator.id}/deals/deadbeef/proofs/dddddddd-dddd-dddd-dddd-dddddddddddd.png`;
+
+    listedObjects = [{ Key: freshKey, LastModified: new Date() }];
 
     const result = await runStorageOrphanSweep(FAKE_ENV);
 
     expect(result.scanned).toBe(1);
-    expect(result.skippedUnrecognized).toBe(1);
+    expect(result.deleted).toBe(0);
+    expect(sendMock.mock.calls.some(([command]) => command instanceof DeleteObjectsCommand)).toBe(false);
+  });
+
+  it("does not delete anything when nothing was listed", async () => {
+    listedObjects = [];
+
+    const result = await runStorageOrphanSweep(FAKE_ENV);
+
+    expect(result.scanned).toBe(0);
     expect(result.deleted).toBe(0);
     expect(sendMock.mock.calls.some(([command]) => command instanceof DeleteObjectsCommand)).toBe(false);
   });

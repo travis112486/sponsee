@@ -22,7 +22,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { CreateBucketCommand, HeadObjectCommand, NotFound, PutObjectCommand } from "@aws-sdk/client-s3";
 import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
 import { buildS3Client } from "./client.js";
@@ -331,33 +331,144 @@ describe("delete", () => {
   });
 });
 
+describe("SPO-348: deal deletion must not destroy registered files", () => {
+  beforeAll(async () => {
+    await initPgliteSchema(SCHEMA_SQL);
+  });
+
+  beforeEach(async () => {
+    await db.execute(sql`TRUNCATE TABLE deals, brands, creators, creator_files CASCADE`);
+  });
+
+  it("survives a real deal-row deletion: objects stay in the bucket, creator_files rows stay with originDealId null and the title preserved", async () => {
+    const [creator] = await db.insert(schema.creators).values({ displayName: "E2E Creator" }).returning();
+    const [brand] = await db.insert(schema.brands).values({ creatorId: creator.id, name: "E2E Brand" }).returning();
+    const [deal] = await db
+      .insert(schema.deals)
+      .values({ creatorId: creator.id, brandId: brand.id, title: "Acme Q3 sponsorship" })
+      .returning();
+
+    const evidenceKey = `creators/${creator.id}/deals/${deal.id}/proofs/${randomUUID()}.png`;
+    const contractKey = `creators/${creator.id}/deals/${deal.id}/contracts/${randomUUID()}.pdf`;
+    await client.send(
+      new PutObjectCommand({ Bucket: CONFIG.bucket, Key: evidenceKey, Body: PNG_BYTES, ContentType: "image/png" })
+    );
+    await client.send(
+      new PutObjectCommand({
+        Bucket: CONFIG.bucket,
+        Key: contractKey,
+        Body: PDF_BYTES,
+        ContentType: "application/pdf",
+      })
+    );
+
+    // Mirrors what proof.create/contract.upsert do in the same transaction as
+    // their row insert (see routers/proof.ts, routers/contract.ts): the
+    // proof/contract row and the creator_files row that registers the
+    // object's lifecycle both exist before the deal is ever touched.
+    await db.insert(schema.proofs).values({
+      dealId: deal.id,
+      kind: "file",
+      storageKey: evidenceKey,
+      mimeType: "image/png",
+      sizeBytes: PNG_BYTES.length,
+    });
+    await db.insert(schema.contracts).values({
+      dealId: deal.id,
+      storageKey: contractKey,
+      mimeType: "application/pdf",
+      sizeBytes: PDF_BYTES.length,
+    });
+    await db.insert(schema.creatorFiles).values([
+      {
+        creatorId: creator.id,
+        storageKey: evidenceKey,
+        mimeType: "image/png",
+        sizeBytes: PNG_BYTES.length,
+        originDealId: deal.id,
+        originDealTitle: deal.title,
+        scope: "evidence",
+      },
+      {
+        creatorId: creator.id,
+        storageKey: contractKey,
+        mimeType: "application/pdf",
+        sizeBytes: PDF_BYTES.length,
+        originDealId: deal.id,
+        originDealTitle: deal.title,
+        scope: "contract",
+      },
+    ]);
+
+    // The real deletion path: a hard delete of the deals row, which cascades
+    // proofs/contracts (unchanged, expected) but only sets creator_files'
+    // origin_deal_id null (schema/index.ts) — this is the assumption
+    // SPO-348 corrects. Against pre-fix `main`, creator_files doesn't exist
+    // and proofs/contracts.deal_id cascading would take the object's only DB
+    // reference down with it, so the sweep below would have wrongly reclaimed
+    // both objects.
+    await db.delete(schema.deals).where(eq(schema.deals.id, deal.id));
+
+    expect(await headExists(evidenceKey)).toBe(true);
+    expect(await headExists(contractKey)).toBe(true);
+
+    const survivors = await db
+      .select()
+      .from(schema.creatorFiles)
+      .where(eq(schema.creatorFiles.creatorId, creator.id));
+    expect(survivors).toHaveLength(2);
+    for (const row of survivors) {
+      expect(row.originDealId).toBeNull();
+      expect(row.originDealTitle).toBe("Acme Q3 sponsorship");
+      expect(row.deletedAt).toBeNull();
+    }
+
+    // The regression this issue exists to catch: with the grace period
+    // forced to zero, a sweep run immediately after the deal delete must not
+    // touch either object — both are still referenced by a live
+    // creator_files row. (Not asserting `result.deleted === 0`: this suite
+    // shares one bucket across every test in the file — see the module
+    // comment — so earlier tests' own never-cleaned-up objects are
+    // legitimately swept here too; that's unrelated noise, not a regression.)
+    const result = await runStorageOrphanSweep(ENV, { graceMs: 0 });
+    expect(result.skippedUnconfigured).toBe(false);
+
+    expect(await headExists(evidenceKey)).toBe(true);
+    expect(await headExists(contractKey)).toBe(true);
+  });
+});
+
 describe("orphan sweep against real objects", () => {
   beforeAll(async () => {
     await initPgliteSchema(SCHEMA_SQL);
   });
 
   beforeEach(async () => {
-    await db.execute(sql`TRUNCATE TABLE deals, brands, creators CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE deals, brands, creators, creator_files CASCADE`);
   });
 
-  it("deletes the real orphan, keeps the live deal's object, and skips the non-uuid deal-id case (SPO-161)", async () => {
+  it("reclaims a presigned upload that was never committed, but leaves a registered file alone", async () => {
     const [creator] = await db.insert(schema.creators).values({ displayName: "E2E Creator" }).returning();
-    const [brand] = await db.insert(schema.brands).values({ creatorId: creator.id, name: "E2E Brand" }).returning();
-    const [liveDeal] = await db
-      .insert(schema.deals)
-      .values({ creatorId: creator.id, brandId: brand.id, title: "E2E Live Deal" })
-      .returning();
 
-    const orphanDealId = randomUUID(); // valid uuid, never inserted → orphan
-    const liveKey = `creators/${creator.id}/deals/${liveDeal.id}/proofs/${randomUUID()}.png`;
-    const orphanKey = `creators/${creator.id}/deals/${orphanDealId}/proofs/${randomUUID()}.png`;
-    const malformedKey = `creators/${creator.id}/deals/not-a-uuid/proofs/manual-upload.png`;
+    const registeredKey = `creators/${creator.id}/deals/${randomUUID()}/proofs/${randomUUID()}.png`;
+    const abandonedKey = `creators/${creator.id}/deals/${randomUUID()}/proofs/${randomUUID()}.png`;
 
-    for (const key of [liveKey, orphanKey, malformedKey]) {
+    for (const key of [registeredKey, abandonedKey]) {
       await client.send(
         new PutObjectCommand({ Bucket: CONFIG.bucket, Key: key, Body: PNG_BYTES, ContentType: "image/png" })
       );
     }
+
+    // registeredKey has a creator_files row — as if proof.create's commit
+    // mutation had run. abandonedKey does not — as if the client presigned
+    // an upload, PUT the object, and never called the commit mutation.
+    await db.insert(schema.creatorFiles).values({
+      creatorId: creator.id,
+      storageKey: registeredKey,
+      mimeType: "image/png",
+      sizeBytes: PNG_BYTES.length,
+      scope: "evidence",
+    });
 
     // graceMs: 0 — objects just created are already "past" a zero-length
     // grace period, so the sweep acts on them immediately instead of the
@@ -365,8 +476,7 @@ describe("orphan sweep against real objects", () => {
     const result = await runStorageOrphanSweep(ENV, { graceMs: 0 });
     expect(result.skippedUnconfigured).toBe(false);
 
-    expect(await headExists(liveKey)).toBe(true);
-    expect(await headExists(orphanKey)).toBe(false);
-    expect(await headExists(malformedKey)).toBe(true);
+    expect(await headExists(registeredKey)).toBe(true);
+    expect(await headExists(abandonedKey)).toBe(false);
   });
 });
