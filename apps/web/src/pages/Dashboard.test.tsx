@@ -696,6 +696,45 @@ describe("recent activity", () => {
     expect(new Set(icons).size).toBe(kinds.length);
   });
 
+  it("names contract, stage-change and platform-sync events instead of chase copy (SPO-334)", () => {
+    // `kind` is an optional third param on describeActivity, so dropping it at
+    // this call site is not a type error — it just regresses these three rows
+    // to "Chase updated" with CI green. Assert the rendered copy, not the arg.
+    activityQuery.mockReturnValue({
+      data: [
+        {
+          id: "c1",
+          kind: "contract",
+          actor: "creator",
+          payload: { action: "attached" },
+          createdAt: new Date(NOW.getTime() - 1 * 60 * 60 * 1000),
+        },
+        {
+          id: "s1",
+          kind: "stage_change",
+          actor: "system",
+          payload: { from: "negotiating", to: "contract_sent", trigger: "contract_status" },
+          createdAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000),
+        },
+        {
+          id: "p1",
+          kind: "platform_sync",
+          actor: "system",
+          payload: { platform: "twitch", handle: "pixelpanda" },
+          createdAt: new Date(NOW.getTime() - 3 * 60 * 60 * 1000),
+        },
+      ],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+
+    expect(screen.getByText("Contract attached")).toBeInTheDocument();
+    expect(screen.getByText("Deal moved to Contract Sent")).toBeInTheDocument();
+    expect(screen.getByText("Twitch stats synced")).toBeInTheDocument();
+  });
+
   it("uses relative time, with the exact timestamp still reachable", () => {
     activityQuery.mockReturnValue({
       data: [events[0]],
