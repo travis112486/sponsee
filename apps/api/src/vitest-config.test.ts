@@ -40,5 +40,15 @@ describe("vitest config", () => {
         expect(test, `${name} still sets removed option \`${removed}\``).not.toHaveProperty(removed);
       }
     });
+
+    it(`${name} gives PGlite schema init enough hook budget (SPO-242)`, () => {
+      const test = (config as { test?: Record<string, unknown> }).test ?? {};
+      // vitest's 10s default carries only ~2x margin over the ~4-5.4s
+      // unloaded cost of initPgliteSchema, and SPO-242 was a real CI run
+      // where that margin vanished under load and silently skipped 9 tests
+      // instead of failing legibly. 60s matches the budget SPO-86 already
+      // measured for this same PGlite-boot operation.
+      expect(test?.hookTimeout, `${name} has no hookTimeout set`).toBeGreaterThanOrEqual(60_000);
+    });
   }
 });
