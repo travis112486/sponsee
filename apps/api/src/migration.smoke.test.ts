@@ -340,13 +340,13 @@ describe("deployable migration smoke test", () => {
     ).rejects.toThrow(/invalid input value for enum platform_sync_status/);
   });
 
-  // 0014 (SPO-197). The API's own PGlite fixtures declare `deals` loosely and
+  // 0015 (SPO-197). The API's own PGlite fixtures declare `deals` loosely and
   // would not catch a missing column here — same blind spot as 'paused' and
   // 'platform_sync' above. Both columns must stay nullable: every row that
   // predates this migration, and any deal created without a known CCV, has
   // to come back NULL rather than be coerced to 0 (0 is a real CPVH input,
   // not a stand-in for "unset").
-  it("adds nullable ccv and sponsored_minutes to deals (0014)", async () => {
+  it("adds nullable ccv and sponsored_minutes to deals (0015)", async () => {
     const colRes = await client.query<{
       column_name: string;
       is_nullable: string;
