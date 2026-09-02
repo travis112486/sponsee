@@ -593,6 +593,21 @@ describe("page states", () => {
     expect(region.querySelectorAll(".animate-pulse").length).toBeGreaterThan(5);
   });
 
+  it("mirrors the loaded row's CPVH span in the KPI skeleton so settling doesn't reflow", () => {
+    mockOverview(undefined, { isLoading: true });
+    renderDashboard();
+
+    const region = screen.getByLabelText("Loading your dashboard");
+    const grid = region.querySelector('[class*="xl:grid-cols-5"]')!;
+    const tiles = Array.from(grid.children);
+    expect(tiles).toHaveLength(5);
+    tiles.forEach((tile, i) => {
+      // Only the last tile spans at 2-col, exactly like the loaded CPVH card.
+      expect(tile.className.includes("sm:col-span-2")).toBe(i === 4);
+      expect(tile.className.includes("lg:col-span-1")).toBe(i === 4);
+    });
+  });
+
   it("offers a retry when the overview query fails", () => {
     const refetch = vi.fn();
     overviewQuery.mockReturnValue({
