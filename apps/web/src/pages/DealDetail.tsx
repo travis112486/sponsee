@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { BenchmarkBand } from "@/components/BenchmarkBand";
 import { ContractCard } from "@/components/ContractCard";
+import { ContactPicker } from "@/components/ContactPicker";
 import {
   ArrowLeft,
   Check,
@@ -91,6 +92,7 @@ export default function DealDetail() {
       utils.deals.list.invalidate();
       toast("Deal updated");
     },
+    onError: (err) => toast.error(err.message || "Failed to update deal"),
   });
 
   const createInvoice = trpc.invoice.create.useMutation({
@@ -149,6 +151,7 @@ export default function DealDetail() {
 
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>("");
+  const [showContactPicker, setShowContactPicker] = useState(false);
   const [showAddDeliverable, setShowAddDeliverable] = useState(false);
   const [deliverableTitle, setDeliverableTitle] = useState("");
   const [deliverablePlatform, setDeliverablePlatform] = useState<string>("");
@@ -807,7 +810,17 @@ export default function DealDetail() {
         <div className="space-y-4">
           {/* Contact */}
           <div className="rounded-xl border border-hairline bg-surface p-4">
-            <h3 className="text-[13px] font-semibold text-ink">Contact</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-[13px] font-semibold text-ink">Contact</h3>
+              {deal.primaryContact && (
+                <button
+                  onClick={() => setShowContactPicker((s) => !s)}
+                  className="flex items-center gap-1 text-[11px] font-medium text-pine hover:text-pine-hover"
+                >
+                  {showContactPicker ? "Close" : "Change"}
+                </button>
+              )}
+            </div>
             {deal.primaryContact ? (
               <div className="mt-3 space-y-2">
                 <div className="flex items-center gap-2">
@@ -829,6 +842,22 @@ export default function DealDetail() {
               <p className="mt-3 text-[13px] text-ink-3">
                 No primary contact set.
               </p>
+            )}
+
+            {(showContactPicker || !deal.primaryContact) && (
+              <div className={deal.primaryContact ? "mt-3" : "mt-1"}>
+                <ContactPicker
+                  brandId={deal.brand?.id ?? null}
+                  selectedId={deal.primaryContactId ?? null}
+                  onSelect={(contactId) => {
+                    updateDeal.mutate({
+                      id: deal.id,
+                      primaryContactId: contactId,
+                    });
+                    setShowContactPicker(false);
+                  }}
+                />
+              </div>
             )}
           </div>
 
