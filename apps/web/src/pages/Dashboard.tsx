@@ -275,7 +275,7 @@ function OverdueAlert({
 
 function KpiRow({ overview, now }: { overview: Overview; now: Date }) {
   const navigate = useNavigate();
-  const { revenue, pipeline, deliverablesDue, overdue, timeZone } = overview;
+  const { revenue, pipeline, deliverablesDue, outstanding, timeZone } = overview;
 
   const isMonth = revenue.period === "month";
   // The creator's zone, not UTC and not the browser's: `periodStart` is the
@@ -300,23 +300,19 @@ function KpiRow({ overview, now }: { overview: Overview; now: Date }) {
 
   const nextDue = deliverablesDue[0];
 
-  // ── Pending API integrations ───────────────────────────────────────────
-  // Two cards need fields that are not on `main` yet. Both are filed and owned,
-  // and neither is a reason to print a number we cannot source.
-  //
-  //  · SPO-234 (Developer B) adds `overview.outstanding` — every OPEN invoice,
-  //    late or not. Until then this card shows *Overdue*, which the contract
-  //    does return, rather than re-deriving "outstanding" from `invoice.list`
-  //    in the browser: that would put two different definitions of "money owed"
-  //    on one screen, which the accepted plan explicitly rejected.
-  //  · SPO-197 (Developer A) adds `deals.cpvhSummary`. Until then there is no
-  //    source, so the card renders its founder-ratified `null` state. That is
-  //    also what a creator with no CCV/duration on any deal will see, so this
-  //    is the real empty state and not a placeholder.
+  // ── Pending API integration ────────────────────────────────────────────
+  //  · SPO-197 landed `deals.cpvhSummary` on the API, but wiring it into this
+  //    screen is a separate owned lane (SPO-235 follow-up). Until that merges
+  //    the card renders its founder-ratified `null` state — which is also what
+  //    a creator with no CCV/duration on any deal sees, so this is the real
+  //    empty state and not a placeholder.
   const effectiveCpvh: number | null = null;
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+    // Five cards: 5/3/2/1 columns (SPO-237). At the 2-col range CPVH spans the
+    // full last row so the fifth card is a deliberate wide card, not a stranded
+    // half-width orphan; 3-col ends 3 + 2, which is a short row, not an orphan.
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
       <StatCard
         index={0}
         eyebrow={`Revenue (${isMonth ? periodName : "this quarter"})`}
@@ -330,15 +326,28 @@ function KpiRow({ overview, now }: { overview: Overview; now: Date }) {
         }
         sparkline={spark.length >= 2 ? spark : undefined}
       />
+      {/* Every OPEN invoice regardless of due date — a strict superset of the
+          overdue alert below, so it is not `overdue.totalCents`. `0` is a real
+          balance and renders as money; only `null` (which the contract cannot
+          send here) would mean "unknown". No delta: the contract exposes no
+          prior-period window for this figure (SPO-237). */}
       <StatCard
         index={1}
+        eyebrow="Outstanding"
+        value={outstanding.totalCents / 100}
+        currency
+        context="All open invoices"
+        onClick={() => navigate("/payments")}
+      />
+      <StatCard
+        index={2}
         eyebrow="Active deals"
         value={activeDeals}
         context={activeContext}
         onClick={() => navigate("/pipeline")}
       />
       <StatCard
-        index={2}
+        index={3}
         eyebrow="Due this week"
         value={deliverablesDue.length}
         delta={{ text: "deliverables", tone: "neutral" }}
@@ -350,20 +359,8 @@ function KpiRow({ overview, now }: { overview: Overview; now: Date }) {
         onClick={() => navigate("/calendar")}
       />
       <StatCard
-        index={3}
-        eyebrow="Overdue"
-        value={overdue.totalCents / 100}
-        currency
-        delta={
-          overdue.count > 0
-            ? { text: `${overdue.count} late`, tone: "danger" }
-            : undefined
-        }
-        context={overdue.count > 0 ? "money past its due date" : "nothing past due"}
-        onClick={() => navigate("/payments")}
-      />
-      <StatCard
         index={4}
+        className="sm:col-span-2 lg:col-span-1"
         eyebrow="Effective CPVH"
         value={effectiveCpvh}
         currency
@@ -707,9 +704,16 @@ function DashboardSkeleton() {
         </div>
         <Skeleton className="h-9 w-56" />
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {[0, 1, 2, 3, 4].map((i) => (
-          <div key={i} className="rounded-xl border border-hairline bg-surface p-5">
+          <div
+            key={i}
+            className={cn(
+              "rounded-xl border border-hairline bg-surface p-5",
+              // Mirrors the loaded row's CPVH span so settling doesn't reflow.
+              i === 4 && "sm:col-span-2 lg:col-span-1"
+            )}
+          >
             <Skeleton className="h-3 w-24" />
             <Skeleton className="mt-3 h-7 w-28" />
             <Skeleton className="mt-3 h-3 w-32" />

@@ -212,6 +212,12 @@ export const deals = pgTable(
     valueCents: integer("value_cents").notNull().default(0),
     currency: char("currency", { length: 3 }).notNull().default("USD"),
     valueNote: text("value_note"),
+    // Effective CPVH inputs (SPO-197). Nullable on purpose: every row that
+    // predates this column, and any deal a creator logs before they know
+    // their CCV, must stay NULL rather than be back-filled or defaulted to 0
+    // — impliedCpvh()'s 0 return for missing inputs is not a real rate.
+    ccv: integer("ccv"),
+    sponsoredMinutes: integer("sponsored_minutes"),
     stage: dealStageEnum("stage").notNull().default("inbound"),
     platforms: platformEnum("platforms").array(),
     paymentTerms: paymentTermsEnum("payment_terms").notNull().default("net_30"),

@@ -6,7 +6,7 @@ const API_URL = ""; // Same-origin Vercel Edge Function at /api/waitlist
 const PLATFORMS = [
   { key: "twitch", label: "Twitch", dot: "bg-twitch" },
   { key: "youtube", label: "YouTube Live", dot: "bg-youtube" },
-  { key: "tiktok", label: "TikTok Live", dot: "bg-[#FE2C55]" },
+  { key: "tiktok", label: "TikTok Live", dot: "bg-tiktok" },
   { key: "kick", label: "Kick", dot: "bg-kick" },
   { key: "other", label: "Other", dot: "bg-ink-3" },
 ];

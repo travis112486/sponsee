@@ -42,6 +42,19 @@ export default defineConfig({
     setupFiles: ["scripts/vitest-setup.ts"],
     fileParallelism: false,
     maxWorkers: 1,
+    // Every PGlite-backed suite pays a real WASM Postgres boot cost via
+    // initPgliteSchema (see apps/api/src/test-utils/pglite-setup.ts). Measured
+    // unloaded on this repo: ~4-5.4s consistently across 3 runs. Vitest's 10s
+    // default hookTimeout only carries ~2x margin over that, and SPO-242 was
+    // filed after one CI run's schema init blew past 10s under concurrent
+    // build/install load and silently turned proof.test.ts's 9 tests into
+    // skips instead of a legible failure. 60s matches the budget SPO-86
+    // already measured and shipped for this exact operation (a cold PGlite
+    // boot on a loaded runner) in migration.smoke.test.ts — reusing that
+    // number instead of picking a fresh multiple. Keep in step with
+    // apps/api/vitest.config.ts and pglite-setup.ts's own internal
+    // SCHEMA_INIT_TIMEOUT_MS (55s, deliberately below this).
+    hookTimeout: 60_000,
   },
   resolve: {
     alias: {

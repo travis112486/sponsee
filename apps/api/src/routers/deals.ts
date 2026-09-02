@@ -4,7 +4,14 @@ import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, type DB } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
-import { dealStages, dealTypes, platforms, paymentTerms } from "@sponsee/shared";
+import {
+  dealStages,
+  dealTypes,
+  platforms,
+  paymentTerms,
+  dealEffectiveCpvh,
+  accountEffectiveCpvh,
+} from "@sponsee/shared";
 import {
   assertDealSlotAvailable,
   assertSlotForReopen,
@@ -63,11 +70,29 @@ export const dealsRouter = createTRPCRouter({
 
     return rows.map((r) => ({
       ...r.deal,
+      effectiveCpvh: dealEffectiveCpvh(r.deal),
       brand: r.brand,
       primaryContact: r.contact,
       deliverables: deliverablesByDeal.get(r.deal.id) ?? [],
       invoices: invoicesByDeal.get(r.deal.id) ?? [],
     }));
+  }),
+
+  // Account-level effective CPVH (SPO-197), viewer-hour-weighted across every
+  // non-deleted deal that has both CCV and sponsored duration. Feeds the
+  // Dashboard's 5th KPI card (SPO-194); `null` means no deal has both inputs
+  // yet, which the consumer must render as "no data", not "$0.00".
+  cpvhSummary: creatorScopedProcedure.query(async ({ ctx }) => {
+    const rows = await db
+      .select({
+        valueCents: schema.deals.valueCents,
+        ccv: schema.deals.ccv,
+        sponsoredMinutes: schema.deals.sponsoredMinutes,
+      })
+      .from(schema.deals)
+      .where(and(eq(schema.deals.creatorId, ctx.creatorId), isNull(schema.deals.deletedAt)));
+
+    return { effectiveCpvh: accountEffectiveCpvh(rows) };
   }),
 
   getById: creatorScopedProcedure
@@ -106,7 +131,13 @@ export const dealsRouter = createTRPCRouter({
         .where(eq(schema.deliverables.dealId, deal.id))
         .orderBy(schema.deliverables.position);
 
-      return { ...deal, brand, primaryContact: contact, deliverables };
+      return {
+        ...deal,
+        effectiveCpvh: dealEffectiveCpvh(deal),
+        brand,
+        primaryContact: contact,
+        deliverables,
+      };
     }),
 
   create: creatorScopedProcedure
@@ -119,6 +150,8 @@ export const dealsRouter = createTRPCRouter({
         valueCents: z.number().int().min(0).default(0),
         currency: z.string().length(3).default("USD"),
         valueNote: z.string().optional().nullable(),
+        ccv: z.number().int().positive().optional().nullable(),
+        sponsoredMinutes: z.number().int().positive().optional().nullable(),
         stage: z.enum(dealStages).default("inbound"),
         platforms: z.array(z.enum(platforms)).optional().nullable(),
         paymentTerms: z.enum(paymentTerms).default("net_30"),
@@ -184,6 +217,8 @@ export const dealsRouter = createTRPCRouter({
         valueCents: z.number().int().min(0).optional(),
         currency: z.string().length(3).optional(),
         valueNote: z.string().optional().nullable(),
+        ccv: z.number().int().positive().optional().nullable(),
+        sponsoredMinutes: z.number().int().positive().optional().nullable(),
         stage: z.enum(dealStages).optional(),
         platforms: z.array(z.enum(platforms)).optional().nullable(),
         paymentTerms: z.enum(paymentTerms).optional(),

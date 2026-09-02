@@ -17,6 +17,9 @@ export default defineConfig({
     pool: "forks",
     fileParallelism: false,
     maxWorkers: 1,
+    // Keep in step with scripts/vitest-api.config.ts's hookTimeout — see that
+    // file's comment (SPO-242). Same PGlite boot cost applies here.
+    hookTimeout: 60_000,
     setupFiles: ["./src/test-utils/vitest-setup.ts"],
     // Keep this exclude in step with scripts/vitest-api.config.ts — see that
     // file's comment on storage.e2e.test.ts (needs a real MinIO, SPO-171).
