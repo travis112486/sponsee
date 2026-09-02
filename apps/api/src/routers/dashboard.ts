@@ -65,10 +65,17 @@ function periodBounds(
   return { start: startOfZonedYear(now, timeZone), end: new Date(now) };
 }
 
-// The immediately preceding window of the same period type, used for the
-// revenue delta chip: previous month, previous quarter, or the same YTD
-// window in the prior year. Every boundary is creator-local, matching
-// `periodBounds`, so the delta compares like-for-like windows.
+// The like-for-like comparison window for the revenue delta chip: the *same
+// elapsed offset* into the immediately preceding period of the same type.
+//
+// `totalCents` is always period-to-date — `periodBounds` opens at the period
+// start, but a paidAt can never be in the future, so month/quarter revenue is
+// implicitly truncated at `now`. To keep the delta honest, the prior window is
+// truncated the same way: prior month/quarter end at `now` shifted back one
+// month / three months (the YTD branch already did this), never at the prior
+// period's full-width end. Comparing 18 days of March against all 28 of
+// February would manufacture a fake negative on every creator at a steady pace.
+// All boundaries are creator-local, matching `periodBounds`.
 function previousPeriodBounds(
   period: "month" | "quarter" | "ytd",
   now: Date,
@@ -77,17 +84,15 @@ function previousPeriodBounds(
   if (period === "month") {
     return {
       start: startOfZonedMonthOffset(now, -1, timeZone),
-      end: startOfZonedMonthOffset(now, 0, timeZone),
+      end: addZonedMonths(now, -1, timeZone),
     };
   }
   if (period === "quarter") {
     return {
       start: startOfZonedQuarterOffset(now, -1, timeZone),
-      end: startOfZonedQuarterOffset(now, 0, timeZone),
+      end: addZonedMonths(now, -3, timeZone),
     };
   }
-  // YTD: Jan 1 local through the same local moment one year earlier, so the
-  // comparison is not skewed by a leap year or a DST offset.
   const end = addZonedMonths(now, -12, timeZone);
   return { start: startOfZonedYear(end, timeZone), end };
 }
@@ -152,9 +157,10 @@ export const dashboardRouter = createTRPCRouter({
         }
       }
 
-      // Prior-period revenue for the delta chip. `null` (not 0) when the
-      // preceding window has no paid invoice at all, so the UI can suppress
-      // the chip instead of rendering a fake +100%.
+      // Prior-period revenue for the delta chip, over the same elapsed offset
+      // of the preceding period. `null` (not 0) when that window has no paid
+      // invoice at all, so the UI can suppress the chip instead of rendering a
+      // fake +100%.
       const { start: prevStart, end: prevEnd } = previousPeriodBounds(period, now, timeZone);
       let previousTotalCents: number | null = null;
       for (const row of attributed) {
