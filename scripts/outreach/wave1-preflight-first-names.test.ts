@@ -95,6 +95,9 @@ async function runPreflight(
         "--touch", "T1",
         "--channel", "email",
         ...extraArgs,
+        // Pairs with WAVE1_PREFLIGHT_RESEND_API_BASE below; the CLI exits 2
+        // against a stub without it.
+        "--allow-test-endpoint",
       ],
       { env: { ...process.env, RESEND_API_KEY: "re_stub", WAVE1_PREFLIGHT_RESEND_API_BASE: base } },
     );
@@ -146,6 +149,43 @@ describe("wave1-preflight --require-first-names", () => {
     const result = await runPreflight(roster, ["--require-first-names"]);
     expect(result.code).toBe(1);
     expect(result.stdout).toContain('The roster has "Ada" — push it to the contact');
+  });
+
+  it("marks that same row in the drift section, which used to say it did not block", async () => {
+    // Roster named / contact unnamed lands in missingFirstName AND firstNameDrift,
+    // but not firstNameConflict. It blocks — and it printed unmarked in the drift
+    // section under a footer reading "only the CONFLICT rows block", which reads
+    // on send day as "ignore this row". Fails safe (the run still blocks); it
+    // misdirects the triage.
+    contacts = [{ id: "c1", email: "ada@example.com", unsubscribed: false, first_name: null }];
+    const roster = [{ id: "ada", name: "Ada Stream", firstName: "Ada", email: "ada@example.com" }];
+
+    const result = await runPreflight(roster, ["--require-first-names"]);
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain("First-name drift (1)");
+    // The row carries the reason it blocks, on the row itself.
+    expect(result.stdout).toMatch(/ada@example\.com.*NO CONTACT NAME/);
+    // And the footer no longer claims CONFLICT is the only blocking mark.
+    expect(result.stdout).toContain("the CONFLICT and NO CONTACT NAME rows block");
+    expect(result.stdout).not.toContain("only the CONFLICT rows block");
+  });
+
+  it("leaves the genuinely non-blocking drift row unmarked", async () => {
+    // Positive control for the mark above: contact named / roster unnamed drifts,
+    // greets correctly, and does not block — so it must stay unmarked, or the new
+    // label is just painted on every drift row and says nothing.
+    contacts = [{ id: "c1", email: "jeff@example.com", unsubscribed: false, first_name: "Jeff" }];
+    const roster = [{ id: "jeff", name: "Jeff Stream", firstName: null, email: "jeff@example.com" }];
+
+    const result = await runPreflight(roster, ["--require-first-names"]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("First-name drift (1)");
+    // Assert on the ROW, not the whole stream — the footer names both marks, so
+    // a stream-wide `not.toContain` would pass for the wrong reason.
+    const row = result.stdout.split("\n").find((l) => l.includes("jeff@example.com  roster="));
+    expect(row).toBeDefined();
+    expect(row).not.toContain("NO CONTACT NAME");
+    expect(row).not.toContain("CONFLICT");
   });
 
   it("exits 0 on a contact name the roster does not carry — the over-fire", async () => {

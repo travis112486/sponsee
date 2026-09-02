@@ -277,3 +277,31 @@ not reach the path at all.
 it points the gate at a fake audience, so any run that does prints a banner on
 stdout *and* stderr. If you see that line in preflight evidence, the evidence is
 worthless — re-run without it.
+
+The banner is not the guard, though, because a banner cannot change an exit
+code: a send-day run with the variable set used to reach exit 0 and print
+`Clear to send` all the same. So the variable is paired with
+`--allow-test-endpoint`, and the two must agree or the run is refused with exit
+2 before it reads a file or opens a socket:
+
+| `WAVE1_PREFLIGHT_RESEND_API_BASE` | `--allow-test-endpoint` | result |
+| --- | --- | --- |
+| unset | absent | live run, normal |
+| set | present | stub run — tests only |
+| set | absent | **exit 2** — a live-day run silently pointed at a stub |
+| unset | present | **exit 2** — the caller believes they are on a fixture and is not, and `--apply-suppressions` would unsubscribe real contacts |
+
+Every run also names the endpoint it actually used, in the header next to the
+roster and ledger lines and under `endpoint` in the `--json` record:
+
+```
+endpoint: https://api.resend.com
+```
+
+```json
+"endpoint": { "resendApiBase": "https://api.resend.com", "live": true, "allowTestEndpoint": false }
+```
+
+Check `live` before you read any count in an archived record. The banner lives
+on a terminal nobody keeps; that field is what makes a stubbed run and a real
+one distinguishable in the artifact QA reads back afterwards.

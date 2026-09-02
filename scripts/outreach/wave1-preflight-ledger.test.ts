@@ -110,7 +110,10 @@ afterAll(async () => {
 // case that reaches the network fails with "fetch failed", which reads as a
 // gate decision rather than a harness fault.
 async function run(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  const child = spawn(process.execPath, [CLI, ...args], {
+  // `--allow-test-endpoint` pairs with the API-base override below: the CLI
+  // refuses to run against a stub without it, so a live-day run cannot be
+  // pointed at one by an env var alone.
+  const child = spawn(process.execPath, [CLI, ...args, "--allow-test-endpoint"], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,

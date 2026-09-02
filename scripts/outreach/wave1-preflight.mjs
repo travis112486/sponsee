@@ -58,11 +58,22 @@ const RESEND_API_DEFAULT = "https://api.resend.com";
 // scripts/outreach/wave1-preflight-first-names.test.ts.
 //
 // Setting this on send day would gate the touch on a fake audience and
-// manufacture a false green, so it is deliberately unmissable: every run that
-// sets it prints the banner below on BOTH streams. If that line appears in
-// preflight evidence, the evidence is worthless — re-run without it.
+// manufacture a false green. A banner is not enough for that: it leaves the exit
+// code at 0, still prints "Clear to send", and leaves the --json audit record
+// indistinguishable from a live run — which is the same fail-open shape as
+// SPO-287. So the variable and `--allow-test-endpoint` are a matched pair, and
+// disagreeing in EITHER direction is a hard stop before any work:
+//
+//   env set, no flag  -> a live-day run silently pointed at a stub. Exit 2.
+//   flag, env not set -> the operator believes they are on a stub and is not.
+//                        With --apply-suppressions that unsubscribes real
+//                        contacts against a fixture's expectations. Exit 2.
+//
+// The banner stays on both streams, and `endpoint` in the --json record carries
+// the same fact into the archived artifact, which outlives the terminal.
 const RESEND_API = process.env.WAVE1_PREFLIGHT_RESEND_API_BASE ?? RESEND_API_DEFAULT;
-if (RESEND_API !== RESEND_API_DEFAULT) {
+const RESEND_API_IS_LIVE = RESEND_API === RESEND_API_DEFAULT;
+if (!RESEND_API_IS_LIVE) {
   const banner =
     `\n!! WAVE1_PREFLIGHT_RESEND_API_BASE is set to ${RESEND_API} — this run did NOT read live Resend\n` +
     `!! contact state. It proves nothing about a real touch. Do not use it as send-day evidence.\n\n`;
@@ -78,13 +89,19 @@ function usage(message) {
       `    --roster <path> --ledger <path> --audience <name|id> \\\n` +
       `    --touch T1|T2|T3 --channel email|dm \\\n` +
       `    [--apply-suppressions] [--require-first-names] [--json <path>] \\\n` +
-      `    [--allow-missing-ledger]   (T1 only)\n`,
+      `    [--allow-missing-ledger]   (T1 only) \\\n` +
+      `    [--allow-test-endpoint]    (tests only — required iff WAVE1_PREFLIGHT_RESEND_API_BASE is set)\n`,
   );
   process.exit(2);
 }
 
 function parseArgs(argv) {
-  const args = { applySuppressions: false, requireFirstNames: false, allowMissingLedger: false };
+  const args = {
+    applySuppressions: false,
+    requireFirstNames: false,
+    allowMissingLedger: false,
+    allowTestEndpoint: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
@@ -97,8 +114,29 @@ function parseArgs(argv) {
       case "--apply-suppressions": args.applySuppressions = true; break;
       case "--require-first-names": args.requireFirstNames = true; break;
       case "--allow-missing-ledger": args.allowMissingLedger = true; break;
+      case "--allow-test-endpoint": args.allowTestEndpoint = true; break;
       default: usage(`Unknown argument: ${arg}`);
     }
+  }
+  // First, before --roster is even checked: the endpoint decides what every
+  // later answer is about. See the RESEND_API block above for why disagreement
+  // in either direction is exit 2 rather than a banner.
+  if (!RESEND_API_IS_LIVE && !args.allowTestEndpoint) {
+    process.stderr.write(
+      `WAVE1_PREFLIGHT_RESEND_API_BASE is set to ${RESEND_API}, so this run would read a stub instead of\n` +
+        `live Resend contact state — and would still exit 0 and print "Clear to send". That is a manufactured\n` +
+        `green, so it is refused. This variable is a test seam: only the CLI tests may set it, and they pass\n` +
+        `--allow-test-endpoint to say so. On send day, unset it:\n\n  unset WAVE1_PREFLIGHT_RESEND_API_BASE\n`,
+    );
+    process.exit(2);
+  }
+  if (RESEND_API_IS_LIVE && args.allowTestEndpoint) {
+    process.stderr.write(
+      `--allow-test-endpoint was passed but WAVE1_PREFLIGHT_RESEND_API_BASE is not set, so this run would read\n` +
+        `LIVE Resend (${RESEND_API_DEFAULT}) while the caller asserts it is on a stub. With --apply-suppressions\n` +
+        `that unsubscribes real contacts. Refusing rather than guessing which half of the pair was meant.\n`,
+    );
+    process.exit(2);
   }
   if (!args.roster) usage("--roster is required");
   if (!args.ledger) usage("--ledger is required");
@@ -318,6 +356,9 @@ function render(plan, syncPlan, blockers, args, sources) {
     `ledger: ${sources.ledger.path} ` +
       `${sources.ledger.missing ? "(MISSING — allowed by --allow-missing-ledger)" : `(${plural(sources.ledger.entries.length, "entry", "entries")})`}\n`,
   );
+  process.stdout.write(
+    `endpoint: ${RESEND_API}${RESEND_API_IS_LIVE ? "" : "   ** STUB — not live contact state **"}\n`,
+  );
   process.stdout.write(`${"─".repeat(76)}\n`);
   process.stdout.write(`${lines.join("\n")}\n`);
   process.stdout.write(`${"─".repeat(76)}\n`);
@@ -413,22 +454,33 @@ function render(plan, syncPlan, blockers, args, sources) {
       );
     }
     if (syncPlan.firstNameDrift.length > 0) {
-      // Mark from the blocking list itself rather than re-deriving "both sides
-      // named" here — a suppressed row can drift, and it does not block.
+      // Mark from the blocking lists themselves rather than re-deriving the
+      // shapes here — a suppressed row can drift, and it does not block.
+      //
+      // BOTH lists block under --require-first-names, and a roster-named /
+      // contact-unnamed row lands in missingFirstName, not firstNameConflict. It
+      // therefore drifts, blocks, and printed unmarked under a footer that said
+      // only CONFLICT blocks. That misreads as "ignore this row" on send day, so
+      // every row that blocks is marked with the reason it blocks.
       const conflicting = new Set(syncPlan.firstNameConflict.map((c) => c.rosterId));
+      const unnamed = new Set(syncPlan.missingFirstName.map((c) => c.rosterId));
       process.stdout.write(
         `\nFirst-name drift (${syncPlan.firstNameDrift.length}) — the greeting renders from the Resend contact, not the roster:\n` +
           syncPlan.firstNameDrift
             .map(
               (d) =>
                 `  ${d.email}  roster=${d.roster ?? "—"}  resend=${d.resend ?? "—"}  [${d.rosterId}]` +
-                (conflicting.has(d.rosterId) ? "  CONFLICT" : ""),
+                (conflicting.has(d.rosterId)
+                  ? "  CONFLICT"
+                  : unnamed.has(d.rosterId)
+                    ? "  NO CONTACT NAME"
+                    : ""),
             )
             .join("\n") +
           `${
             args.requireFirstNames
-              ? "\n  (only the CONFLICT rows block; a contact name the roster lacks still greets correctly)"
-              : "\n  (warning only — --require-first-names blocks the rows marked CONFLICT)"
+              ? "\n  (the CONFLICT and NO CONTACT NAME rows block; an unmarked row is a contact name the roster lacks, which still greets correctly)"
+              : "\n  (warning only — --require-first-names blocks the rows marked CONFLICT or NO CONTACT NAME)"
           }\n`,
       );
     }
@@ -532,6 +584,16 @@ async function main() {
           touch: args.touch,
           channel: args.channel,
           audienceId,
+          // Provenance before findings. Without this the archived record of a
+          // stubbed run is byte-identical in shape to a live one, so the banner
+          // — which only ever existed on a terminal nobody kept — was the sole
+          // thing separating evidence from a fixture. `live: false` means every
+          // count below describes a stub.
+          endpoint: {
+            resendApiBase: RESEND_API,
+            live: RESEND_API_IS_LIVE,
+            allowTestEndpoint: args.allowTestEndpoint,
+          },
           // The audit record has to say which ledger produced these decisions.
           // "0 suppressions" is only meaningful next to the file it came from.
           sources: {

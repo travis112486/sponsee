@@ -118,6 +118,10 @@ async function runPreflight(
       "--channel", "email",
       "--json", jsonPath,
       ...extra,
+      // Required by the CLI whenever WAVE1_PREFLIGHT_RESEND_API_BASE is set
+      // (below). The pair is what keeps the seam from being usable by accident;
+      // the tests that assert on the guard itself spawn without this helper.
+      "--allow-test-endpoint",
     ],
     {
       cwd: REPO_ROOT,
@@ -302,5 +306,103 @@ describe("wave1-preflight: the test seam announces itself", () => {
     expect(stdout).toContain("WAVE1_PREFLIGHT_RESEND_API_BASE is set to");
     expect(stdout).toContain("did NOT read live Resend");
     expect(stderr).toContain("WAVE1_PREFLIGHT_RESEND_API_BASE is set to");
+  });
+});
+
+describe("wave1-preflight: the test seam fails closed, not just loudly", () => {
+  // The banner above was the whole mitigation, and a banner does not change an
+  // exit code: a send-day run with the variable set still reached exit 0,
+  // printed "Clear to send", and wrote a --json record indistinguishable from a
+  // live one. Same fail-open shape as SPO-287, shipped by the commit closing it.
+  //
+  // These spawn the CLI directly rather than through runPreflight, because the
+  // thing under test is exactly the flag that helper now always passes.
+  async function rawRun(
+    name: string,
+    opts: { apiBase?: string; allowFlag: boolean },
+  ): Promise<{ code: number; stdout: string; stderr: string; jsonPath: string }> {
+    const { rosterPath, ledgerPath } = await writeFixtures(name, [
+      { id: "a", name: "Ada Stream", firstName: "Ada", email: "ada@example.com", xHandle: "@ada" },
+    ]);
+    const jsonPath = path.join(tmpDir, `${name}.out.json`);
+    const env: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+      RESEND_API_KEY: "re_stub_key_not_a_real_credential",
+    };
+    if (opts.apiBase) env.WAVE1_PREFLIGHT_RESEND_API_BASE = opts.apiBase;
+    else delete env.WAVE1_PREFLIGHT_RESEND_API_BASE;
+
+    const child = spawn(
+      process.execPath,
+      [
+        CLI,
+        "--roster", rosterPath,
+        "--ledger", ledgerPath,
+        "--audience", AUDIENCE_ID,
+        "--touch", "T1",
+        "--channel", "email",
+        "--json", jsonPath,
+        ...(opts.allowFlag ? ["--allow-test-endpoint"] : []),
+      ],
+      { cwd: REPO_ROOT, env },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (c) => (stdout += String(c)));
+    child.stderr.on("data", (c) => (stderr += String(c)));
+    const code = await new Promise<number>((resolve) => child.on("close", (c) => resolve(c ?? -1)));
+    return { code, stdout, stderr, jsonPath };
+  }
+
+  it("refuses a stub endpoint that no flag asked for, instead of clearing the send", async () => {
+    // The exact roster/stub pairing that clears below. Only the flag differs.
+    pages = [{ data: [contact(1, { email: "ada@example.com", first_name: "Ada" })], has_more: false }];
+    const before = contactRequests.length;
+    const { code, stdout, stderr } = await rawRun("seam-no-flag", { apiBase: baseUrl, allowFlag: false });
+
+    expect(code).toBe(2);
+    expect(stdout).not.toContain("Clear to send");
+    expect(stderr).toContain("would read a stub instead of");
+    expect(stderr).toContain("unset WAVE1_PREFLIGHT_RESEND_API_BASE");
+    // "Before any work": the refusal precedes the live read, so it cannot be a
+    // late abort that already did something.
+    expect(contactRequests.length).toBe(before);
+    expect(existsSync(path.join(tmpDir, "seam-no-flag.out.json"))).toBe(false);
+  });
+
+  it("refuses the flag without the variable, when the run would really hit live Resend", async () => {
+    // The other direction. Nothing is stubbed, so a run that got past this would
+    // read api.resend.com while the caller believes it is on a fixture — and
+    // with --apply-suppressions would unsubscribe real contacts.
+    const { code, stdout, stderr } = await rawRun("seam-flag-only", { allowFlag: true });
+
+    expect(code).toBe(2);
+    expect(stdout).not.toContain("Clear to send");
+    expect(stderr).toContain("--allow-test-endpoint was passed but");
+    expect(stderr).toContain("https://api.resend.com");
+  });
+
+  it("still clears when both halves agree — the guard is not blanket-blocking", async () => {
+    // Positive control. Without this the two refusals above pass just as well
+    // against a CLI that exits 2 on everything.
+    pages = [{ data: [contact(1, { email: "ada@example.com", first_name: "Ada" })], has_more: false }];
+    const { code, stdout } = await rawRun("seam-both", { apiBase: baseUrl, allowFlag: true });
+
+    expect(code).toBe(0);
+    expect(stdout).toContain("Clear to send T1 on email to 1 recipient(s)");
+  });
+
+  it("records the effective endpoint in the --json record, so the artifact outlives the banner", async () => {
+    // The banner lives on a terminal nobody keeps; the archived record is the
+    // evidence QA reads back. It has to say which endpoint produced the counts.
+    pages = [{ data: [contact(1, { email: "ada@example.com", first_name: "Ada" })], has_more: false }];
+    const { jsonPath } = await rawRun("seam-json", { apiBase: baseUrl, allowFlag: true });
+    const written = JSON.parse(await readFile(jsonPath, "utf8"));
+
+    expect(written.endpoint).toEqual({
+      resendApiBase: baseUrl,
+      live: false,
+      allowTestEndpoint: true,
+    });
   });
 });
