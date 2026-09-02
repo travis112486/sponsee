@@ -712,6 +712,25 @@ describe("recent activity", () => {
     expect(time.getAttribute("title")).not.toBe("");
   });
 
+  it("announces its skeleton to assistive tech while loading (SPO-335)", () => {
+    activityQuery.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+
+    // Query by role, not label: aria-busy and aria-label only reach assistive
+    // tech on a live region, so the skeleton must expose role="status". This
+    // assertion is coverage, not the guard — testing-library's tree is more
+    // permissive than a real AT tree (SPO-331).
+    const region = screen.getByRole("status", { name: "Loading recent activity" });
+    expect(region).toHaveAttribute("aria-busy", "true");
+    // The page around the module is settled and interactive, not skeletoned.
+    expect(screen.getAllByText("$3,847").length).toBeGreaterThan(0);
+  });
+
   it("fails on its own without taking the rest of the page down", () => {
     activityQuery.mockReturnValue({
       data: undefined,

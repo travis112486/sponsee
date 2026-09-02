@@ -679,7 +679,18 @@ function ActivityCard({
       </h3>
 
       {isLoading ? (
-        <div className="mt-2 space-y-3 pt-2">
+        // Deliberate call (SPO-335): this skeleton is module-scoped — it can
+        // appear while the rest of the page is already interactive — but it
+        // still announces, because the CPVH tile above is the same shape and
+        // already does, and `isLoading` only fires with no data (first load /
+        // post-error retry), never on background refetches. One polite
+        // announcement per hard load; silence would recreate the L1 gap.
+        <div
+          role="status"
+          aria-busy="true"
+          aria-label="Loading recent activity"
+          className="mt-2 space-y-3 pt-2"
+        >
           {[0, 1, 2].map((i) => (
             <div key={i} className="flex items-center gap-3">
               <Skeleton className="h-7 w-7 rounded-full" />
