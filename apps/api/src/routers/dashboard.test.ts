@@ -218,6 +218,8 @@ describe("dashboard.overview", () => {
     expect(result.deliverablesDue).toEqual([]);
     expect(result.overdue.count).toBe(0);
     expect(result.overdue.mostUrgent).toBeNull();
+    expect(result.outstanding.count).toBe(0);
+    expect(result.outstanding.totalCents).toBe(0);
 
     // Positive control: the row really is there and really is in-week, so the
     // empty result above is the scoping working, not an empty table.
@@ -226,6 +228,8 @@ describe("dashboard.overview", () => {
       .overview({ now: NOW_ISO });
     expect(bResult.deliverablesDue.map((d) => d.title)).toEqual(["Creator B deliverable"]);
     expect(bResult.overdue.count).toBe(1);
+    expect(bResult.outstanding.count).toBe(1);
+    expect(bResult.outstanding.totalCents).toBe(5555);
     expect(bResult.revenue.totalCents).toBe(9999);
   });
 
