@@ -106,18 +106,24 @@ roster is only our description of it.
   subscribed by default, so obeying the first bullet on such a row arms exactly
   the send the ledger recorded an opt-out to prevent. The preflight tags these
   `CREATE UNSUBSCRIBED (ledger suppresses them)` under "Not yet in the audience"
-  and blocks the touch until the contact exists. **`--apply-suppressions` does
-  not clear this one.** That flag flips an *existing* subscribed contact, and a
-  contact Resend has never seen cannot be flipped, so the row never enters its
-  list. The two blockers read alike in the output and have different remedies:
-  this one is fixed by hand, by creating the contact unsubscribed.
+  and blocks the touch — **on either channel** — until that contact exists
+  *unsubscribed*. Creating it subscribed does not clear the gate — it only
+  trades this blocker for the other one, the `--apply-suppressions` blocker on a
+  now-existing subscribed contact. **`--apply-suppressions` does not clear this
+  one.** That flag flips an *existing* subscribed contact, and a contact Resend
+  has never seen cannot be flipped, so the row never enters its list. The two
+  blockers read alike in the output and have different remedies: this one is
+  fixed by hand, by creating the contact unsubscribed.
 
-Neither direction is a block on `--channel dm`, and deliberately so: most of the
-DM cohort carries `"email": null`, so a `not-in-audience` block would make the
-no-email carve-out permanently uncontactable. The cost is that the live read —
-required on `dm` precisely so an email unsubscribe silences the DM — can be
-*vacuous* for a given row and still clear it to send. Every run therefore prints
-the coverage of its own send list:
+Neither of the two *directions* is a block on `--channel dm`, and deliberately
+so: most of the DM cohort carries `"email": null`, so a `not-in-audience` block
+would make the no-email carve-out permanently uncontactable. The third bullet
+gets no such carve-out — `planContactSync` and `contactSyncBlockers` take no
+channel argument, and the send gate ORs their result in unconditionally, so a DM
+row that *does* carry an email blocks `dm` exactly as it blocks `email`. The
+cost of the carve-out is that the live read — required on `dm` precisely so an
+email unsubscribe silences the DM — can be *vacuous* for a given row and still
+clear it to send. Every run therefore prints the coverage of its own send list:
 
 ```
 dm: 7 of 11 SEND row(s) not covered by the audience read
