@@ -30,6 +30,7 @@ vi.mock("@/trpc", () => ({
     }),
     dashboard: { overview: { useQuery: vi.fn() } },
     activity: { list: { useQuery: vi.fn() } },
+    deals: { cpvhSummary: { useQuery: vi.fn() } },
     deliverable: { update: { useMutation: vi.fn() } },
   },
 }));
@@ -38,6 +39,7 @@ import { trpc } from "@/trpc";
 
 const overviewQuery = trpc.dashboard.overview.useQuery as ReturnType<typeof vi.fn>;
 const activityQuery = trpc.activity.list.useQuery as ReturnType<typeof vi.fn>;
+const cpvhQuery = trpc.deals.cpvhSummary.useQuery as ReturnType<typeof vi.fn>;
 const deliverableUpdate = trpc.deliverable.update.useMutation as ReturnType<typeof vi.fn>;
 
 /**
@@ -94,6 +96,7 @@ function overview(over: Record<string, unknown> = {}) {
       periodStart: new Date(Date.UTC(2026, 8, 1)),
       periodEnd: new Date(Date.UTC(2026, 9, 1)),
       totalCents: 3_847_00,
+      previousTotalCents: 3_000_00 as number | null,
       byType: { flat: 2_000_00, bounty: 1_000_00, hybrid: 847_00 },
       monthly: monthly({
         "2026-08": { valueCents: 3_000_00, flatCents: 3_000_00 },
@@ -188,6 +191,15 @@ beforeEach(() => {
     isError: false,
     refetch: vi.fn(),
   });
+  // The account has no CCV/duration data by default — the same shape the API
+  // returns for a brand-new creator, so the null-rule tests exercise the real
+  // wire format rather than a missing mock.
+  cpvhQuery.mockReturnValue({
+    data: { effectiveCpvh: null },
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  });
   deliverableUpdate.mockReturnValue({
     mutate: updateDeliverable,
     isPending: false,
@@ -222,11 +234,44 @@ describe("revenue is on the screen at all (SPO-194 headline gap)", () => {
     expect(screen.getByText("Revenue (Sep)")).toBeInTheDocument();
   });
 
-  it("compares against the previous month using the server's own buckets", () => {
+  it("compares against the previous month using the server's like-for-like field", () => {
     renderDashboard();
-    // Aug $3,000 → Sep $3,847 is +28%.
+    // Sep $3,847 vs previousTotalCents $3,000 is +28%.
     expect(screen.getByText("▲ 28%")).toBeInTheDocument();
     expect(screen.getByText("vs $3,000 last month")).toBeInTheDocument();
+  });
+
+  it("trusts previousTotalCents over the whole-month buckets (mid-period truncation)", () => {
+    // Period-to-date September is only 9 days in; the server truncates the
+    // prior window to the same offset, but the Aug *bucket* is the full month.
+    const o = overview();
+    o.revenue.totalCents = 1_200_00;
+    o.revenue.previousTotalCents = 900_00;
+    (o.revenue.monthly as Month[]).find((m) => m.month === "2026-08")!.valueCents = 3_000_00;
+    mockOverview(o);
+    renderDashboard();
+
+    // Like-for-like: $1,200 vs $900 is +33%. A whole-Aug rollup would compare
+    // $1,200 vs $3,000 and print a fabricated ▼ 60%.
+    expect(screen.getByText("▲ 33%")).toBeInTheDocument();
+    expect(screen.getByText("vs $900 last month")).toBeInTheDocument();
+    expect(screen.queryByText(/▼/)).not.toBeInTheDocument();
+  });
+
+  it("labels the revenue card's basis for each period, not hardcoded", () => {
+    mockOverview(overview({ revenue: { ...overview().revenue, period: "quarter" } }));
+    renderDashboard();
+    expect(screen.getByText("Revenue (this quarter)")).toBeInTheDocument();
+    expect(screen.getByText("vs $3,000 last quarter")).toBeInTheDocument();
+  });
+
+  it("renders the YTD eyebrow and basis instead of collapsing into the quarter branch", () => {
+    mockOverview(overview({ revenue: { ...overview().revenue, period: "ytd" } }));
+    renderDashboard();
+    // A boolean on period would call YTD "this quarter" and "last quarter".
+    expect(screen.getByText("Revenue (this year)")).toBeInTheDocument();
+    expect(screen.queryByText("Revenue (this quarter)")).not.toBeInTheDocument();
+    expect(screen.getByText("vs $3,000 Jan–now last year")).toBeInTheDocument();
   });
 
   // ── Creator-local periods (SPO-239) ──────────────────────────────────────
@@ -241,8 +286,8 @@ describe("revenue is on the screen at all (SPO-194 headline gap)", () => {
     // 2026-09-01T00:00 in Tokyo === 2026-08-31T15:00Z.
     o.revenue.periodStart = new Date("2026-08-31T15:00:00.000Z");
     o.revenue.periodEnd = new Date("2026-09-30T15:00:00.000Z");
-    // Distinct July and August totals: comparing against the wrong month shows
-    // a wrong number rather than merely dropping the chip.
+    // Distinct July and August totals: a client that re-derived the prior month
+    // from the buckets in UTC would name July, not August.
     const m = o.revenue.monthly as Month[];
     m.find((x) => x.month === "2026-07")!.valueCents = 1_000_00;
     m.find((x) => x.month === "2026-08")!.valueCents = 3_000_00;
@@ -259,23 +304,39 @@ describe("revenue is on the screen at all (SPO-194 headline gap)", () => {
     expect(screen.queryByText("Revenue (Aug)")).not.toBeInTheDocument();
   });
 
-  it("picks the previous month's bucket in the creator's zone", () => {
-    mockOverview(tokyoOverview());
+  it("renders the server's zone-correct delta rather than re-bucketing client-side", () => {
+    const o = tokyoOverview();
+    // The server already computed the baseline in Tokyo; the client must read
+    // it, not re-derive it from the buckets.
+    o.revenue.previousTotalCents = 3_000_00;
+    mockOverview(o);
     renderDashboard();
 
-    // Sep $3,847 vs Aug $3,000 is +28%. A UTC-derived key reads "2026-07" and
-    // would compare against July's $1,000, showing +285%.
+    // Reading the buckets in UTC would name July's $1,000 as "last month".
     expect(screen.getByText("vs $3,000 last month")).toBeInTheDocument();
     expect(screen.queryByText("vs $1,000 last month")).not.toBeInTheDocument();
   });
 
   it("shows no delta at all when the previous period earned nothing", () => {
     const o = overview();
-    (o.revenue.monthly as Month[]).find((m) => m.month === "2026-08")!.valueCents = 0;
+    o.revenue.previousTotalCents = 0;
     mockOverview(o);
     renderDashboard();
 
     // A percentage change from zero is undefined — it must not read "+100%".
+    expect(screen.queryByText(/▲|▼/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Paid invoices, dated by when the money landed")
+    ).toBeInTheDocument();
+  });
+
+  it("shows no delta at all when the prior window has no paid invoice (null)", () => {
+    const o = overview();
+    o.revenue.previousTotalCents = null;
+    mockOverview(o);
+    renderDashboard();
+
+    // null means "no prior window data" — never a fabricated +100%.
     expect(screen.queryByText(/▲|▼/)).not.toBeInTheDocument();
     expect(
       screen.getByText("Paid invoices, dated by when the money landed")
@@ -347,6 +408,91 @@ describe("Effective CPVH card (founder-ratified null rule)", () => {
     renderDashboard();
     const card = screen.getByText("Effective CPVH").closest("button")!;
     expect(within(card).queryByText(/midpoint/)).not.toBeInTheDocument();
+  });
+
+  it("renders the live account figure from deals.cpvhSummary (SPO-197)", () => {
+    // The API returns dollars per viewer-hour, already divided — the card must
+    // not divide by 100 again or recompute from deal rows.
+    cpvhQuery.mockReturnValue({
+      data: { effectiveCpvh: 3.21 },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+
+    const card = screen.getByText("Effective CPVH").closest("button")!;
+    expect(within(card).getByText("$3.21")).toBeInTheDocument();
+    expect(within(card).queryByText("Not enough data yet")).not.toBeInTheDocument();
+  });
+
+  it("shows a skeleton while the summary loads — not the empty affordance", () => {
+    // "Not enough data yet" during a fetch is the null-rule lie in a different
+    // costume: it tells a creator who has data that they don't.
+    cpvhQuery.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+
+    // Query by role, not label: aria-busy and aria-label only reach assistive
+    // tech on a live region, so the skeleton must expose role="status". This
+    // assertion is coverage, not the guard — testing-library's tree is more
+    // permissive than a real AT tree (SPO-331).
+    const card = screen.getByRole("status", { name: "Loading effective CPVH" });
+    expect(card).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByText("Not enough data yet")).not.toBeInTheDocument();
+    expect(within(card).queryByText(/^\$/)).not.toBeInTheDocument();
+  });
+
+  it("offers a working retry when the summary fails, without failing the page", () => {
+    const refetch = vi.fn();
+    cpvhQuery.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      refetch,
+    });
+    renderDashboard();
+
+    // The rest of the dashboard still renders off `overview`.
+    expect(screen.getByText(/^Revenue \(/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /retry effective cpvh/i }));
+    expect(refetch).toHaveBeenCalled();
+    expect(screen.queryByText("Not enough data yet")).not.toBeInTheDocument();
+  });
+
+  it("keeps the SPO-237 row span while the summary loads and when it fails", () => {
+    // The loading and error tiles are hand-rolled divs, not StatCards, so the
+    // grid-child span has to be restated on each — losing it would wrap the
+    // row into the stranded half-width orphan the 5/3/2/1 tuning removed.
+    cpvhQuery.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    const loading = renderDashboard();
+    const skeleton = screen.getByRole("status", { name: "Loading effective CPVH" });
+    expect(skeleton.className).toContain("sm:col-span-2");
+    expect(skeleton.className).toContain("lg:col-span-1");
+    loading.unmount();
+
+    cpvhQuery.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+    const errorTile = screen
+      .getByRole("button", { name: /retry effective cpvh/i })
+      .closest(".rounded-xl")!;
+    expect(errorTile.className).toContain("sm:col-span-2");
+    expect(errorTile.className).toContain("lg:col-span-1");
   });
 });
 
@@ -588,7 +734,7 @@ describe("page states", () => {
     mockOverview(undefined, { isLoading: true });
     renderDashboard();
 
-    const region = screen.getByLabelText("Loading your dashboard");
+    const region = screen.getByRole("status", { name: "Loading your dashboard" });
     expect(region).toHaveAttribute("aria-busy", "true");
     expect(region.querySelectorAll(".animate-pulse").length).toBeGreaterThan(5);
   });

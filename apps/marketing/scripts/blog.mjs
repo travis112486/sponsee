@@ -238,6 +238,12 @@ export function parseAuthor(source, slug) {
 }
 
 const PAGE_CSS = `
+@font-face{font-family:Inter;font-style:normal;font-weight:400;font-display:swap;src:url(/fonts/inter-latin-400-normal.woff2) format("woff2")}
+@font-face{font-family:Inter;font-style:normal;font-weight:500;font-display:swap;src:url(/fonts/inter-latin-500-normal.woff2) format("woff2")}
+@font-face{font-family:Inter;font-style:normal;font-weight:600;font-display:swap;src:url(/fonts/inter-latin-600-normal.woff2) format("woff2")}
+@font-face{font-family:Inter;font-style:normal;font-weight:700;font-display:swap;src:url(/fonts/inter-latin-700-normal.woff2) format("woff2")}
+@font-face{font-family:'Instrument Serif';font-style:normal;font-weight:400;font-display:swap;src:url(/fonts/instrument-serif-latin-400-normal.woff2) format("woff2")}
+@font-face{font-family:'Instrument Serif';font-style:italic;font-weight:400;font-display:swap;src:url(/fonts/instrument-serif-latin-400-italic.woff2) format("woff2")}
 :root{--paper:#F7F5F1;--surface:#FFF;--ink:#1B1815;--ink-2:#57504A;--ink-3:#8A8178;--hairline:#E8E3DB;--pine:#0E7A5F;--pine-hover:#0B664F;--pine-tint:#E4F1EB}
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif;-webkit-font-smoothing:antialiased;line-height:1.6}
@@ -306,9 +312,11 @@ sup.fnref a{text-decoration:none;font-size:11px;padding-left:1px}
 @media(min-width:768px){h1{font-size:44px}main{padding-top:80px}.prose h2{font-size:32px}}
 `.trim();
 
-const FONTS_LINK = `<link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />`;
+// Same self-hosted files the rest of apps/marketing serves (SPO-306): these
+// pages inline their CSS instead of loading the bundle, so the @font-face
+// rules live in PAGE_CSS and only the two above-the-fold faces get preloaded.
+const FONTS_LINK = `<link rel="preload" href="/fonts/inter-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/instrument-serif-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />`;
 
 const ANALYTICS = `<script async src="https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}"></script>
     <script>

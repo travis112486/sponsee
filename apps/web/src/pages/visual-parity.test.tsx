@@ -41,6 +41,7 @@ vi.mock("@/trpc", () => ({
     },
     deals: {
       list: { useQuery: vi.fn() },
+      cpvhSummary: { useQuery: vi.fn() },
       updateStage: { useMutation: vi.fn() },
       create: { useMutation: vi.fn() },
     },
@@ -50,6 +51,7 @@ vi.mock("@/trpc", () => ({
     invoice: {
       list: { useQuery: vi.fn() },
       markPaid: { useMutation: vi.fn() },
+      create: { useMutation: vi.fn() },
     },
     activity: {
       list: { useQuery: vi.fn() },
@@ -144,6 +146,12 @@ beforeEach(() => {
   mockQuery(trpc.settings.getProfile.useQuery, idleQuery());
   mockQuery(trpc.settings.getPlatforms.useQuery, idleQuery());
   mockQuery(trpc.dashboard.overview.useQuery, idleQuery());
+  mockQuery(trpc.deals.cpvhSummary.useQuery, {
+    data: { effectiveCpvh: null },
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  });
   (trpc.deliverable.update.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
     idleMutation()
   );
@@ -155,6 +163,9 @@ beforeEach(() => {
     idleMutation()
   );
   (trpc.invoice.markPaid.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
+    idleMutation()
+  );
+  (trpc.invoice.create.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
     idleMutation()
   );
   (trpc.chase.approve.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
