@@ -80,8 +80,14 @@ function periodBounds(
 // `now`'s day-of-month exceeds the prior month's length — Mar 29/30/31, May 31,
 // Jul 31, Oct 31, Dec 31 — `addZonedMonths(now, -1)` lands inside the current
 // month (Feb 31 → Mar 3), and the quarter branch does the same at Dec 31
-// (Sep 31 → Oct 1). The prior window then overlaps the current period and the
-// same invoice counts in the numerator and the baseline, manufacturing exactly
+// (Sep 31 → Oct 1). The quarter branch's other roll-forward days are benign:
+// at May 31, `addZonedMonths(now, -3)` rolls Feb 31 → Mar 3, which widens the
+// prior window by ~1 day but stays entirely inside the prior quarter (Mar 3 is
+// before Apr 1, the current quarter's start) — no clamp fires, and none is
+// needed, since it can never overlap the current period or double-count, only
+// inflate the baseline slightly. The prior window then overlaps the current
+// period and the same invoice counts in the numerator and the baseline,
+// manufacturing exactly
 // the fake negative the truncation exists to prevent. Clamping to the current
 // period's start keeps the prior window a strict subset of the prior period
 // (and yields the full prior period at period end, which is correct).
