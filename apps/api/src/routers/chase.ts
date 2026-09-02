@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import { eq, and, desc, inArray } from "drizzle-orm";
+import type { DB } from "@sponsee/db";
 import {
   chaseTemplates,
   invoiceChaseState,
@@ -26,6 +27,45 @@ const APPROVE_INFLIGHT_POLL_MS = 25;
 const POST_ENQUEUE_STATUSES = new Set(["sending", "sent", "delivered", "opened"]);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Resolve the address a chase email for `invoice` should go to, at send time
+ * rather than only at arm time. `chase_events.to_email` is snapshotted from
+ * `invoices.contact_id` when the tick arms an event (see jobs/chase-tick.ts),
+ * so an invoice created before its deal had a primary contact is armed with a
+ * null recipient and can never be re-armed (runChaseTick skips any step that
+ * already has an event). Re-resolving here lets a creator clear that dead end
+ * by adding a primary contact, with no backfill.
+ *
+ * Precedence: the invoice's own contact (explicit), then the deal's primary
+ * contact (the fallback the Payments hint names). Returns null only when
+ * neither has an email, so callers can fail loudly instead of sending nowhere.
+ */
+async function resolveChaseRecipient(
+  db: DB,
+  invoice: { contactId: string | null; dealId: string | null }
+): Promise<{ email: string; contactId: string } | null> {
+  if (invoice.contactId) {
+    const contact = await db.query.contacts.findFirst({
+      where: (c, { eq }) => eq(c.id, invoice.contactId!),
+    });
+    if (contact?.email) return { email: contact.email, contactId: contact.id };
+  }
+
+  if (invoice.dealId) {
+    const deal = await db.query.deals.findFirst({
+      where: (d, { eq }) => eq(d.id, invoice.dealId!),
+    });
+    if (deal?.primaryContactId) {
+      const contact = await db.query.contacts.findFirst({
+        where: (c, { eq }) => eq(c.id, deal.primaryContactId!),
+      });
+      if (contact?.email) return { email: contact.email, contactId: contact.id };
+    }
+  }
+
+  return null;
+}
 
 export const chaseRouter = createTRPCRouter({
   // ── Templates ──
@@ -171,7 +211,7 @@ export const chaseRouter = createTRPCRouter({
     const invoiceIds = creatorInvoices.map((i) => i.id);
     if (invoiceIds.length === 0) return [];
 
-    return ctx.db
+    const rows = await ctx.db
       .select({
         event: chaseEvents,
         invoice: invoices,
@@ -180,6 +220,18 @@ export const chaseRouter = createTRPCRouter({
       .innerJoin(invoices, eq(chaseEvents.invoiceId, invoices.id))
       .where(and(inArray(chaseEvents.invoiceId, invoiceIds), eq(chaseEvents.status, "awaiting_review")))
       .orderBy(desc(chaseEvents.createdAt));
+
+    // Surface the *effective* recipient, not just the arm-time snapshot, so the
+    // Payments hint only shows when no contact is genuinely reachable (and clears
+    // as soon as a primary contact is added, with no re-tick).
+    return Promise.all(
+      rows.map(async ({ event, invoice }) => ({
+        event,
+        invoice,
+        recipientEmail:
+          event.toEmail ?? (await resolveChaseRecipient(ctx.db, invoice))?.email ?? null,
+      }))
+    );
   }),
 
   // ── Approve and send (new) ──
@@ -238,7 +290,31 @@ export const chaseRouter = createTRPCRouter({
           throw new TRPCError({ code: "BAD_REQUEST", message: `Event is ${chaseEvent.status}` });
         }
 
-        if (!chaseEvent.toEmail) {
+        // Resolve the recipient at send time. `toEmail` is snapshotted at arm
+        // time and can be null when the invoice was created before its deal had
+        // a primary contact; fall back to the deal's current primary contact so
+        // "add a primary contact to this deal" actually unblocks the send. The
+        // repair is persisted so the event self-heals and later steps arm with a
+        // real recipient from `invoices.contact_id`.
+        let toEmail = chaseEvent.toEmail;
+        if (!toEmail) {
+          const resolved = await resolveChaseRecipient(ctx.db, event.invoices);
+          if (resolved) {
+            toEmail = resolved.email;
+            await ctx.db
+              .update(chaseEvents)
+              .set({ toEmail: resolved.email, updatedAt: new Date() })
+              .where(eq(chaseEvents.id, input.chaseEventId));
+            if (event.invoices.contactId == null) {
+              await ctx.db
+                .update(invoices)
+                .set({ contactId: resolved.contactId, updatedAt: new Date() })
+                .where(eq(invoices.id, event.invoices.id));
+            }
+          }
+        }
+
+        if (!toEmail) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "No recipient email configured" });
         }
 
@@ -272,7 +348,7 @@ export const chaseRouter = createTRPCRouter({
             chaseEventId: chaseEvent.id,
             invoiceId: event.invoices.id,
             step: chaseEvent.step,
-            toEmail: chaseEvent.toEmail,
+            toEmail,
             fromEmail,
             replyToEmail,
             subject: chaseEvent.subjectSnapshot || "",
@@ -355,7 +431,27 @@ export const chaseRouter = createTRPCRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: `Event is ${chaseEvent.status}` });
       }
 
-      if (!chaseEvent.toEmail) {
+      // Same send-time resolution as approve: an event armed before its deal had
+      // a primary contact must not be permanently unsendable.
+      let toEmail = chaseEvent.toEmail;
+      if (!toEmail) {
+        const resolved = await resolveChaseRecipient(ctx.db, event.invoices);
+        if (resolved) {
+          toEmail = resolved.email;
+          await ctx.db
+            .update(chaseEvents)
+            .set({ toEmail: resolved.email, updatedAt: new Date() })
+            .where(eq(chaseEvents.id, input.chaseEventId));
+          if (event.invoices.contactId == null) {
+            await ctx.db
+              .update(invoices)
+              .set({ contactId: resolved.contactId, updatedAt: new Date() })
+              .where(eq(invoices.id, event.invoices.id));
+          }
+        }
+      }
+
+      if (!toEmail) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "No recipient email configured" });
       }
 
@@ -389,7 +485,7 @@ export const chaseRouter = createTRPCRouter({
           chaseEventId: chaseEvent.id,
           invoiceId: event.invoices.id,
           step: chaseEvent.step,
-          toEmail: chaseEvent.toEmail,
+          toEmail,
           fromEmail,
           replyToEmail,
           subject: input.subject,

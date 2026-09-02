@@ -127,10 +127,27 @@ export const invoiceRouter = createTRPCRouter({
         status: z.enum(["draft", "open", "paid", "void"]).optional(),
         paidAt: z.date().optional().nullable(),
         paidNote: z.string().optional().nullable(),
+        contactId: z.string().uuid().optional().nullable(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+
+      // Verify contact ownership when the caller sets it (mirrors create). Zod
+      // strips unknown keys silently, so a repair attempt referencing a
+      // cross-tenant contact must be rejected loudly, never silently dropped.
+      if (data.contactId) {
+        const [contact] = await ctx.db
+          .select()
+          .from(contacts)
+          .innerJoin(brands, eq(contacts.brandId, brands.id))
+          .where(
+            and(eq(contacts.id, data.contactId), eq(brands.creatorId, ctx.creatorId))
+          );
+        if (!contact) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+        }
+      }
 
       // `paidAt` with no `status` is undecidable from the input alone, in both
       // directions, so both are rejected rather than resolved by reading the row.

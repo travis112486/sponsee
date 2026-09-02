@@ -225,3 +225,51 @@ describe("invoice.update — paidAt orphan guard (SPO-265)", () => {
     ).rejects.toMatchObject({ cause: { constraint: "invoices_paid_requires_paid_at" } });
   });
 });
+
+// SPO-347: `invoice.update` used to have no `contactId` in its input, so zod
+// silently stripped a repair attempt and returned 200 with nothing written.
+describe("invoice.update — contactId repair (SPO-347)", () => {
+  it("accepts contactId and writes it, closing the silent-strip footgun", async () => {
+    const invoice = await insertInvoice({ status: "open" });
+
+    const [brand] = await db
+      .select()
+      .from(schema.brands)
+      .where(sql`creator_id = ${creatorId}`)
+      .limit(1);
+    const [contact] = await db
+      .insert(schema.contacts)
+      .values({ brandId: brand.id, name: "Late Contact", email: "late@example.com" })
+      .returning();
+
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+    const updated = await caller.update({ id: invoice.id, contactId: contact.id });
+
+    expect(updated.contactId).toBe(contact.id);
+
+    const [row] = await db.select().from(schema.invoices).where(sql`id = ${invoice.id}`);
+    expect(row.contactId).toBe(contact.id);
+  });
+
+  it("rejects a cross-tenant contact loudly instead of silently dropping it", async () => {
+    const invoice = await insertInvoice({ status: "open" });
+
+    const [other] = await db.insert(schema.creators).values({ displayName: "Other" }).returning();
+    const [otherBrand] = await db
+      .insert(schema.brands)
+      .values({ creatorId: other.id, name: "Other Brand" })
+      .returning();
+    const [otherContact] = await db
+      .insert(schema.contacts)
+      .values({ brandId: otherBrand.id, name: "Other Contact", email: "other@example.com" })
+      .returning();
+
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+    await expect(
+      caller.update({ id: invoice.id, contactId: otherContact.id })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    const [row] = await db.select().from(schema.invoices).where(sql`id = ${invoice.id}`);
+    expect(row.contactId).toBeNull();
+  });
+});
