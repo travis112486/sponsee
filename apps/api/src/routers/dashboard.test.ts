@@ -469,6 +469,118 @@ describe("dashboard.overview", () => {
     expect(result.overdue.count).toBe(0);
     expect(result.overdue.mostUrgent).toBeNull();
   });
+
+  it("outstanding totals every open invoice regardless of dueAt", async () => {
+    // Open and overdue.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 1, amountCents: 1000, status: "open", dueAt: new Date("2026-01-01T00:00:00Z") });
+    // Open but not yet due.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealABountyId, number: 2, amountCents: 2000, status: "open", dueAt: new Date("2026-04-01T00:00:00Z") });
+    // Open with no due date.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAHybridId, number: 3, amountCents: 3000, status: "open", dueAt: null });
+    // Paid (must be excluded).
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 4, amountCents: 9000, status: "paid", paidAt: new Date("2026-02-01T00:00:00Z") });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ now: NOW_ISO });
+
+    expect(result.outstanding.count).toBe(3);
+    expect(result.outstanding.totalCents).toBe(6000);
+    // Overdue stays a strict subset of outstanding.
+    expect(result.overdue.count).toBe(1);
+    expect(result.overdue.totalCents).toBe(1000);
+  });
+
+  it("computes previousTotalCents over the same elapsed window of the preceding month", async () => {
+    // Current month (Mar 2026).
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 1, amountCents: 10000, status: "paid", paidAt: new Date("2026-03-05T00:00:00Z") });
+    // Previous month, inside the same-elapsed window (Feb 1 – Feb 18).
+    await insertInvoice({ creatorId: creatorAId, dealId: dealABountyId, number: 2, amountCents: 20000, status: "paid", paidAt: new Date("2026-02-10T00:00:00Z") });
+    // Previous month but after the Feb 18 cutoff — must not count (proves the
+    // window is truncated to the same elapsed offset, not the full month).
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAHybridId, number: 3, amountCents: 70000, status: "paid", paidAt: new Date("2026-02-25T00:00:00Z") });
+    // January — distinct value so an off-by-one window (Jan 1 – Feb 1) would
+    // read 40000, not 20000, and fail.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 4, amountCents: 40000, status: "paid", paidAt: new Date("2026-01-15T00:00:00Z") });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ period: "month", now: NOW_ISO });
+
+    expect(result.revenue.totalCents).toBe(10000);
+    expect(result.revenue.previousTotalCents).toBe(20000);
+  });
+
+  it("returns null previousTotalCents when the prior window has no paid invoice", async () => {
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 1, amountCents: 10000, status: "paid", paidAt: new Date("2026-03-05T00:00:00Z") });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ period: "month", now: NOW_ISO });
+
+    expect(result.revenue.totalCents).toBe(10000);
+    expect(result.revenue.previousTotalCents).toBeNull();
+  });
+
+  it("computes previousTotalCents for quarter and YTD windows", async () => {
+    // Q1 2026.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 1, amountCents: 3000, status: "paid", paidAt: new Date("2026-01-20T00:00:00Z") });
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 2, amountCents: 5000, status: "paid", paidAt: new Date("2026-02-15T00:00:00Z") });
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 3, amountCents: 10000, status: "paid", paidAt: new Date("2026-03-05T00:00:00Z") });
+    // Previous quarter, inside the same-elapsed window (Oct 1 – Dec 18).
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 4, amountCents: 7000, status: "paid", paidAt: new Date("2025-11-15T00:00:00Z") });
+    // Previous quarter but after the Dec 18 cutoff — must not count.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 5, amountCents: 40000, status: "paid", paidAt: new Date("2025-12-20T00:00:00Z") });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+
+    const quarter = await caller.overview({ period: "quarter", now: NOW_ISO });
+    expect(quarter.revenue.totalCents).toBe(18000);
+    expect(quarter.revenue.previousTotalCents).toBe(7000);
+
+    // YTD compares against Jan 1 – Mar 18 2025, which has no paid invoices here.
+    const ytd = await caller.overview({ period: "ytd", now: NOW_ISO });
+    expect(ytd.revenue.totalCents).toBe(18000);
+    expect(ytd.revenue.previousTotalCents).toBeNull();
+  });
+
+  it("computes YTD previousTotalCents as the same window last year", async () => {
+    // 2026 YTD.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 1, amountCents: 10000, status: "paid", paidAt: new Date("2026-03-05T00:00:00Z") });
+    // Last year, inside the comparable window (before Mar 18 2025).
+    await insertInvoice({ creatorId: creatorAId, dealId: dealABountyId, number: 2, amountCents: 20000, status: "paid", paidAt: new Date("2025-02-10T00:00:00Z") });
+    // Last year, but after the comparable cutoff (after Mar 18 2025).
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAHybridId, number: 3, amountCents: 30000, status: "paid", paidAt: new Date("2025-04-01T00:00:00Z") });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ period: "ytd", now: NOW_ISO });
+
+    expect(result.revenue.totalCents).toBe(10000);
+    expect(result.revenue.previousTotalCents).toBe(20000);
+  });
+
+  it("clamps the prior-month end so it never spills into the current month (Mar 31)", async () => {
+    // now = Mar 31. `addZonedMonths(Mar 31, -1)` rolls Feb 31 → Mar 3, so an
+    // unclamped prior window overlaps March and double-counts Mar 1–2 revenue.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 1, amountCents: 5000, status: "paid", paidAt: new Date("2026-03-02T00:00:00Z") });
+    await insertInvoice({ creatorId: creatorAId, dealId: dealABountyId, number: 2, amountCents: 20000, status: "paid", paidAt: new Date("2026-02-15T00:00:00Z") });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ period: "month", now: "2026-03-31T12:00:00Z" });
+
+    expect(result.revenue.totalCents).toBe(5000);
+    expect(result.revenue.previousTotalCents).toBe(20000);
+  });
+
+  it("clamps the prior-quarter end so it never spills into the current quarter (Dec 31)", async () => {
+    // now = Dec 31. `addZonedMonths(Dec 31, -3)` rolls Sep 31 → Oct 1, so an
+    // unclamped prior window overlaps Q4 and double-counts Oct 1 revenue.
+    await insertInvoice({ creatorId: creatorAId, dealId: dealAFlatId, number: 1, amountCents: 3000, status: "paid", paidAt: new Date("2026-10-01T06:00:00Z") });
+    await insertInvoice({ creatorId: creatorAId, dealId: dealABountyId, number: 2, amountCents: 7000, status: "paid", paidAt: new Date("2026-09-10T00:00:00Z") });
+
+    const caller = dashboardRouter.createCaller(mockCtx(creatorAId));
+    const result = await caller.overview({ period: "quarter", now: "2026-12-31T12:00:00Z" });
+
+    expect(result.revenue.totalCents).toBe(3000);
+    expect(result.revenue.previousTotalCents).toBe(7000);
+  });
 });
 
 describe("dashboard.overview period math is creator-local", () => {

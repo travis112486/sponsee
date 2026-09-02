@@ -11,6 +11,7 @@ import {
 } from "@sponsee/db/schema";
 import { dealStages } from "@sponsee/shared";
 import {
+  addZonedMonths,
   formatMonthKey,
   getZonedParts,
   resolveTimeZone,
@@ -62,6 +63,51 @@ function periodBounds(
   // YTD: Jan 1 local through `now` (revenue is attributed to a recorded paid
   // date, so there is never a paidAt in the future to exclude).
   return { start: startOfZonedYear(now, timeZone), end: new Date(now) };
+}
+
+// The like-for-like comparison window for the revenue delta chip: the *same
+// elapsed offset* into the immediately preceding period of the same type.
+//
+// `totalCents` is always period-to-date — `periodBounds` opens at the period
+// start, but a paidAt can never be in the future, so month/quarter revenue is
+// implicitly truncated at `now`. To keep the delta honest, the prior window is
+// truncated the same way: it opens at the prior period's civil start and ends
+// at `now` shifted back one period, clamped to the current period's start.
+//
+// The clamp is not optional. `addZonedMonths` normalises through
+// `normalizeCivil`, which rolls *forward* rather than clamping (its own header
+// warns it is not how to derive a period end). So on the 7 days a year where
+// `now`'s day-of-month exceeds the prior month's length — Mar 29/30/31, May 31,
+// Jul 31, Oct 31, Dec 31 — `addZonedMonths(now, -1)` lands inside the current
+// month (Feb 31 → Mar 3), and the quarter branch does the same at Dec 31
+// (Sep 31 → Oct 1). The prior window then overlaps the current period and the
+// same invoice counts in the numerator and the baseline, manufacturing exactly
+// the fake negative the truncation exists to prevent. Clamping to the current
+// period's start keeps the prior window a strict subset of the prior period
+// (and yields the full prior period at period end, which is correct).
+// All boundaries are creator-local, matching `periodBounds`.
+function previousPeriodBounds(
+  period: "month" | "quarter" | "ytd",
+  now: Date,
+  timeZone: string
+): { start: Date; end: Date } {
+  if (period === "month") {
+    const priorStart = startOfZonedMonthOffset(now, -1, timeZone);
+    const currentStart = startOfZonedMonthOffset(now, 0, timeZone);
+    const shifted = addZonedMonths(now, -1, timeZone);
+    return { start: priorStart, end: shifted > currentStart ? currentStart : shifted };
+  }
+  if (period === "quarter") {
+    const priorStart = startOfZonedQuarterOffset(now, -1, timeZone);
+    const currentStart = startOfZonedQuarterOffset(now, 0, timeZone);
+    const shifted = addZonedMonths(now, -3, timeZone);
+    return { start: priorStart, end: shifted > currentStart ? currentStart : shifted };
+  }
+  // YTD: the shift back is always a full year, so it can never land inside the
+  // current year — no clamp needed (its leap-day overflow is a 1-day widening
+  // inside the prior year, not an overlap).
+  const end = addZonedMonths(now, -12, timeZone);
+  return { start: startOfZonedYear(end, timeZone), end };
 }
 
 export const dashboardRouter = createTRPCRouter({
@@ -121,6 +167,18 @@ export const dashboardRouter = createTRPCRouter({
           if (row.dealType === "flat") byType.flat += row.amountCents;
           else if (row.dealType === "bounty") byType.bounty += row.amountCents;
           else if (row.dealType === "hybrid") byType.hybrid += row.amountCents;
+        }
+      }
+
+      // Prior-period revenue for the delta chip, over the same elapsed offset
+      // of the preceding period. `null` (not 0) when that window has no paid
+      // invoice at all, so the UI can suppress the chip instead of rendering a
+      // fake +100%.
+      const { start: prevStart, end: prevEnd } = previousPeriodBounds(period, now, timeZone);
+      let previousTotalCents: number | null = null;
+      for (const row of attributed) {
+        if (row.paidAt >= prevStart && row.paidAt < prevEnd) {
+          previousTotalCents = (previousTotalCents ?? 0) + row.amountCents;
         }
       }
 
@@ -279,6 +337,14 @@ export const dashboardRouter = createTRPCRouter({
           }
         : null;
 
+      // ── Outstanding open invoices (every open invoice, regardless of dueAt) ──
+      const outstandingRows = await ctx.db
+        .select({ amountCents: invoices.amountCents })
+        .from(invoices)
+        .where(and(eq(invoices.creatorId, ctx.creatorId), eq(invoices.status, "open")));
+
+      const outstandingTotalCents = outstandingRows.reduce((sum, r) => sum + r.amountCents, 0);
+
       return {
         // The zone every boundary above was computed in. Additive to the
         // SPO-233 contract; the client needs it to label a month truthfully
@@ -289,6 +355,7 @@ export const dashboardRouter = createTRPCRouter({
           periodStart,
           periodEnd,
           totalCents,
+          previousTotalCents,
           byType,
           monthly,
         },
@@ -298,6 +365,10 @@ export const dashboardRouter = createTRPCRouter({
           count: overdueRows.length,
           totalCents: overdueTotalCents,
           mostUrgent,
+        },
+        outstanding: {
+          count: outstandingRows.length,
+          totalCents: outstandingTotalCents,
         },
       };
     }),
