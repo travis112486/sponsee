@@ -5,13 +5,14 @@ import {
   stageLabels,
   dealStages,
   platforms,
+  resolveTimeZone,
+  startOfZonedQuarter,
   type DealStage,
   type DealType,
   type Platform,
 } from "@sponsee/shared";
 import { cn } from "@/lib/utils";
 import { platformBgClasses } from "@/lib/platform-tokens";
-import { startOfZonedQuarterMs } from "@/lib/zoned-quarter";
 import { formatCount, useCountUp } from "@/hooks/useCountUp";
 import { BrandMark } from "@/components/shared/BrandMark";
 import { PlatformDots } from "@/components/shared/PlatformDot";
@@ -171,7 +172,7 @@ function invoiceDaysOverdue(i: InvoiceRow): number {
 }
 
 function collectedThisQuarter(deals: PipelineDeal[], timeZone: string): number {
-  const quarterStart = startOfZonedQuarterMs(new Date(), timeZone);
+  const quarterStart = startOfZonedQuarter(new Date(), resolveTimeZone(timeZone)).getTime();
   let total = 0;
   for (const d of deals) {
     for (const i of d.invoices ?? []) {
@@ -528,7 +529,7 @@ export default function Pipeline() {
   const { data: profile } = trpc.settings.getProfile.useQuery();
   // `creators.timezone` is NOT NULL, so this only falls back during the brief
   // window before the profile loads. The value is validated on write (SPO-246)
-  // and an unparseable one still degrades to UTC inside startOfZonedQuarterMs.
+  // and an unparseable one still degrades to UTC inside `resolveTimeZone`.
   const timeZone = profile?.timezone ?? "UTC";
 
   const [typeFilter, setTypeFilter] = useState<"all" | DealType>("all");

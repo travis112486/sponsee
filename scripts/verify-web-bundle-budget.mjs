@@ -85,7 +85,7 @@ const BUDGET_KB = {
   index: 150,
   /**
    * framer-motion's `m` + LazyMotion + the `domAnimation` feature bundle.
-   * 27.20 measured — 22% headroom. Tight enough that swapping `domAnimation`
+   * 29.6 measured — ~15% headroom. Tight enough that swapping `domAnimation`
    * for `domMax` trips it; loose enough that a framer patch release does not.
    */
   motion: 35,

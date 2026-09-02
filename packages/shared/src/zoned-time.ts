@@ -55,7 +55,14 @@ function partsFormatter(timeZone: string): Intl.DateTimeFormat {
   return formatter;
 }
 
-export function isValidTimeZone(timeZone: string): boolean {
+// A deliberately lenient "can Intl parse this at all" check, distinct from the
+// strict region/city validator in `./timezone.js` (`isValidTimeZone` there).
+// That one gates the write path and rejects fixed-offset aliases like "EST";
+// this one only decides whether a persisted value must degrade to UTC on the
+// read path. A value that passes this but fails the write validator ("EST")
+// should never exist in the DB, so keeping the two independent is intentional:
+// the read path must never 500 on a legacy value.
+function isIntlParseableZone(timeZone: string): boolean {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone });
     return true;
@@ -71,7 +78,7 @@ export function isValidTimeZone(timeZone: string): boolean {
  */
 export function resolveTimeZone(timeZone: string | null | undefined): string {
   if (!timeZone) return DEFAULT_TIME_ZONE;
-  return isValidTimeZone(timeZone) ? timeZone : DEFAULT_TIME_ZONE;
+  return isIntlParseableZone(timeZone) ? timeZone : DEFAULT_TIME_ZONE;
 }
 
 /** Milliseconds for a civil date-time read as if it were UTC. */

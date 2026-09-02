@@ -11,7 +11,7 @@
 // every period gets its own expected value; there is no single shared `want`.
 //
 // Too slow for CI (~4 min for both windows over 418 zones); the CI-sized guard
-// lives in apps/api/src/zoned-time.test.ts. Run this by hand after touching
+// lives in packages/shared/src/zoned-time.test.ts. Run this by hand after touching
 // zoned-time.ts, and whenever Node's bundled tzdata moves:
 //
 //   node scripts/verify-zoned-period-seams.mjs --mode=civil --from=2024 --to=2040
@@ -34,7 +34,7 @@ import {
   startOfZonedQuarterOffset,
   startOfZonedWeek,
   startOfZonedWeekOffset,
-} from "../apps/api/src/zoned-time.ts";
+} from "../packages/shared/src/zoned-time.ts";
 import {
   civilMs,
   firstInstantAtOrAfter,

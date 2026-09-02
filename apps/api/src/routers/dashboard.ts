@@ -9,8 +9,8 @@ import {
   deliverables,
   invoiceChaseState,
 } from "@sponsee/db/schema";
-import { dealStages } from "@sponsee/shared";
 import {
+  dealStages,
   formatMonthKey,
   getZonedParts,
   resolveTimeZone,
@@ -22,7 +22,7 @@ import {
   startOfZonedWeekOffset,
   startOfZonedYear,
   zonedMonthKey,
-} from "../zoned-time.js";
+} from "@sponsee/shared";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

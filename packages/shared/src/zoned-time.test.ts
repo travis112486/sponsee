@@ -4,7 +4,6 @@ import {
   addZonedMonths,
   formatMonthKey,
   getZonedParts,
-  isValidTimeZone,
   resolveTimeZone,
   startOfZonedDay,
   startOfZonedMonth,
@@ -18,6 +17,7 @@ import {
   zonedWallClockToUtc,
   type ZonedParts,
 } from "./zoned-time.js";
+import { isValidTimeZone } from "./timezone.js";
 
 const NY = "America/New_York";
 const SYDNEY = "Australia/Sydney";

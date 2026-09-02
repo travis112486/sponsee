@@ -51,7 +51,7 @@ export function monthLabels(key: string): { short: string; long: string } {
 
 /**
  * `YYYY-MM` for an instant as it reads in `timeZone` — the same key the API
- * builds its revenue buckets from (`zonedMonthKey` in `apps/api/src/zoned-time`).
+ * builds its revenue buckets from (`zonedMonthKey` in `@sponsee/shared`).
  *
  * SPO-239 made every period boundary creator-local, so `periodStart` is an
  * instant whose UTC calendar month is *not* the month being reported: the start
