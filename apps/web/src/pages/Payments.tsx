@@ -129,9 +129,17 @@ export default function Payments() {
                     <p className="text-[12px] font-medium text-ink">
                       {invoice.title || `Invoice #${invoice.number}`} — Step {event.step}
                     </p>
-                    <p className="text-[11px] text-ink-3">
-                      To: {event.toEmail}
-                    </p>
+                    {event.toEmail ? (
+                      <p className="text-[11px] text-ink-3">
+                        To: {event.toEmail}
+                      </p>
+                    ) : (
+                      <p className="mt-0.5 flex items-center gap-1 text-[11px] font-medium text-brick">
+                        <AlertTriangle className="h-3 w-3 shrink-0" />
+                        No recipient email — add a primary contact to this deal
+                        before sending.
+                      </p>
+                    )}
                     {editingEventId === event.id ? (
                       <div className="mt-2 space-y-2">
                         <input
@@ -154,7 +162,7 @@ export default function Payments() {
                                 body: editBody,
                               })
                             }
-                            disabled={editAndSendChase.isPending}
+                            disabled={editAndSendChase.isPending || !event.toEmail}
                             className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white hover:bg-pine-hover disabled:opacity-50"
                           >
                             <Send className="h-3 w-3" />
@@ -193,7 +201,7 @@ export default function Payments() {
                       </button>
                       <button
                         onClick={() => approveChase.mutate({ chaseEventId: event.id })}
-                        disabled={approveChase.isPending}
+                        disabled={approveChase.isPending || !event.toEmail}
                         className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white transition-colors hover:bg-pine-hover disabled:opacity-50"
                       >
                         <CheckCircle2 className="h-3 w-3" />

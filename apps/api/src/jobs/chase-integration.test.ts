@@ -4,6 +4,9 @@ import * as schema from "@sponsee/db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { runChaseTick, sendChaseEmail } from "./chase-tick.js";
 import { chaseRouter } from "../routers/chase.js";
+import { brandRouter } from "../routers/brand.js";
+import { dealsRouter } from "../routers/deals.js";
+import { invoiceRouter } from "../routers/invoice.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
 import { spawn, type ChildProcess, execSync } from "child_process";
@@ -1351,6 +1354,152 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(event).toBeDefined();
     expect(event.updatedAt).not.toBeNull();
     expect(new Date(event.updatedAt!).getTime()).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * SPO-298 — the missing-contact dead end.
+ *
+ * The backend contact surface (`brand.addContact`, `deals.create/update` with
+ * `primaryContactId`, `invoice.create` with `contactId`) existed, but the web
+ * app never called it, so every deal's `primaryContactId` was null and every
+ * chase email died at approve with "No recipient email configured". This suite
+ * drives the chain the UI now exercises — through the routers, not by
+ * hand-inserting a contact — and proves a chase email reaches a real recipient
+ * instead of the approve guard.
+ */
+describe("SPO-298 contact capture end-to-end (router-driven)", () => {
+  async function seedCreatorWithBrandAndTemplate() {
+    const [creator] = await db
+      .insert(schema.creators)
+      .values({ displayName: "Contact Capture Streamer" })
+      .returning();
+
+    await db.insert(schema.user).values({
+      id: `user-${creator.id}`,
+      name: "Test Creator",
+      email: "creator@example.com",
+    });
+    await db.insert(schema.memberships).values({
+      userId: `user-${creator.id}`,
+      creatorId: creator.id,
+      role: "owner",
+    });
+
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ creatorId: creator.id, name: "Capture Brand" })
+      .returning();
+
+    // Step-1 template must exist (and be enabled) before invoice.create so it
+    // can compute the armed chase state's nextActionAt.
+    await db.insert(schema.chaseTemplates).values({
+      creatorId: creator.id,
+      step: 1,
+      name: "Friendly reminder",
+      offsetDays: 1,
+      subject: "Payment reminder for {invoice_id}",
+      body: "Hi {brand_contact}, please pay {amount} for {deal_title}.",
+      enabled: true,
+    });
+
+    return { creator, brand };
+  }
+
+  it("deal -> contact -> invoice -> overdue -> chase-tick -> approve reaches an actual send", async () => {
+    const { creator, brand } = await seedCreatorWithBrandAndTemplate();
+    const ctx = mockCtx(creator.id);
+
+    // 1) Contact captured through brand.addContact, exactly as the UI does.
+    const brandCaller = brandRouter.createCaller(ctx);
+    const contact = await brandCaller.addContact({
+      brandId: brand.id,
+      name: "Jane Buyer",
+      email: "jane@example.com",
+      role: "Sponsorships",
+    });
+    expect(contact.email).toBe("jane@example.com");
+
+    // 2) Deal created with that contact as its primary contact.
+    const dealsCaller = dealsRouter.createCaller(ctx);
+    const deal = await dealsCaller.create({
+      brandId: brand.id,
+      primaryContactId: contact.id,
+      title: "Capture Deal",
+      type: "flat",
+      valueCents: 10000,
+    });
+    expect(deal.primaryContactId).toBe(contact.id);
+
+    // 3) Invoice created from the deal carrying a non-null contactId, already
+    //    past due so chase-tick arms it immediately.
+    const overdue = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const invoiceCaller = invoiceRouter.createCaller(ctx);
+    const invoice = await invoiceCaller.create({
+      dealId: deal.id,
+      contactId: contact.id,
+      amountCents: 10000,
+      title: "Capture Invoice",
+      dueAt: overdue,
+    });
+    expect(invoice.contactId).toBe(contact.id);
+
+    // 4) chase-tick resolves the recipient from the invoice's contact.
+    const created = await runChaseTick();
+    expect(created).toBe(1);
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+    expect(event.toEmail).toBe("jane@example.com");
+
+    // 5) Approve passes the recipient guard and enqueues a real send.
+    const chaseCaller = chaseRouter.createCaller(ctx);
+    const result = await chaseCaller.approve({ chaseEventId: event.id });
+    expect(result).toMatchObject({ success: true, queued: true });
+
+    const jobArgs = mockBossSend.mock.calls[0][1];
+    expect(jobArgs.toEmail).toBe("jane@example.com");
+  });
+
+  it("regression guard: a contact-less invoice yields a null toEmail that the approve guard rejects loudly", async () => {
+    const { creator, brand } = await seedCreatorWithBrandAndTemplate();
+    const ctx = mockCtx(creator.id);
+
+    const dealsCaller = dealsRouter.createCaller(ctx);
+    const deal = await dealsCaller.create({
+      brandId: brand.id,
+      title: "No Contact Deal",
+      type: "flat",
+    });
+
+    const overdue = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const invoiceCaller = invoiceRouter.createCaller(ctx);
+    const invoice = await invoiceCaller.create({
+      dealId: deal.id,
+      amountCents: 10000,
+      title: "No Contact Invoice",
+      dueAt: overdue,
+    });
+
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+    expect(event.toEmail).toBeNull();
+
+    // The failure is loud (a typed BAD_REQUEST), never a silent drop.
+    const chaseCaller = chaseRouter.createCaller(ctx);
+    await expect(
+      chaseCaller.approve({ chaseEventId: event.id })
+    ).rejects.toSatisfy(
+      (err: { code?: string; message?: string }) =>
+        err.code === "BAD_REQUEST" && err.message === "No recipient email configured"
+    );
+    expect(mockBossSend).not.toHaveBeenCalled();
   });
 });
 

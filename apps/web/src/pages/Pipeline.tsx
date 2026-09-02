@@ -16,6 +16,7 @@ import { formatCount, useCountUp } from "@/hooks/useCountUp";
 import { BrandMark } from "@/components/shared/BrandMark";
 import { PlatformDots } from "@/components/shared/PlatformDot";
 import { Progress } from "@/components/ui/progress";
+import { ContactPicker } from "@/components/ContactPicker";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -130,6 +131,7 @@ type PipelineDeal = {
   paymentTerms?: string | null;
   valueNote?: string | null;
   stageEnteredAt?: string | Date | null;
+  primaryContactId?: string | null;
   brand?: { name?: string | null } | null;
   platforms?: readonly string[] | null;
   notes?: string | null;
@@ -628,6 +630,7 @@ export default function Pipeline() {
     }
     createInvoice.mutate({
       dealId: deal.id,
+      contactId: deal.primaryContactId ?? undefined,
       title: `${deal.title} — Invoice`,
       amountCents: deal.valueCents,
       currency: (deal.currency ?? "USD") as "USD",
@@ -954,6 +957,9 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
     onSuccess: () => utils.brand.list.invalidate(),
     onError: (err) => toast.error(err.message || "Failed to create brand"),
   });
+  const addContact = trpc.brand.addContact.useMutation({
+    onError: (err) => toast.error(err.message || "Failed to add contact"),
+  });
   const createDeal = trpc.deals.create.useMutation({
     onSuccess: () => {
       utils.deals.list.invalidate();
@@ -967,6 +973,12 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
   const [selectedBrandId, setSelectedBrandId] = useState("");
   const [newBrandName, setNewBrandName] = useState("");
   const [newBrandCategory, setNewBrandCategory] = useState("");
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+  // Inline contact fields for the "new brand" path, where the brand (and so the
+  // contact's brandId) does not exist until the deal is submitted.
+  const [contactName, setContactName] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactRole, setContactRole] = useState("");
   const [title, setTitle] = useState("");
   const [type, setType] = useState<"flat" | "bounty" | "hybrid">("flat");
   const [valueDollars, setValueDollars] = useState("");
@@ -1063,6 +1075,23 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
       return;
     }
 
+    // In the "new brand" path the contact's brandId only exists once the brand
+    // is created above, so the inline contact is created here, not earlier.
+    let primaryContactId = selectedContactId;
+    if (brandMode === "create" && contactName.trim() && contactEmail.trim()) {
+      try {
+        const contact = await addContact.mutateAsync({
+          brandId,
+          name: contactName.trim(),
+          email: contactEmail.trim(),
+          role: contactRole.trim() || undefined,
+        });
+        primaryContactId = contact.id;
+      } catch {
+        return;
+      }
+    }
+
     const valueCents = Math.round(parseFloat(valueDollars || "0") * 100);
     const ccvNum = ccv.trim() ? parseInt(ccv, 10) : undefined;
     const sponsoredMinutes = durationHours.trim()
@@ -1071,6 +1100,7 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
 
     createDeal.mutate({
       brandId,
+      primaryContactId: primaryContactId ?? undefined,
       title: title.trim(),
       type,
       valueCents,
@@ -1132,7 +1162,11 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
             {brandMode === "select" ? (
               <select
                 value={selectedBrandId}
-                onChange={(e) => setSelectedBrandId(e.target.value)}
+                onChange={(e) => {
+                  setSelectedBrandId(e.target.value);
+                  setSelectedContactId(null);
+                }}
+                aria-label="Brand"
                 className="mt-2 w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
               >
                 <option value="">Select a brand…</option>
@@ -1154,6 +1188,46 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
                   value={newBrandCategory}
                   onChange={(e) => setNewBrandCategory(e.target.value)}
                   placeholder="Category (optional)"
+                  className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Primary contact */}
+          <div>
+            <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3">Primary contact</label>
+            {brandMode === "select" ? (
+              selectedBrandId ? (
+                <ContactPicker
+                  brandId={selectedBrandId}
+                  selectedId={selectedContactId}
+                  onSelect={setSelectedContactId}
+                />
+              ) : (
+                <p className="mt-1.5 text-[12px] text-ink-3">
+                  Select a brand to pick or add its contact.
+                </p>
+              )
+            ) : (
+              <div className="mt-1.5 space-y-2">
+                <input
+                  value={contactName}
+                  onChange={(e) => setContactName(e.target.value)}
+                  placeholder="Contact name"
+                  className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
+                />
+                <input
+                  type="email"
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
+                  placeholder="Contact email"
+                  className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
+                />
+                <input
+                  value={contactRole}
+                  onChange={(e) => setContactRole(e.target.value)}
+                  placeholder="Role (optional)"
                   className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
                 />
               </div>
