@@ -194,22 +194,25 @@ every name we hold" — but SPO-292 decided that four contacts keep the
 identity-withholding VTuber personas, so there is no name to push and the flag
 would block on rows nobody intends to fix. That decision covers all four of them
 for good — it is not scoped to Wave 1 and should not be narrowed just because one
-of them is not currently in Wave 1's cohort. Which four is in the roster, which
-is not in this repo — see
-[where the roster and ledger live](#where-the-roster-and-ledger-live). Naming
-them here would republish the roster a line at a time.
+of them is not currently in Wave 1's cohort. The four are Sinder, Snuffy,
+Dokibird and Shxtou. They are named here deliberately: a fallback rule that
+cannot say *which* rows it covers cannot be checked against a preflight on send
+day, which is the only thing this paragraph is for. What is withheld is the part
+that would republish the target list — their addresses and roster row IDs are
+not in this repo and must not be — see
+[where the roster and ledger live](#where-the-roster-and-ledger-live).
 
 Wave 1's cohort is narrower than SPO-292's four, though: the `us_only`
-jurisdiction cut (SPO-271/SPO-389) holds one of the four out of Wave 1 as a
+jurisdiction cut (SPO-271/SPO-389) holds Dokibird out of Wave 1 as a
 non-US contact, so only the SPO-292 rows that also land on *this* roster fall
 back here. Read the census instead of a fixed count — every fallback recipient is
 printed by default. Cross that list against SPO-292's four rows and derive
 personalized as (email SEND rows) − (fallback rows among them), rather than
 hardcoding a figure that moves every time the roster or the jurisdiction cut
 does. A green Wave 1A preflight should name exactly the SPO-292 rows that are on
-the current roster and no others. As of the current roster that is three of the
-four — the fourth is out of cohort, not gone from the decision — 3 of the 11
-email SEND rows, so 8 of 11 render a personalized greeting.
+the current roster and no others. As of the current roster that is Sinder,
+Snuffy and Shxtou — Dokibird out of cohort, not gone from the decision — 3 of the
+11 email SEND rows, so 8 of 11 render a personalized greeting.
 
 Below is the shape of that T1/email run. The counts, decisions and column layout
 are Wave 1's; **the identities are not** — they are the invented rows of
@@ -374,8 +377,13 @@ Two things close it:
   not say this; the gate enforces it anyway.
 - **`block` is not `suppress`.** A block means the opt-out would be broken for
   that recipient, which is worse than not mailing them. It fails the whole touch.
-- **`skip: no-address`** marks the X-DM cohort by design — rows that carry an
-  `xHandle` and no `email`, not an SPO-267 backlog. It does not fail the touch.
+- **`skip: no-address`** marks the rows with no address *on the channel you are
+  running*, by design, not an SPO-267 backlog. It does not fail the touch. Which
+  cohort it names therefore flips with `--channel`: on `email` it is the X-DM
+  rows (an `xHandle` and no `email`), and on `dm` it is the email rows (an
+  `email` and no `xHandle`) — the larger of the two on the current roster. Read
+  the count against the channel in the header; a `no-address` skip total that
+  looks alarmingly high on `dm` is the email cohort being skipped correctly.
 - Emails and handles are matched case-insensitively, with a leading `@` stripped.
   An opt-out that misses because the ledger recorded `Ada@Example.com` is exactly
   the failure this gate exists to prevent.
