@@ -143,25 +143,30 @@ opt-out, and `block` is reserved for the latter.
 
 **Wave 1 runs the SPO-280 acceptance check with the flag off.** Building an
 audience is where the flag belongs in general — it is the check for "did we push
-every name we hold" — but SPO-292 decided that four contacts (Sinder, Snuffy,
-Dokibird, Shxtou) keep the `Hey there —` fallback permanently: SPO-269 recorded
-them as deliberately identity-withholding VTuber personas, so there is no name to
-push and the flag would block on rows nobody intends to fix. That decision covers
-all four of them for good — it is not scoped to Wave 1 and should not be narrowed
-just because one of them is not currently in Wave 1's cohort.
+every name we hold" — but SPO-292 decided that four contacts keep the
+`Hey there —` fallback permanently: SPO-269 recorded them as deliberately
+identity-withholding VTuber personas, so there is no name to push and the flag
+would block on rows nobody intends to fix. That decision covers all four of them
+for good — it is not scoped to Wave 1 and should not be narrowed just because one
+of them is not currently in Wave 1's cohort. The four are named on SPO-292 and in
+the roster; this file does not repeat them — see
+[identities live off this file](#identities-live-off-this-file).
 
 Wave 1's cohort is narrower than SPO-292's four, though: the `us_only`
-jurisdiction cut (SPO-271/SPO-389) holds Dokibird out of Wave 1 as a non-US
-contact, so only the SPO-292 names that also land on *this* roster fall back
-here. Read the census instead of a fixed count — every fallback recipient is
-printed by default. Cross that list against SPO-292's four names and derive
+jurisdiction cut (SPO-271/SPO-389) holds one of the four out of Wave 1 as a
+non-US contact, so only the SPO-292 rows that also land on *this* roster fall
+back here. Read the census instead of a fixed count — every fallback recipient is
+printed by default. Cross that list against SPO-292's four rows and derive
 personalized as (email SEND rows) − (fallback rows among them), rather than
 hardcoding a figure that moves every time the roster or the jurisdiction cut
 does. A green Wave 1A preflight should name exactly the SPO-292 rows that are on
-the current roster and no others. As of the roster in this repo that is Sinder,
-Snuffy and Shxtou — Dokibird out of cohort, not gone from the decision — 3 of the
-11 email SEND rows, so 8 of 11 render a personalized greeting. Observed on a live
-T1/email run:
+the current roster and no others. As of the roster in this repo that is three of
+the four — the fourth is out of cohort, not gone from the decision — 3 of the 11
+email SEND rows, so 8 of 11 render a personalized greeting.
+
+Here is the shape of a T1/email run. The counts, decisions and column layout are
+as observed; **every identity below is masked** — see
+[identities live off this file](#identities-live-off-this-file):
 
 ```
 Wave 1 preflight — T1 / email
@@ -169,31 +174,31 @@ roster: outreach/wave1-roster.json (16 rows)
 ledger: outreach/wave1-ledger.jsonl (0 entries)
 endpoint: https://api.resend.com
 ────────────────────────────────────────────────────────────────────────────
-  SEND     T90Official                  t90officialbusiness@gmail.com  [t90official]
-  SEND     CityPlannerPlays             philip@cityplannerplays.com  [cityplannerplays]
-  SEND     Snuffy                       business@snuffy.moe  [snuffy]
-  SEND     Shxtou                       shoutoyt@gmail.com  [shxtou]
-  SEND     Sinder                       business@sinder.gg  [sinder]
-  SEND     Eric Rosen                   contact@imrosen.com  [eric-rosen]
-  SEND     Wolfgang Poker               awseibt.business@gmail.com  [wolfgang-poker]
-  SEND     Ham Radio Crash Course       leah@hamtactical.com  [ham-radio-crash-course]
-  SEND     Moore's Law Is Dead          mlhbdead@gmail.com  [moores-law-is-dead]
-  SEND     Sajam                        slyonnn@gmail.com  [sajam]
-  SEND     GrandPOObear                 gpbmerch@gmail.com  [grandpoobear]
-  SKIP     Craft Computing              no-address  [craft-computing]
-  SKIP     Lawrence Systems             no-address  [lawrence-systems]
-  SKIP     Brian_F                      no-address  [brian_f]
-  SKIP     LordKnight                   no-address  [lordknight]
-  SKIP     TTone                        no-address  [ttone]
+  SEND     Creator 01                   creator-01@example.com  [creator-01]
+  SEND     Creator 02                   creator-02@example.com  [creator-02]
+  SEND     Creator 03                   creator-03@example.com  [creator-03]
+  SEND     Creator 04                   creator-04@example.com  [creator-04]
+  SEND     Creator 05                   creator-05@example.com  [creator-05]
+  SEND     Creator 06                   creator-06@example.com  [creator-06]
+  SEND     Creator 07                   creator-07@example.com  [creator-07]
+  SEND     Creator 08                   creator-08@example.com  [creator-08]
+  SEND     Creator 09                   creator-09@example.com  [creator-09]
+  SEND     Creator 10                   creator-10@example.com  [creator-10]
+  SEND     Creator 11                   creator-11@example.com  [creator-11]
+  SKIP     Creator 12                   no-address  [creator-12]
+  SKIP     Creator 13                   no-address  [creator-13]
+  SKIP     Creator 14                   no-address  [creator-14]
+  SKIP     Creator 15                   no-address  [creator-15]
+  SKIP     Creator 16                   no-address  [creator-16]
 ────────────────────────────────────────────────────────────────────────────
 send 11   suppress 0   skip 5   block 0
 
 email: 0 of 11 SEND row(s) not covered by the audience read
 
 No first_name on the contact (3) — these render v5's "Hey there —" fallback:
-  business@snuffy.moe  no confirmed name on either side — needs an SPO-269 lookup  [snuffy]
-  shoutoyt@gmail.com  no confirmed name on either side — needs an SPO-269 lookup  [shxtou]
-  business@sinder.gg  no confirmed name on either side — needs an SPO-269 lookup  [sinder]
+  creator-03@example.com  no confirmed name on either side — needs an SPO-269 lookup  [creator-03]
+  creator-04@example.com  no confirmed name on either side — needs an SPO-269 lookup  [creator-04]
+  creator-05@example.com  no confirmed name on either side — needs an SPO-269 lookup  [creator-05]
   (warning only — pass --require-first-names to make this block)
 
 Clear to send T1 on email to 11 recipient(s).
@@ -213,7 +218,7 @@ sufficient for a defect:
 | `null` | `null`  | `Hey there —` | **blocks**              |
 | `Ada`  | `null`  | `Hey there —` | **blocks**              |
 | `Ada`  | `Adam`  | `Hey Adam —`  | **blocks** (`CONFLICT`) |
-| `null` | `Jeff`  | `Hey Jeff —`  | passes — greets correctly |
+| `null` | `Kip`   | `Hey Kip —`   | passes — greets correctly |
 | `Ada`  | `Ada`   | `Hey Ada —`   | passes                  |
 
 Row 1 is the one to watch: the two sides agree, so it produces no drift line at
@@ -226,11 +231,33 @@ precisely because we never confirmed a name for them.
 
 ## File formats
 
-Both files are in the repo — `outreach/wave1-roster.json` is the roster and
-`outreach/wave1-ledger.jsonl` is the suppression ledger. SPO-267 and SPO-280,
-which resolved contact channels and populated the audience, are both closed;
-these are the live artifacts the preflight reads on send day, not a preview of
-where they will land.
+### Identities live off this file
+
+`outreach/wave1-roster.json` is the roster and `outreach/wave1-ledger.jsonl` is
+the suppression ledger. SPO-267 and SPO-280, which resolved contact channels and
+populated the audience, are both closed — these are the live artifacts the
+preflight reads on send day, not a preview of where they will land.
+
+**Neither belongs in version control.** They carry real creators' names and
+business addresses, and the ledger accumulates named people's recorded opt-outs;
+**this repository is public**. SPO-415 decided both are gitignored working files
+that live on the send operator's machine only, and SPO-417 is what removes them
+from the index — so if `git ls-files outreach/` still lists them, that removal has
+not landed yet and nothing that publishes them may merge.
+
+The tracked artifact is `outreach/wave1-roster.example.json`: the same schema, row
+count and channel mix as the real roster, with every identity masked. Copy it to
+`outreach/wave1-roster.json` and fill it in. `--roster` and `--ledger` take those
+real local paths, which is what every command in this file passes. There is no
+example ledger — an empty file is the correct T1 starting state, and the format is
+specified below.
+
+The same rule governs this document. **Every identity in every example here — the
+census above included — is masked, and no real name, address, handle or roster id
+may be pasted back in.** A real address in this file is a disclosure, not a typo:
+the census is the whole target list in the most greppable form there is. Quote
+counts and decisions freely; identities belong in the roster and on the ticket
+that decided them.
 
 `--roster` — JSON array (or `{"roster": [...]}`). `id` must be stable and unique,
 and no two rows may share an email — nor an `xHandle`. Either collision is one
