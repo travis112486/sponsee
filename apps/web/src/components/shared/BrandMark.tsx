@@ -95,6 +95,12 @@ export function BrandMark({
         style={{ width: size, height: size }}
       >
         <img
+          // Remount on domain change. The per-domain `failedDomain` state above
+          // is what the jsdom regression pins, but the key guarantees a real
+          // browser tears down the old <img> (and any in-flight load / stale
+          // frame) instead of mutating `src` on a retained node — behaviour a
+          // jsdom `fireEvent.error` cannot observe. Kept deliberately; if it is
+          // ever removed, re-check real-browser retry, not just the test.
           key={cleanDomain}
           src={brandIconUrl(cleanDomain)}
           alt=""

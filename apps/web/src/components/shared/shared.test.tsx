@@ -94,6 +94,24 @@ describe("BrandMark", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("span")).toHaveTextContent("VE");
   });
+
+  it("retries the logo after the domain changes, and stays on the monogram for the failed one", () => {
+    const { container, rerender } = render(
+      <BrandMark brand="Voltaic Energy" domain="voltaic.energy" />
+    );
+    fireEvent.error(container.querySelector("img")!);
+    expect(container.querySelector("img")).toBeNull();
+
+    // Brand website edited -> must retry the NEW domain.
+    rerender(<BrandMark brand="Voltaic Energy" domain="https://www.redbull.com/energy" />);
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute("src")).toBe("https://unavatar.io/redbull.com?fallback=false");
+
+    // Editing back to the known-bad domain still shows the monogram (no flicker loop).
+    rerender(<BrandMark brand="Voltaic Energy" domain="voltaic.energy" />);
+    expect(container.querySelector("img")).toBeNull();
+  });
 });
 
 // The rule itself is pinned by packages/shared/src/brand-domain.test.ts — as of
