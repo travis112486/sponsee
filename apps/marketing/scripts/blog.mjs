@@ -369,6 +369,11 @@ function shell({ titleTag, description, canonical, ogType = "article", head = ""
     <meta property="og:type" content="${escapeHtml(ogType)}" />
     <meta property="og:url" content="${escapeHtml(canonical)}" />
     <meta property="og:image" content="${SITE_ORIGIN}/og-image.png" />
+    <!-- Dimensions must match public/og-image.png; regenerate from og/og.html if the asset changes. -->
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Sponsee — Run your sponsorships like an agency. Keep 100%. The sponsorship CRM for streamers on Twitch, YouTube, TikTok, and Kick." />
+    <meta property="og:site_name" content="Sponsee" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="canonical" href="${escapeHtml(canonical)}" />
     ${FONTS_LINK}
