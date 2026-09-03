@@ -1391,8 +1391,8 @@ describe("SPO-298 contact capture end-to-end (router-driven)", () => {
       .values({ creatorId: creator.id, name: "Capture Brand" })
       .returning();
 
-    // Step-1 template must exist (and be enabled) before invoice.create so it
-    // can compute the armed chase state's nextActionAt.
+    // Step-1 template must exist (and be enabled) for chase to compute a
+    // nextActionAt once armed.
     await db.insert(schema.chaseTemplates).values({
       creatorId: creator.id,
       step: 1,
@@ -1404,6 +1404,19 @@ describe("SPO-298 contact capture end-to-end (router-driven)", () => {
     });
 
     return { creator, brand };
+  }
+
+  // invoice.create no longer arms chase (SPO-363 — chase arms on invoice.send).
+  // These tests exercise chase-tick/approve directly, not the send path, so
+  // arm the state the same way invoice.send would rather than invoking a
+  // real provider send here.
+  async function armChase(invoiceId: string, nextActionAt: Date) {
+    await db.insert(schema.invoiceChaseState).values({
+      invoiceId,
+      mode: "armed",
+      nextStep: 1,
+      nextActionAt,
+    });
   }
 
   it("deal -> contact -> invoice -> overdue -> chase-tick -> approve reaches an actual send", async () => {
@@ -1443,6 +1456,7 @@ describe("SPO-298 contact capture end-to-end (router-driven)", () => {
       dueAt: overdue,
     });
     expect(invoice.contactId).toBe(contact.id);
+    await armChase(invoice.id, new Date(Date.now() - 24 * 60 * 60 * 1000));
 
     // 4) chase-tick resolves the recipient from the invoice's contact.
     const created = await runChaseTick();
@@ -1482,6 +1496,7 @@ describe("SPO-298 contact capture end-to-end (router-driven)", () => {
       title: "No Contact Invoice",
       dueAt: overdue,
     });
+    await armChase(invoice.id, new Date(Date.now() - 24 * 60 * 60 * 1000));
 
     await runChaseTick();
 
@@ -1523,6 +1538,7 @@ describe("SPO-298 contact capture end-to-end (router-driven)", () => {
       title: "Contact After Invoice",
       dueAt: overdue,
     });
+    await armChase(invoice.id, new Date(Date.now() - 24 * 60 * 60 * 1000));
 
     await runChaseTick();
 

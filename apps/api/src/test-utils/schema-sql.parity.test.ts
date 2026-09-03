@@ -139,6 +139,7 @@ async function readIndexes(client: PGlite): Promise<IndexRow[]> {
  */
 const ENUM_COLUMN_ALLOWLIST = new Set([
   "activity_events.kind",
+  "brand_icon_cache.outcome",
   "chase_events.status",
   "contracts.status",
   "creator_files.scope",
@@ -153,6 +154,7 @@ const ENUM_COLUMN_ALLOWLIST = new Set([
   "deliverables.platform",
   "deliverables.status",
   "invoice_chase_state.mode",
+  "invoice_deliveries.status",
   "invoices.status",
   "invoices.terms",
   "proofs.kind",
