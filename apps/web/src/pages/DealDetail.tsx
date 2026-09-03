@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { BenchmarkBand } from "@/components/BenchmarkBand";
 import { ContractCard } from "@/components/ContractCard";
 import { ContactPicker } from "@/components/ContactPicker";
+import { BrandMark, normalizeBrandDomain } from "@/components/shared/BrandMark";
 import {
   ArrowLeft,
   Check,
@@ -28,6 +29,7 @@ import {
   Link2,
   Upload,
   ExternalLink,
+  Pencil,
 } from "lucide-react";
 import QueryError from "@/components/QueryError";
 import {
@@ -95,6 +97,16 @@ export default function DealDetail() {
     onError: (err) => toast.error(err.message || "Failed to update deal"),
   });
 
+  const updateBrand = trpc.brand.update.useMutation({
+    onSuccess: () => {
+      utils.deals.getById.invalidate({ id: id! });
+      utils.deals.list.invalidate();
+      setEditingField(null);
+      setBrandDomainError(null);
+    },
+    onError: (err) => toast.error(err.message || "Failed to update brand"),
+  });
+
   const createInvoice = trpc.invoice.create.useMutation({
     onSuccess: () => {
       utils.deals.getById.invalidate({ id: id! });
@@ -151,6 +163,7 @@ export default function DealDetail() {
 
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>("");
+  const [brandDomainError, setBrandDomainError] = useState<string | null>(null);
   const [showContactPicker, setShowContactPicker] = useState(false);
   const [showAddDeliverable, setShowAddDeliverable] = useState(false);
   const [deliverableTitle, setDeliverableTitle] = useState("");
@@ -220,6 +233,27 @@ export default function DealDetail() {
     }
     updateDeal.mutate(payload as { id: string });
     setEditingField(null);
+  }
+
+  function startBrandDomainEdit() {
+    if (!deal?.brand) return;
+    setEditingField("brandDomain");
+    setEditValue(deal.brand.domain ?? "");
+    setBrandDomainError(null);
+  }
+
+  function saveBrandDomain() {
+    if (!deal?.brand) return;
+    const raw = editValue;
+    const normalized = normalizeBrandDomain(raw);
+    if (raw.trim() && normalized === null) {
+      setBrandDomainError("Enter a website like redbull.com");
+      return;
+    }
+    updateBrand.mutate({
+      brandId: deal.brand.id,
+      domain: raw.trim() ? normalized : null,
+    });
   }
 
   function handleAddEvidence(e: React.FormEvent, deliverableId: string) {
@@ -323,27 +357,93 @@ export default function DealDetail() {
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
-                deal.stage === "inbound" && "bg-ink-3/10 text-ink-2",
-                deal.stage === "negotiating" && "bg-amber-tint text-amber",
-                deal.stage === "contract_sent" && "bg-pine-tint text-pine",
-                deal.stage === "live" && "bg-pine/10 text-pine",
-                deal.stage === "delivered" && "bg-blue-50 text-blue-600",
-                deal.stage === "paid" && "bg-pine-tint text-pine"
-              )}
-            >
-              {stageLabels[deal.stage]}
-            </span>
-            <span className="text-[12px] text-ink-3">
-              {deal.brand?.name}
-            </span>
-          </div>
+        <div className="flex items-start gap-3">
+          <BrandMark brand={deal.brand?.name ?? ""} domain={deal.brand?.domain} size={40} />
+          <div>
+            <div className="group flex items-center gap-2">
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+                  deal.stage === "inbound" && "bg-ink-3/10 text-ink-2",
+                  deal.stage === "negotiating" && "bg-amber-tint text-amber",
+                  deal.stage === "contract_sent" && "bg-pine-tint text-pine",
+                  deal.stage === "live" && "bg-pine/10 text-pine",
+                  deal.stage === "delivered" && "bg-blue-50 text-blue-600",
+                  deal.stage === "paid" && "bg-pine-tint text-pine"
+                )}
+              >
+                {stageLabels[deal.stage]}
+              </span>
+              <span className="text-[12px] text-ink-3">
+                {deal.brand?.name}
+              </span>
 
-          {editingField === "title" ? (
+              {deal.brand &&
+                (editingField === "brandDomain" ? (
+                  <span className="flex items-center gap-1">
+                    <input
+                      value={editValue}
+                      onChange={(e) => {
+                        setEditValue(e.target.value);
+                        setBrandDomainError(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          saveBrandDomain();
+                        } else if (e.key === "Escape") {
+                          setEditingField(null);
+                          setBrandDomainError(null);
+                        }
+                      }}
+                      placeholder="brand.com"
+                      autoFocus
+                      className="w-44 rounded border border-hairline px-2 py-0.5 text-[12px] text-ink outline-none focus:border-pine"
+                    />
+                    <button
+                      onClick={saveBrandDomain}
+                      className="text-pine"
+                      aria-label="Save website"
+                    >
+                      <Check className="h-3 w-3" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditingField(null);
+                        setBrandDomainError(null);
+                      }}
+                      className="text-ink-3"
+                      aria-label="Cancel website edit"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ) : deal.brand.domain ? (
+                  <>
+                    <span className="text-[12px] text-ink-3"> · {deal.brand.domain}</span>
+                    <button
+                      onClick={startBrandDomainEdit}
+                      className="text-ink-3 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+                      aria-label="Edit website"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={startBrandDomainEdit}
+                    className="text-[12px] text-ink-3 hover:text-ink-2 hover:underline"
+                  >
+                    Add website
+                  </button>
+                ))}
+            </div>
+
+            {brandDomainError && (
+              <p className="mt-1 text-[12px] text-brick">{brandDomainError}</p>
+            )}
+
+            {editingField === "title" ? (
             <div className="mt-1 flex items-center gap-2">
               <input
                 value={editValue}
@@ -366,6 +466,7 @@ export default function DealDetail() {
               {deal.title}
             </h1>
           )}
+          </div>
         </div>
 
         <div className="text-right">

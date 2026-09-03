@@ -14,6 +14,9 @@ class ResizeObserverStub {
 globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
 
 const updateDeal = vi.fn();
+const updateBrand = vi.fn();
+const invalidateDealGetById = vi.fn();
+const invalidateDealsList = vi.fn();
 
 const contact = {
   id: "c1",
@@ -40,7 +43,7 @@ const deal = {
   notes: null,
   primaryContactId: null as string | null,
   primaryContact: null as typeof contact | null,
-  brand: { id: "b1", name: "Acme" },
+  brand: { id: "b1", name: "Acme", domain: null as string | null },
   deliverables: [],
 };
 
@@ -50,7 +53,7 @@ let contactsFixture: typeof contact[] = [contact];
 vi.mock("@/trpc", () => ({
   trpc: {
     useUtils: () => ({
-      deals: { getById: { invalidate: vi.fn() }, list: { invalidate: vi.fn() } },
+      deals: { getById: { invalidate: invalidateDealGetById }, list: { invalidate: invalidateDealsList } },
       invoice: { list: { invalidate: vi.fn() } },
       brand: { contacts: { invalidate: vi.fn() } },
       proof: { listByDeal: { invalidate: vi.fn() } },
@@ -103,6 +106,15 @@ vi.mock("@/trpc", () => ({
       addContact: {
         useMutation: () => ({ mutate: vi.fn(), isPending: false }),
       },
+      update: {
+        useMutation: (opts?: { onSuccess?: () => void }) => ({
+          mutate: (input: unknown) => {
+            updateBrand(input);
+            opts?.onSuccess?.();
+          },
+          isPending: false,
+        }),
+      },
     },
   },
 }));
@@ -111,6 +123,9 @@ beforeEach(() => {
   dealFixture = makeDeal();
   contactsFixture = [contact];
   updateDeal.mockReset();
+  updateBrand.mockReset();
+  invalidateDealGetById.mockReset();
+  invalidateDealsList.mockReset();
 });
 
 afterEach(() => {
@@ -160,5 +175,36 @@ describe("DealDetail contact card (SPO-298)", () => {
     expect(updateDeal).toHaveBeenCalledWith(
       expect.objectContaining({ id: "d1", primaryContactId: "c1" })
     );
+  });
+});
+
+describe("DealDetail brand website (SPO-372)", () => {
+  it("normalizes a URL and calls brand.update, then invalidates the deal queries", () => {
+    dealFixture = makeDeal({ brand: { id: "b1", name: "Acme", domain: null } });
+    renderDealDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add website" }));
+    fireEvent.change(screen.getByPlaceholderText("brand.com"), {
+      target: { value: "https://www.redbull.com/x" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save website" }));
+
+    expect(updateBrand).toHaveBeenCalledWith({ brandId: "b1", domain: "redbull.com" });
+    expect(invalidateDealGetById).toHaveBeenCalled();
+    expect(invalidateDealsList).toHaveBeenCalled();
+  });
+
+  it("shows an inline error and issues no mutation for garbage input", () => {
+    dealFixture = makeDeal({ brand: { id: "b1", name: "Acme", domain: null } });
+    renderDealDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add website" }));
+    fireEvent.change(screen.getByPlaceholderText("brand.com"), {
+      target: { value: "Red Bull" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save website" }));
+
+    expect(screen.getByText("Enter a website like redbull.com")).toBeInTheDocument();
+    expect(updateBrand).not.toHaveBeenCalled();
   });
 });

@@ -678,6 +678,59 @@ describe("brand router tenant isolation", () => {
       expect(rows).toHaveLength(1); // still only contactB
     });
   });
+
+  describe("update", () => {
+    it("sets the domain on an owned brand", async () => {
+      const caller = brandRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.update({ brandId: brandAId, domain: "redbull.com" });
+      expect(result?.domain).toBe("redbull.com");
+
+      const [row] = await db
+        .select()
+        .from(schema.brands)
+        .where(eq(schema.brands.id, brandAId));
+      expect(row.domain).toBe("redbull.com");
+    });
+
+    it("clears the domain when passed null", async () => {
+      await db
+        .update(schema.brands)
+        .set({ domain: "redbull.com" })
+        .where(eq(schema.brands.id, brandAId));
+
+      const caller = brandRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.update({ brandId: brandAId, domain: null });
+      expect(result?.domain).toBeNull();
+
+      const [row] = await db
+        .select()
+        .from(schema.brands)
+        .where(eq(schema.brands.id, brandAId));
+      expect(row.domain).toBeNull();
+    });
+
+    it("throws NOT_FOUND for a cross-creator brand", async () => {
+      const caller = brandRouter.createCaller(mockCtx(creatorAId));
+      await expect(
+        caller.update({ brandId: brandBId, domain: "redbull.com" })
+      ).rejects.toSatisfy((err: TRPCError) => err.code === "NOT_FOUND");
+    });
+
+    it("does not mutate a cross-creator brand's domain on rejection", async () => {
+      const caller = brandRouter.createCaller(mockCtx(creatorAId));
+      try {
+        await caller.update({ brandId: brandBId, domain: "redbull.com" });
+      } catch {
+        // expected
+      }
+
+      const [row] = await db
+        .select()
+        .from(schema.brands)
+        .where(eq(schema.brands.id, brandBId));
+      expect(row.domain).toBeNull();
+    });
+  });
 });
 
 // ── Deliverable router ───────────────────────────────────────────────────────
