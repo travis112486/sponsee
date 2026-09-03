@@ -14,6 +14,7 @@
 export const SCHEMA_SQL = `
 DROP TABLE IF EXISTS waitlist_signups CASCADE;
 DROP TABLE IF EXISTS rate_limit CASCADE;
+DROP TABLE IF EXISTS brand_icon_cache CASCADE;
 DROP TABLE IF EXISTS activity_events CASCADE;
 DROP TABLE IF EXISTS chase_events CASCADE;
 DROP TABLE IF EXISTS invoice_chase_state CASCADE;
@@ -413,4 +414,18 @@ CREATE TABLE waitlist_signups (
 
 CREATE INDEX waitlist_signups_source_idx ON waitlist_signups(source);
 CREATE INDEX waitlist_signups_confirmed_idx ON waitlist_signups(confirmed);
+
+-- Mirrors packages/db/drizzle/0017_ancient_pride.sql.
+CREATE TABLE brand_icon_cache (
+  domain VARCHAR(255) PRIMARY KEY,
+  outcome VARCHAR(16) NOT NULL,
+  content_type VARCHAR(128),
+  body_base64 TEXT,
+  size_bytes INTEGER,
+  source VARCHAR(16),
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT brand_icon_cache_hit_has_body CHECK (
+    (outcome <> 'hit') OR (body_base64 IS NOT NULL AND content_type IS NOT NULL AND size_bytes IS NOT NULL)
+  )
+);
 `;
