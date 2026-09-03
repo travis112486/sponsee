@@ -9,6 +9,7 @@ import waitlistApp, { waitlistAdminApp } from "./routers/waitlist.js";
 import { handleEmailWebhook } from "./routers/webhooks.js";
 import { registerStripeWebhook } from "./billing/webhook.js";
 import { evaluateFrontDoor, FRONT_DOOR_HEADER } from "./front-door.js";
+import brandIconApp from "./brand-icon/route.js";
 
 const app = new Hono();
 
@@ -70,6 +71,11 @@ app.route("/api/waitlist", waitlistApp);
 // Admin export lives outside /api/waitlist/* on purpose: the CORS middleware
 // above must never attach browser-readable headers to a PII dump.
 app.route("/api/admin/waitlist", waitlistAdminApp);
+
+// Brand-logo proxy (SPO-374). No CORS block needed: BrandMark.tsx loads this
+// as an <img src>, which browsers fetch cross-origin without a CORS handshake
+// — CORS only gates script-readable responses (fetch/XHR), not image painting.
+app.route("/api/brand-icon", brandIconApp);
 
 app.use(
   "/api/trpc/*",
