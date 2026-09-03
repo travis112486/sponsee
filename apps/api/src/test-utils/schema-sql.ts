@@ -19,6 +19,7 @@ DROP TABLE IF EXISTS activity_events CASCADE;
 DROP TABLE IF EXISTS chase_events CASCADE;
 DROP TABLE IF EXISTS invoice_chase_state CASCADE;
 DROP TABLE IF EXISTS chase_templates CASCADE;
+DROP TABLE IF EXISTS invoice_deliveries CASCADE;
 DROP TABLE IF EXISTS invoices CASCADE;
 DROP TABLE IF EXISTS creator_files CASCADE;
 DROP TABLE IF EXISTS contracts CASCADE;
@@ -314,6 +315,34 @@ CREATE INDEX invoices_creator_idx ON invoices(creator_id);
 CREATE INDEX invoices_deal_idx ON invoices(deal_id);
 CREATE INDEX invoices_status_idx ON invoices(status);
 CREATE INDEX invoices_due_at_idx ON invoices(due_at);
+
+CREATE TABLE invoice_deliveries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  attempt INTEGER NOT NULL,
+  to_email VARCHAR(255) NOT NULL,
+  from_email VARCHAR(255) NOT NULL,
+  reply_to_email VARCHAR(255) NOT NULL,
+  subject_snapshot TEXT NOT NULL,
+  text_snapshot TEXT NOT NULL,
+  html_snapshot TEXT,
+  public_token TEXT NOT NULL,
+  idempotency_key VARCHAR(255) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'queued',
+  provider_message_id TEXT,
+  sent_at TIMESTAMPTZ,
+  delivered_at TIMESTAMPTZ,
+  opened_at TIMESTAMPTZ,
+  bounced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(invoice_id, attempt),
+  UNIQUE(public_token),
+  UNIQUE(idempotency_key)
+);
+
+CREATE INDEX invoice_deliveries_provider_message_id_idx ON invoice_deliveries(provider_message_id);
+CREATE INDEX invoice_deliveries_invoice_idx ON invoice_deliveries(invoice_id);
 
 CREATE TABLE chase_templates (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

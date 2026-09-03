@@ -154,6 +154,7 @@ const ENUM_COLUMN_ALLOWLIST = new Set([
   "deliverables.platform",
   "deliverables.status",
   "invoice_chase_state.mode",
+  "invoice_deliveries.status",
   "invoices.status",
   "invoices.terms",
   "proofs.kind",

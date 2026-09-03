@@ -151,6 +151,7 @@ export const activityKinds = [
   "chase_sent",
   "note",
   "platform_sync",
+  "invoice_sent",
 ] as const;
 export type ActivityKind = (typeof activityKinds)[number];
 

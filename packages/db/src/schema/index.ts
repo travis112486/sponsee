@@ -60,6 +60,14 @@ export const activityKindEnum = pgEnum("activity_kind", [
   "chase_sent",
   "note",
   "platform_sync",
+  "invoice_sent",
+]);
+export const invoiceDeliveryStatusEnum = pgEnum("invoice_delivery_status", [
+  "queued",
+  "sent",
+  "delivered",
+  "bounced",
+  "failed",
 ]);
 export const platformSyncStatusEnum = pgEnum("platform_sync_status", ["never", "ok", "error"]);
 export const planTierEnum = pgEnum("plan_tier", ["starter", "creator", "pro"]);
@@ -376,6 +384,46 @@ export const invoices = pgTable(
     index("invoices_due_at_idx").on(t.dueAt),
     uniqueIndex("invoices_creator_number_idx").on(t.creatorId, t.number),
     check("invoices_paid_requires_paid_at", sql`(${t.status} = 'paid') = (${t.paidAt} IS NOT NULL)`),
+  ]
+);
+
+// Invoice deliveries — one row per send attempt, so a resend is auditable.
+// Everything the brand actually received is snapshotted here rather than
+// re-derived on read, because invoices.rails_snapshot (and the invoice row
+// itself) can change after the send.
+export const invoiceDeliveries = pgTable(
+  "invoice_deliveries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => invoices.id, { onDelete: "cascade" }),
+    attempt: integer("attempt").notNull(),
+    toEmail: varchar("to_email", { length: 255 }).notNull(),
+    fromEmail: varchar("from_email", { length: 255 }).notNull(),
+    replyToEmail: varchar("reply_to_email", { length: 255 }).notNull(),
+    subjectSnapshot: text("subject_snapshot").notNull(),
+    textSnapshot: text("text_snapshot").notNull(),
+    htmlSnapshot: text("html_snapshot"),
+    // >=128 bits from crypto.randomBytes — see invoice.ts. Keys the public,
+    // unauthenticated hosted view (SPO-358 item 3), so it must not be guessable.
+    publicToken: text("public_token").notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
+    status: invoiceDeliveryStatusEnum("status").notNull().default("queued"),
+    providerMessageId: text("provider_message_id"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    openedAt: timestamp("opened_at", { withTimezone: true }),
+    bouncedAt: timestamp("bounced_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("invoice_deliveries_invoice_attempt_idx").on(t.invoiceId, t.attempt),
+    uniqueIndex("invoice_deliveries_public_token_idx").on(t.publicToken),
+    uniqueIndex("invoice_deliveries_idempotency_key_idx").on(t.idempotencyKey),
+    index("invoice_deliveries_provider_message_id_idx").on(t.providerMessageId),
+    index("invoice_deliveries_invoice_idx").on(t.invoiceId),
   ]
 );
 

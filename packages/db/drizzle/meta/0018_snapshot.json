@@ -1,6 +1,6 @@
 {
-  "id": "eee19856-f5f8-4654-a875-a8274a5aa5dd",
-  "prevId": "e762e611-0e5a-4542-b295-204027d5ce9e",
+  "id": "6bf6f09c-8396-4bf0-8ac5-70477dfa8f24",
+  "prevId": "eee19856-f5f8-4654-a875-a8274a5aa5dd",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -335,6 +335,68 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.brand_icon_cache": {
+      "name": "brand_icon_cache",
+      "schema": "",
+      "columns": {
+        "domain": {
+          "name": "domain",
+          "type": "varchar(255)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "brand_icon_outcome",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content_type": {
+          "name": "content_type",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "body_base64": {
+          "name": "body_base64",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "size_bytes": {
+          "name": "size_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fetched_at": {
+          "name": "fetched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "brand_icon_cache_hit_has_body": {
+          "name": "brand_icon_cache_hit_has_body",
+          "value": "(\"brand_icon_cache\".\"outcome\" <> 'hit') OR (\"brand_icon_cache\".\"body_base64\" IS NOT NULL AND \"brand_icon_cache\".\"content_type\" IS NOT NULL AND \"brand_icon_cache\".\"size_bytes\" IS NOT NULL)"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.brands": {
@@ -3122,6 +3184,14 @@
         "note",
         "platform_sync",
         "invoice_sent"
+      ]
+    },
+    "public.brand_icon_outcome": {
+      "name": "brand_icon_outcome",
+      "schema": "public",
+      "values": [
+        "hit",
+        "miss"
       ]
     },
     "public.chase_event_status": {
