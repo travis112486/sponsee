@@ -652,5 +652,31 @@ export const waitlistSignups = pgTable(
   ]
 );
 
+// Brand-icon proxy cache (SPO-374). Domain-keyed, not creator-scoped: the
+// whole point is that unavatar sees one fetch per brand domain per TTL for
+// the entire product instead of one per creator per view, so this table is
+// deliberately not partitioned by creator_id the way brands/contacts are.
+export const brandIconOutcomeEnum = pgEnum("brand_icon_outcome", ["hit", "miss"]);
+
+export const brandIconCache = pgTable(
+  "brand_icon_cache",
+  {
+    domain: varchar("domain", { length: 255 }).primaryKey(),
+    outcome: brandIconOutcomeEnum("outcome").notNull(),
+    // Populated only when outcome = 'hit'.
+    contentType: varchar("content_type", { length: 128 }),
+    bodyBase64: text("body_base64"),
+    sizeBytes: integer("size_bytes"),
+    source: varchar("source", { length: 16 }), // 'favicon' | 'unavatar'
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      "brand_icon_cache_hit_has_body",
+      sql`(${t.outcome} <> 'hit') OR (${t.bodyBase64} IS NOT NULL AND ${t.contentType} IS NOT NULL AND ${t.sizeBytes} IS NOT NULL)`
+    ),
+  ]
+);
+
 // Derived types
 export type SubscriptionStatus = typeof subscriptionStatusEnum.enumValues[number];
