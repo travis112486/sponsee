@@ -78,6 +78,14 @@ real contact data. A fixture is a rehearsal, never a send-day input.
 The roster's authoritative contents are the Wave 1 send list on SPO-408, not a
 file in this tree.
 
+**The same rule governs this document** (SPO-418). Every identity in every
+example below — the T1 census included — comes from those fixtures, and no real
+name, address, handle or roster id may be pasted back in. A real address here is
+a disclosure, not a typo: the census is the whole target list in the most
+greppable form there is, and pasting a live run into this file republishes it
+just as surely as committing the roster would. Quote counts and decisions
+freely; identities stay in the roster and on the ticket that decided them.
+
 ## Send-day runbook
 
 Run this immediately before **every** touch — T1, T2 and T3, on both channels.
@@ -181,18 +189,76 @@ opt-out, and `block` is reserved for the latter.
 
 **Wave 1 runs the SPO-280 acceptance check with the flag off.** Building an
 audience is where the flag belongs in general — it is the check for "did we push
-every name we hold" — but SPO-292 decided that four Wave 1 contacts keep the
+every name we hold" — but SPO-292 decided that four contacts keep the
 `Hey there —` fallback permanently: SPO-269 recorded them as deliberately
-identity-withholding VTuber personas, so there is
-no name to push and the flag would block on rows nobody intends to fix. (Which
-four is in the roster, which is not in this repo — see "Where the roster and
-ledger live". Naming them here would republish the roster a line at a time.)
-Read the
-census instead. Every fallback recipient is printed by default, so a green Wave
-1A preflight should name those four and no others — the 11-of-15 personalized
-figure on record. On a wave where every recipient *should* have a name, turn the
-flag on: without it a green preflight is equally compatible with every greeting
-silently falling back.
+identity-withholding VTuber personas, so there is no name to push and the flag
+would block on rows nobody intends to fix. That decision covers all four of them
+for good — it is not scoped to Wave 1 and should not be narrowed just because one
+of them is not currently in Wave 1's cohort. The four are Sinder, Snuffy,
+Dokibird and Shxtou. They are named here deliberately: a fallback rule that
+cannot say *which* rows it covers cannot be checked against a preflight on send
+day, which is the only thing this paragraph is for. What is withheld is the part
+that would republish the target list — their addresses and roster row IDs are
+not in this repo and must not be — see
+[where the roster and ledger live](#where-the-roster-and-ledger-live).
+
+Wave 1's cohort is narrower than SPO-292's four, though: the `us_only`
+jurisdiction cut (SPO-271/SPO-389) holds Dokibird out of Wave 1 as a
+non-US contact, so only the SPO-292 rows that also land on *this* roster fall
+back here. Read the census instead of a fixed count — every fallback recipient is
+printed by default. Cross that list against SPO-292's four rows and derive
+personalized as (email SEND rows) − (fallback rows among them), rather than
+hardcoding a figure that moves every time the roster or the jurisdiction cut
+does. A green Wave 1A preflight should name exactly the SPO-292 rows that are on
+the current roster and no others. As of the current roster that is Sinder,
+Snuffy and Shxtou — Dokibird out of cohort, not gone from the decision — 3 of the
+11 email SEND rows, so 8 of 11 render a personalized greeting.
+
+Below is the shape of that T1/email run. The counts, decisions and column layout
+are Wave 1's; **the identities are not** — they are the invented rows of
+`outreach/wave1-roster.example.json`, which carries the same 16 rows, 11/5 channel
+split and 3 nameless SEND rows precisely so this block can be shown without
+naming anyone. The real census is never pasted here:
+
+```
+Wave 1 preflight — T1 / email
+roster: ~/.config/sponsee/outreach/wave1-roster.json (16 rows)
+ledger: ~/.config/sponsee/outreach/wave1-ledger.jsonl (0 entries)
+endpoint: https://api.resend.com
+────────────────────────────────────────────────────────────────────────────
+  SEND     PixelForge                   bookings@pixelforge.example  [pixelforge]
+  SEND     Nova Quokka                  sponsorships@novaquokka.example  [novaquokka]
+  SEND     TundraByte                   hello@tundrabyte.example  [tundrabyte]
+  SEND     Lumen Lark                   partnerships@lumenlark.example  [lumenlark]
+  SEND     Brass Badger                 deals@brassbadger.example  [brassbadger]
+  SEND     KettleCrash                  biz@kettlecrash.example  [kettlecrash]
+  SEND     Orchid Octane                contact@orchidoctane.example  [orchidoctane]
+  SEND     VellumVex                    sponsor@vellumvex.example  [vellumvex]
+  SEND     Harbor Hex                   press@harborhex.example  [harborhex]
+  SEND     Saffron Sigil                brand@saffronsigil.example  [saffronsigil]
+  SEND     CinderGlove                  team@cinderglove.example  [cinderglove]
+  SKIP     Gravel Gospel                no-address  [gravelgospel]
+  SKIP     Mint Marauder                no-address  [mintmarauder]
+  SKIP     QuillQuasar                  no-address  [quillquasar]
+  SKIP     Driftwood Dynamo             no-address  [driftwooddynamo]
+  SKIP     Copper Comet                 no-address  [coppercomet]
+────────────────────────────────────────────────────────────────────────────
+send 11   suppress 0   skip 5   block 0
+
+email: 0 of 11 SEND row(s) not covered by the audience read
+
+No first_name on the contact (3) — these render v5's "Hey there —" fallback:
+  hello@tundrabyte.example  no confirmed name on either side — needs an SPO-269 lookup  [tundrabyte]
+  partnerships@lumenlark.example  no confirmed name on either side — needs an SPO-269 lookup  [lumenlark]
+  contact@orchidoctane.example  no confirmed name on either side — needs an SPO-269 lookup  [orchidoctane]
+  (warning only — pass --require-first-names to make this block)
+
+Clear to send T1 on email to 11 recipient(s).
+```
+
+On a wave where every recipient *should* have a name, turn the flag on: without
+it a green preflight is equally compatible with every greeting silently falling
+back.
 
 The flag checks the **contact's** name, not roster-vs-contact drift. Resend
 renders `{{{contact.first_name|there}}}` from the contact, so the contact's value
@@ -204,7 +270,7 @@ sufficient for a defect:
 | `null` | `null`  | `Hey there —` | **blocks**              |
 | `Ada`  | `null`  | `Hey there —` | **blocks**              |
 | `Ada`  | `Adam`  | `Hey Adam —`  | **blocks** (`CONFLICT`) |
-| `null` | `Jeff`  | `Hey Jeff —`  | passes — greets correctly |
+| `null` | `Kip`   | `Hey Kip —`   | passes — greets correctly |
 | `Ada`  | `Ada`   | `Hey Ada —`   | passes                  |
 
 Row 1 is the one to watch: the two sides agree, so it produces no drift line at
@@ -217,8 +283,10 @@ precisely because we never confirmed a name for them.
 
 ## File formats
 
-Neither file is in the repo yet — SPO-267 is still resolving contact channels
-and SPO-280 is populating the audience. The paths above are where they land.
+SPO-267 and SPO-280, which resolved contact channels and populated the audience,
+are both closed — the roster and ledger described here are the live artifacts the
+preflight reads on send day, not a preview of where they will land. Where they
+live, and why not here, is [above](#where-the-roster-and-ledger-live).
 
 `--roster` — JSON array (or `{"roster": [...]}`). `id` must be stable and unique,
 and no two rows may share an email — nor an `xHandle`. Either collision is one
@@ -292,7 +360,7 @@ Two things close it:
 
   ```
   Wave 1 preflight — T2 / email
-  roster: ~/.config/sponsee/outreach/wave1-roster.json (26 rows)
+  roster: ~/.config/sponsee/outreach/wave1-roster.json (16 rows)
   ledger: ~/.config/sponsee/outreach/wave1-ledger.jsonl (3 entries)
   ```
 
@@ -309,8 +377,13 @@ Two things close it:
   not say this; the gate enforces it anyway.
 - **`block` is not `suppress`.** A block means the opt-out would be broken for
   that recipient, which is worse than not mailing them. It fails the whole touch.
-- **`skip: no-address`** is expected while SPO-267 is still resolving contact
-  channels. It does not fail the touch.
+- **`skip: no-address`** marks the rows with no address *on the channel you are
+  running*, by design, not an SPO-267 backlog. It does not fail the touch. Which
+  cohort it names therefore flips with `--channel`: on `email` it is the X-DM
+  rows (an `xHandle` and no `email`), and on `dm` it is the email rows (an
+  `email` and no `xHandle`) — the larger of the two on the current roster. Read
+  the count against the channel in the header; a `no-address` skip total that
+  looks alarmingly high on `dm` is the email cohort being skipped correctly.
 - Emails and handles are matched case-insensitively, with a leading `@` stripped.
   An opt-out that misses because the ledger recorded `Ada@Example.com` is exactly
   the failure this gate exists to prevent.
