@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   contractStatuses,
@@ -10,7 +10,7 @@ import {
   platforms,
 } from "@sponsee/shared";
 
-import { BrandMark, brandInitials } from "./BrandMark";
+import { BrandMark, brandInitials, normalizeBrandDomain } from "./BrandMark";
 import { PlatformChip, PlatformDot, PlatformDots } from "./PlatformDot";
 import { Sparkline } from "./Sparkline";
 import { StatCard } from "./StatCard";
@@ -72,6 +72,42 @@ describe("BrandMark", () => {
     expect(tile).toHaveTextContent("NS");
     expect(tile.style.width).toBe("40px");
     expect(tile.style.fontSize).toBe("14px");
+  });
+
+  it("renders the brand icon when a domain resolves, monogram otherwise", () => {
+    const { container } = render(
+      <BrandMark brand="Red Bull" domain="https://www.redbull.com/energy" size={32} />
+    );
+    const img = container.querySelector("img")!;
+    expect(img).toBeInTheDocument();
+    expect(img.getAttribute("src")).toContain("redbull.com");
+
+    const { container: noDomain } = render(<BrandMark brand="Red Bull" size={32} />);
+    expect(noDomain.querySelector("img")).toBeNull();
+    expect(noDomain.querySelector("span")).toHaveTextContent("RB");
+  });
+
+  it("falls back to the monogram when the icon fails to load", () => {
+    const { container } = render(<BrandMark brand="Voltaic Energy" domain="voltaic.energy" />);
+    const img = container.querySelector("img")!;
+    fireEvent.error(img);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("span")).toHaveTextContent("VE");
+  });
+});
+
+describe("normalizeBrandDomain", () => {
+  it("strips protocol, www and path down to the bare domain", () => {
+    expect(normalizeBrandDomain("https://www.redbull.com/energydrink")).toBe("redbull.com");
+    expect(normalizeBrandDomain("HTTP://Bang-Energy.com?utm=x")).toBe("bang-energy.com");
+    expect(normalizeBrandDomain("streamforge.io")).toBe("streamforge.io");
+  });
+
+  it("returns null for empty or non-domain input", () => {
+    expect(normalizeBrandDomain(undefined)).toBeNull();
+    expect(normalizeBrandDomain("")).toBeNull();
+    expect(normalizeBrandDomain("Red Bull")).toBeNull();
+    expect(normalizeBrandDomain("just-a-word")).toBeNull();
   });
 });
 

@@ -30,7 +30,7 @@ const deal = {
   currency: "USD",
   paymentTerms: "net_30",
   stageEnteredAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-  brand: { name: "Acme" },
+  brand: { name: "Acme", domain: null } as { name: string; domain?: string | null },
   platforms: ["twitch", "youtube"],
   notes: null,
   deliverables: [
@@ -178,8 +178,10 @@ describe("Pipeline deal card content (SPO-195)", () => {
     expect(within(card).getByText("AC")).toBeInTheDocument();
     // Deal-type badge (scoped to the card; the filter bar also shows "Flat").
     expect(within(card).getByText("Flat")).toBeInTheDocument();
-    // Value note next to the value.
-    expect(within(card).getByText("per stream")).toBeInTheDocument();
+    // Value note renders twice (SPO-376): inline next to the value (sub-lg and
+    // ≥1440) and as its own line through the lg–1439 narrow-column band, where
+    // it used to be hidden entirely. Both presentations must exist.
+    expect(within(card).getAllByText("per stream")).toHaveLength(2);
     // Platform dots: role="img" with Twitch / YouTube labels.
     expect(within(card).getByRole("img", { name: "Twitch" })).toBeInTheDocument();
     expect(within(card).getByRole("img", { name: "YouTube" })).toBeInTheDocument();
@@ -189,8 +191,29 @@ describe("Pipeline deal card content (SPO-195)", () => {
 
   it("renders days-in-stage and the next deliverable", () => {
     renderPipeline();
-    expect(screen.getByText(/^Next: VOD publish$/)).toBeInTheDocument();
+    expect(screen.getByText(/^VOD publish$/)).toBeInTheDocument();
     expect(screen.getByText("2d")).toBeInTheDocument();
+  });
+
+  // SPO-369: pins the brand.domain → BrandMark pass-through. Deleting the
+  // `domain` prop in Pipeline.tsx must fail this, not just the unit tests
+  // on BrandMark itself.
+  it("renders the brand logo from the deal's brand domain", () => {
+    dealsFixture = [
+      { ...deal, brand: { name: "Red Bull", domain: "https://www.redbull.com/energy" } },
+    ];
+    renderPipeline();
+
+    const card = document.querySelector(
+      '[aria-roledescription="Draggable deal card"]'
+    ) as HTMLElement;
+    const img = card.querySelector("img") as HTMLImageElement;
+    expect(img).toBeInTheDocument();
+    expect(img.getAttribute("src")).toBe(
+      "https://unavatar.io/redbull.com?fallback=false"
+    );
+    // No monogram while the logo path is live.
+    expect(within(card).queryByText("RB")).not.toBeInTheDocument();
   });
 
   it("renders the deliverable progress bar caption", () => {
