@@ -143,15 +143,65 @@ opt-out, and `block` is reserved for the latter.
 
 **Wave 1 runs the SPO-280 acceptance check with the flag off.** Building an
 audience is where the flag belongs in general — it is the check for "did we push
-every name we hold" — but SPO-292 decided that four Wave 1 contacts (Sinder,
-Snuffy, Dokibird, Shxtou) keep the `Hey there —` fallback permanently: SPO-269
-recorded them as deliberately identity-withholding VTuber personas, so there is
-no name to push and the flag would block on rows nobody intends to fix. Read the
-census instead. Every fallback recipient is printed by default, so a green Wave
-1A preflight should name those four and no others — the 11-of-15 personalized
-figure on record. On a wave where every recipient *should* have a name, turn the
-flag on: without it a green preflight is equally compatible with every greeting
-silently falling back.
+every name we hold" — but SPO-292 decided that four contacts (Sinder, Snuffy,
+Dokibird, Shxtou) keep the `Hey there —` fallback permanently: SPO-269 recorded
+them as deliberately identity-withholding VTuber personas, so there is no name to
+push and the flag would block on rows nobody intends to fix. That decision covers
+all four of them for good — it is not scoped to Wave 1 and should not be narrowed
+just because one of them is not currently in Wave 1's cohort.
+
+Wave 1's cohort is narrower than SPO-292's four, though: the `us_only`
+jurisdiction cut (SPO-271/SPO-389) holds Dokibird out of Wave 1 as a non-US
+contact, so only the SPO-292 names that also land on *this* roster fall back
+here. Read the census instead of a fixed count — every fallback recipient is
+printed by default. Cross that list against SPO-292's four names and derive
+personalized as (email SEND rows) − (fallback rows among them), rather than
+hardcoding a figure that moves every time the roster or the jurisdiction cut
+does. A green Wave 1A preflight should name exactly the SPO-292 rows that are on
+the current roster and no others. As of the roster in this repo that is Sinder,
+Snuffy and Shxtou — Dokibird out of cohort, not gone from the decision — 3 of the
+11 email SEND rows, so 8 of 11 render a personalized greeting. Observed on a live
+T1/email run:
+
+```
+Wave 1 preflight — T1 / email
+roster: outreach/wave1-roster.json (16 rows)
+ledger: outreach/wave1-ledger.jsonl (0 entries)
+endpoint: https://api.resend.com
+────────────────────────────────────────────────────────────────────────────
+  SEND     T90Official                  t90officialbusiness@gmail.com  [t90official]
+  SEND     CityPlannerPlays             philip@cityplannerplays.com  [cityplannerplays]
+  SEND     Snuffy                       business@snuffy.moe  [snuffy]
+  SEND     Shxtou                       shoutoyt@gmail.com  [shxtou]
+  SEND     Sinder                       business@sinder.gg  [sinder]
+  SEND     Eric Rosen                   contact@imrosen.com  [eric-rosen]
+  SEND     Wolfgang Poker               awseibt.business@gmail.com  [wolfgang-poker]
+  SEND     Ham Radio Crash Course       leah@hamtactical.com  [ham-radio-crash-course]
+  SEND     Moore's Law Is Dead          mlhbdead@gmail.com  [moores-law-is-dead]
+  SEND     Sajam                        slyonnn@gmail.com  [sajam]
+  SEND     GrandPOObear                 gpbmerch@gmail.com  [grandpoobear]
+  SKIP     Craft Computing              no-address  [craft-computing]
+  SKIP     Lawrence Systems             no-address  [lawrence-systems]
+  SKIP     Brian_F                      no-address  [brian_f]
+  SKIP     LordKnight                   no-address  [lordknight]
+  SKIP     TTone                        no-address  [ttone]
+────────────────────────────────────────────────────────────────────────────
+send 11   suppress 0   skip 5   block 0
+
+email: 0 of 11 SEND row(s) not covered by the audience read
+
+No first_name on the contact (3) — these render v5's "Hey there —" fallback:
+  business@snuffy.moe  no confirmed name on either side — needs an SPO-269 lookup  [snuffy]
+  shoutoyt@gmail.com  no confirmed name on either side — needs an SPO-269 lookup  [shxtou]
+  business@sinder.gg  no confirmed name on either side — needs an SPO-269 lookup  [sinder]
+  (warning only — pass --require-first-names to make this block)
+
+Clear to send T1 on email to 11 recipient(s).
+```
+
+On a wave where every recipient *should* have a name, turn the flag on: without
+it a green preflight is equally compatible with every greeting silently falling
+back.
 
 The flag checks the **contact's** name, not roster-vs-contact drift. Resend
 renders `{{{contact.first_name|there}}}` from the contact, so the contact's value
@@ -176,8 +226,11 @@ precisely because we never confirmed a name for them.
 
 ## File formats
 
-Neither file is in the repo yet — SPO-267 is still resolving contact channels
-and SPO-280 is populating the audience. The paths above are where they land.
+Both files are in the repo — `outreach/wave1-roster.json` is the roster and
+`outreach/wave1-ledger.jsonl` is the suppression ledger. SPO-267 and SPO-280,
+which resolved contact channels and populated the audience, are both closed;
+these are the live artifacts the preflight reads on send day, not a preview of
+where they will land.
 
 `--roster` — JSON array (or `{"roster": [...]}`). `id` must be stable and unique,
 and no two rows may share an email — nor an `xHandle`. Either collision is one
@@ -193,8 +246,8 @@ not collide with each other.
 [
   { "id": "ada", "name": "Ada Stream", "firstName": "Ada",
     "email": "ada@example.com", "xHandle": "@adastream" },
-  { "id": "doki", "name": "Dokibird", "firstName": "Doki",
-    "email": null, "xHandle": "@dokibird" }
+  { "id": "kip", "name": "KipStreams", "firstName": null,
+    "email": null, "xHandle": "@kipstreams" }
 ]
 ```
 
