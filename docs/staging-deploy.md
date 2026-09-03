@@ -96,6 +96,7 @@ Add these to the Render Web Service:
 | `RESEND_API_KEY` | `...` | Resend dashboard (founder) |
 | `SMTP_FROM` | `noreply@sponsee.app` | Fixed |
 | `CHASE_FROM_EMAIL` | `chase@sponsee.app` | Fixed |
+| `INVOICE_FROM_EMAIL` | `invoices@sponsee.app` | Fixed (falls back to `CHASE_FROM_EMAIL`, then a literal default, if unset) |
 
 ### Google OAuth (optional — enables Google sign-in)
 
