@@ -254,8 +254,10 @@ function DealCardBody({ deal }: { deal: PipelineDeal }) {
         <span className="min-w-0 truncate font-mono text-[14px] font-semibold tabular-nums text-ink">
           {formatCents(deal.valueCents)}
           {deal.valueNote && (
-            // Hidden through the lg–1440 band where the narrow columns would
-            // clip it mid-word ("p…"); back at ≥1440 where it fits whole.
+            // Inline where the value row has room (sub-lg 260px columns,
+            // ≥1440). Through the lg–1439 narrow-column band it moves to its
+            // own line below instead of disappearing — the note carries real
+            // pricing context ("per stream") a creator must be able to see.
             <span className="ml-1 font-sans text-[10px] font-normal text-ink-3 lg:hidden min-[1440px]:inline">
               {deal.valueNote}
             </span>
@@ -270,8 +272,19 @@ function DealCardBody({ deal }: { deal: PipelineDeal }) {
           {dealTypeLabels[type]}
         </span>
       </div>
+      {deal.valueNote && (
+        <p
+          title={deal.valueNote}
+          className="mt-0.5 hidden truncate text-[10px] leading-4 text-ink-3 lg:block min-[1440px]:hidden"
+        >
+          {deal.valueNote}
+        </p>
+      )}
 
-      <div className="mt-2 flex items-center justify-between gap-2 border-t border-hairline pt-2">
+      {/* Through the lg–1439 band the row stacks: the deliverable title takes
+          the full card width (a 46px slot clipped "VOD publish" on every
+          card), with dots + age tucked under it. One row again from 1440. */}
+      <div className="mt-2 flex items-center justify-between gap-2 border-t border-hairline pt-2 lg:flex-col lg:items-stretch lg:gap-1 min-[1440px]:flex-row min-[1440px]:items-center min-[1440px]:gap-2">
         {next ? (
           <p
             title={next.title}
@@ -286,7 +299,7 @@ function DealCardBody({ deal }: { deal: PipelineDeal }) {
         ) : (
           <span className="text-[11px] text-ink-3">No open deliverables</span>
         )}
-        <span className="flex shrink-0 items-center gap-1.5">
+        <span className="flex shrink-0 items-center gap-1.5 lg:self-end min-[1440px]:self-auto">
           {platformList.length > 0 && <PlatformDots platforms={platformList} />}
           <span className="flex shrink-0 items-center gap-1 rounded-full bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-ink-3">
             {stale && <span className="h-1.5 w-1.5 rounded-full bg-amber" title="Stale" />}
