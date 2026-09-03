@@ -209,9 +209,7 @@ describe("Pipeline deal card content (SPO-195)", () => {
     ) as HTMLElement;
     const img = card.querySelector("img") as HTMLImageElement;
     expect(img).toBeInTheDocument();
-    expect(img.getAttribute("src")).toBe(
-      "https://unavatar.io/redbull.com?fallback=false"
-    );
+    expect(img.getAttribute("src")).toBe("/api/brand-icon?domain=redbull.com");
     // No monogram while the logo path is live.
     expect(within(card).queryByText("RB")).not.toBeInTheDocument();
   });
