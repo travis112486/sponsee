@@ -1,0 +1,114 @@
+[
+  {
+    "id": "pixelforge",
+    "name": "PixelForge",
+    "firstName": "Ada",
+    "email": "bookings@pixelforge.example",
+    "xHandle": null
+  },
+  {
+    "id": "novaquokka",
+    "name": "Nova Quokka",
+    "firstName": "Nova",
+    "email": "sponsorships@novaquokka.example",
+    "xHandle": null
+  },
+  {
+    "id": "tundrabyte",
+    "name": "TundraByte",
+    "firstName": null,
+    "email": "hello@tundrabyte.example",
+    "xHandle": null
+  },
+  {
+    "id": "lumenlark",
+    "name": "Lumen Lark",
+    "firstName": "Imogen",
+    "email": "partnerships@lumenlark.example",
+    "xHandle": null
+  },
+  {
+    "id": "brassbadger",
+    "name": "Brass Badger",
+    "firstName": "Rowan",
+    "email": "deals@brassbadger.example",
+    "xHandle": null
+  },
+  {
+    "id": "kettlecrash",
+    "name": "KettleCrash",
+    "firstName": "Sim",
+    "email": "biz@kettlecrash.example",
+    "xHandle": null
+  },
+  {
+    "id": "orchidoctane",
+    "name": "Orchid Octane",
+    "firstName": null,
+    "email": "contact@orchidoctane.example",
+    "xHandle": null
+  },
+  {
+    "id": "vellumvex",
+    "name": "VellumVex",
+    "firstName": "Wren",
+    "email": "sponsor@vellumvex.example",
+    "xHandle": null
+  },
+  {
+    "id": "harborhex",
+    "name": "Harbor Hex",
+    "firstName": "Tobias",
+    "email": "press@harborhex.example",
+    "xHandle": null
+  },
+  {
+    "id": "saffronsigil",
+    "name": "Saffron Sigil",
+    "firstName": "Delphine",
+    "email": "brand@saffronsigil.example",
+    "xHandle": null
+  },
+  {
+    "id": "cinderglove",
+    "name": "CinderGlove",
+    "firstName": "Marek",
+    "email": "team@cinderglove.example",
+    "xHandle": null
+  },
+  {
+    "id": "gravelgospel",
+    "name": "Gravel Gospel",
+    "firstName": "Otis",
+    "email": null,
+    "xHandle": "gravelgospel"
+  },
+  {
+    "id": "mintmarauder",
+    "name": "Mint Marauder",
+    "firstName": "Priya",
+    "email": null,
+    "xHandle": "mintmarauder"
+  },
+  {
+    "id": "quillquasar",
+    "name": "QuillQuasar",
+    "firstName": null,
+    "email": null,
+    "xHandle": "quillquasar"
+  },
+  {
+    "id": "driftwooddynamo",
+    "name": "Driftwood Dynamo",
+    "firstName": "Esme",
+    "email": null,
+    "xHandle": "driftdynamo"
+  },
+  {
+    "id": "coppercomet",
+    "name": "Copper Comet",
+    "firstName": "Yusuf",
+    "email": null,
+    "xHandle": "coppercomet"
+  }
+]
