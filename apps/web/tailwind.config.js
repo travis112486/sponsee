@@ -63,6 +63,13 @@ export default {
           DEFAULT: "#B3402A",
           tint: "#F9E7E1",
         },
+        // Info/mid-band blue (SPO-414): desaturated denim so in-progress and
+        // Mid–agency read as a fourth hue without leaving the warm-paper set.
+        // White text on DEFAULT is 7.01:1; DEFAULT on tint is 5.94:1 (AA).
+        denim: {
+          DEFAULT: "#3E5C76",
+          tint: "#E7EDF2",
+        },
         twitch: "#8B5CF6",
         youtube: "#E5484D",
         kick: "#58A617",

@@ -70,25 +70,27 @@ interface CalendarEvent {
 
 const deliverableStatusColors: Record<DeliverableStatus, string> = {
   done: "bg-pine-tint text-pine border-pine/20",
-  in_progress: "bg-blue-50 text-blue-600 border-blue-200",
+  in_progress: "bg-denim-tint text-denim border-denim/20",
   scheduled: "bg-amber-tint text-amber border-amber/20",
   not_started: "bg-surface-subtle text-ink-3 border-hairline",
   missed: "bg-brick-tint text-brick border-brick/20",
-  rescheduled: "bg-purple-50 text-purple-600 border-purple-200",
+  // Rescheduled shares the amber family with scheduled, matching DealDetail —
+  // both are "attention, date moved" states; the label carries the difference.
+  rescheduled: "bg-amber-tint text-amber border-amber/20",
 };
 
 const deliverableStatusDot: Record<DeliverableStatus, string> = {
   done: "bg-pine",
-  in_progress: "bg-blue-500",
+  in_progress: "bg-denim",
   scheduled: "bg-amber",
   not_started: "bg-ink-3",
   missed: "bg-brick",
-  rescheduled: "bg-purple-500",
+  rescheduled: "bg-amber",
 };
 
 const legendItems = [
   { label: "Done", dot: "bg-pine" },
-  { label: "In progress", dot: "bg-blue-500" },
+  { label: "In progress", dot: "bg-denim" },
   { label: "Scheduled", dot: "bg-amber" },
 ] as const;
 

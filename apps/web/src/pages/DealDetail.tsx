@@ -62,7 +62,7 @@ function formatCpvh(dollarsPerViewerHour: number | null | undefined) {
 const statusBadge: Record<string, string> = {
   not_started: "bg-surface text-ink-3 border-hairline",
   scheduled: "bg-amber-tint text-amber border-amber/20",
-  in_progress: "bg-blue-50 text-blue-600 border-blue-200",
+  in_progress: "bg-denim-tint text-denim border-denim/20",
   done: "bg-pine-tint text-pine border-pine/20",
   missed: "bg-brick-tint text-brick border-brick/20",
   rescheduled: "bg-amber-tint text-amber border-amber/20",
@@ -369,7 +369,7 @@ export default function DealDetail() {
                   deal.stage === "negotiating" && "bg-amber-tint text-amber",
                   deal.stage === "contract_sent" && "bg-pine-tint text-pine",
                   deal.stage === "live" && "bg-pine/10 text-pine",
-                  deal.stage === "delivered" && "bg-blue-50 text-blue-600",
+                  deal.stage === "delivered" && "bg-denim-tint text-denim",
                   deal.stage === "paid" && "bg-pine-tint text-pine"
                 )}
               >
