@@ -9,6 +9,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "vitest run --config=scripts/vitest-api.config.ts && vitest run --config=scripts/vitest-web.config.ts",
+    "test:viewport": "pnpm --filter @sponsee/web exec vitest run --config vitest.viewport.config.ts",
     "test:watch": "vitest",
     "test:storage-e2e": "vitest run --config=scripts/vitest-storage-e2e.config.ts",
     "db:generate": "turbo run db:generate",
@@ -19,11 +20,14 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
     "@hono/node-server": "^2.1.1",
+    "@vitest/browser": "4.1.11",
+    "@vitest/browser-playwright": "^4.1.11",
     "@vitest/ui": "^4.1.11",
     "happy-dom": "^20.11.8",
     "jsdom": "^30.0.1",
     "nodemailer": "^9.0.5",
     "pg": "^8.14.0",
+    "playwright": "1.62.1",
     "turbo": "^2.4.0",
     "vitest": "^4.1.11"
   },
