@@ -39,6 +39,14 @@ function hasRails(rails: Rails): boolean {
   return Boolean(rails.paypalLink || rails.wiseText || rails.bankText);
 }
 
+// paypalLink is creator-controlled and rendered as a live href on this public,
+// unauthenticated page. HTML-escaping stops attribute breakout but not
+// `javascript:`/`data:` URLs, so only an https: link is rendered as a link
+// (SPO-368 F3). Anything else is shown as inert text.
+function isSafeHref(url: string | null): url is string {
+  return typeof url === "string" && url.startsWith("https://");
+}
+
 /**
  * Hosted invoice view (/i/:token) — the one public, unauthenticated page in the
  * app. Renders the invoice snapshot a brand's AP team prints to PDF and files.
@@ -145,9 +153,13 @@ export default function InvoicePublicPage() {
                     <div className="rail">
                       <div className="rail-name">PayPal</div>
                       <div className="rail-body">
-                        <a href={rails.paypalLink} rel="noopener noreferrer">
-                          {rails.paypalLink}
-                        </a>
+                        {isSafeHref(rails.paypalLink) ? (
+                          <a href={rails.paypalLink} rel="noopener noreferrer">
+                            {rails.paypalLink}
+                          </a>
+                        ) : (
+                          rails.paypalLink
+                        )}
                       </div>
                     </div>
                   )}
