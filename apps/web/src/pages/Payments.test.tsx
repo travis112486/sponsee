@@ -288,7 +288,7 @@ describe("Payments delivery status chip", () => {
 });
 
 describe("Payments chase gating on delivery", () => {
-  it("disables Pause and shows a visible reason before the invoice is delivered", () => {
+  it("never disables Pause, even before the invoice is delivered — pausing only de-escalates", () => {
     invoicesData = [openInvoice];
     deliveriesData = [delivery({ status: "sent" })]; // sent, not yet delivered
     chaseStateByInvoice = { "inv-1": { mode: "armed", pausedReason: null } };
@@ -297,16 +297,13 @@ describe("Payments chase gating on delivery", () => {
     fireEvent.click(screen.getByRole("button", { name: /more/i }));
 
     const pauseButton = screen.getByRole("button", { name: /pause/i });
-    expect(pauseButton).toBeDisabled();
-    expect(
-      screen.getByText(/locked until this invoice is confirmed delivered/i)
-    ).toBeVisible();
+    expect(pauseButton).not.toBeDisabled();
 
     fireEvent.click(pauseButton);
-    expect(pauseMutate).not.toHaveBeenCalled();
+    expect(pauseMutate).toHaveBeenCalledWith({ invoiceId: "inv-1", reason: "Manual pause" });
   });
 
-  it("shows the bounce-specific reason when chase is paused for a hard bounce", () => {
+  it("disables Resume and shows the bounce-specific reason when the invoice bounced", () => {
     invoicesData = [openInvoice];
     deliveriesData = [delivery({ status: "bounced", bouncedAt: "2026-01-02T00:00:00Z" })];
     chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "hard_bounce" } };
@@ -314,29 +311,45 @@ describe("Payments chase gating on delivery", () => {
     render(<Payments />);
     fireEvent.click(screen.getByRole("button", { name: /more/i }));
 
-    expect(screen.getByRole("button", { name: /resume/i })).toBeDisabled();
+    const resumeButton = screen.getByRole("button", { name: /resume/i });
+    expect(resumeButton).toBeDisabled();
     expect(screen.getByText(/email bounced, so reminders would go nowhere/i)).toBeVisible();
+
+    fireEvent.click(resumeButton);
+    expect(resumeMutate).not.toHaveBeenCalled();
   });
 
-  it("enables Pause once the invoice is delivered, with no lock message", () => {
+  it("disables Resume and shows the send-failed reason when the last send failed", () => {
     invoicesData = [openInvoice];
-    deliveriesData = [delivery({ status: "delivered", deliveredAt: "2026-01-02T00:00:00Z" })];
-    chaseStateByInvoice = { "inv-1": { mode: "armed", pausedReason: null } };
+    deliveriesData = [delivery({ status: "failed" })];
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
 
     render(<Payments />);
     fireEvent.click(screen.getByRole("button", { name: /more/i }));
 
-    const pauseButton = screen.getByRole("button", { name: /pause/i });
-    expect(pauseButton).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /resume/i })).toBeDisabled();
     expect(
-      screen.queryByText(/locked until this invoice is confirmed delivered/i)
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(pauseButton);
-    expect(pauseMutate).toHaveBeenCalledWith({ invoiceId: "inv-1", reason: "Manual pause" });
+      screen.getByText(/last send failed before it reached the brand, so reminders would go nowhere/i)
+    ).toBeVisible();
   });
 
-  it("also unlocks once the invoice has been opened", () => {
+  it("enables Resume once delivery is merely sent (not bounced or failed), with no lock message", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [delivery({ status: "sent" })];
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
+
+    render(<Payments />);
+    fireEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    const resumeButton = screen.getByRole("button", { name: /resume/i });
+    expect(resumeButton).not.toBeDisabled();
+    expect(screen.queryByText(/reminders would go nowhere/i)).not.toBeInTheDocument();
+
+    fireEvent.click(resumeButton);
+    expect(resumeMutate).toHaveBeenCalledWith({ invoiceId: "inv-1" });
+  });
+
+  it("also unlocks Resume once the invoice has been opened", () => {
     invoicesData = [openInvoice];
     deliveriesData = [
       delivery({
@@ -345,12 +358,27 @@ describe("Payments chase gating on delivery", () => {
         openedAt: "2026-01-03T00:00:00Z",
       }),
     ];
-    chaseStateByInvoice = { "inv-1": { mode: "armed", pausedReason: null } };
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
 
     render(<Payments />);
     fireEvent.click(screen.getByRole("button", { name: /more/i }));
 
-    expect(screen.getByRole("button", { name: /pause/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /resume/i })).not.toBeDisabled();
+  });
+
+  it("suppresses the lock message when the deliveries query errored, even with a stale bounced row cached", () => {
+    invoicesData = [openInvoice];
+    // Stale cached data from before a refetch failure — deliveriesIsError
+    // means we don't know the current state, so we must not act on it.
+    deliveriesData = [delivery({ status: "bounced", bouncedAt: "2026-01-02T00:00:00Z" })];
+    deliveriesIsError = true;
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "hard_bounce" } };
+
+    render(<Payments />);
+    fireEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    expect(screen.getByRole("button", { name: /resume/i })).not.toBeDisabled();
+    expect(screen.queryByText(/reminders would go nowhere/i)).not.toBeInTheDocument();
   });
 });
 

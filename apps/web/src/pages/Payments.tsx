@@ -26,6 +26,9 @@ type LatestDelivery = inferRouterOutputs<AppRouter>["invoice"]["latestDeliveries
 
 type DeliveryDisplayState = "sent" | "delivered" | "opened" | "bounced" | "failed";
 
+// The bounced/opened/delivered branches are inert until SPO-367 wires the
+// webhook correlation to invoice_deliveries — kept for forward-compat, not
+// currently reachable outside tests.
 function deliveryDisplayState(delivery: LatestDelivery): DeliveryDisplayState {
   if (delivery.status === "bounced") return "bounced";
   if (delivery.status === "failed") return "failed";
@@ -315,7 +318,12 @@ export default function Payments() {
             const delivery = deliveryByInvoice.get(inv.id);
             const deliveryState = delivery ? deliveryDisplayState(delivery) : null;
             const deliveryChip = deliveryState ? deliveryChipConfig[deliveryState] : null;
-            const isDelivered = deliveryState === "delivered" || deliveryState === "opened";
+            // Fails open: an errored deliveries query means we don't know the
+            // state, so don't block Resume on it. Bounced is currently
+            // unreachable (SPO-367); failed is reachable via invoice.send's
+            // provider-throw path.
+            const chaseBlocked =
+              !deliveriesError && (deliveryState === "bounced" || deliveryState === "failed");
             const canSend = inv.status === "draft" || inv.status === "open";
 
             return (
@@ -371,18 +379,6 @@ export default function Payments() {
                     {deliveryChip && (
                       <StatusChip tone={deliveryChip.tone} label={deliveryChip.label} />
                     )}
-                    {deliveryState === "bounced" && delivery && (
-                      <p className="flex items-center gap-1 text-[11px] font-medium text-brick">
-                        <AlertTriangle className="h-3 w-3 shrink-0" />
-                        Undelivered to {delivery.toEmail} — confirm the address and resend.
-                      </p>
-                    )}
-                    {deliveryState === "failed" && (
-                      <p className="flex items-center gap-1 text-[11px] font-medium text-brick">
-                        <AlertTriangle className="h-3 w-3 shrink-0" />
-                        The send failed before it reached the brand — resend to try again.
-                      </p>
-                    )}
                   </div>
                   <div className="col-span-3 flex flex-wrap items-center gap-2">
                     {inv.status === "open" && (
@@ -429,9 +425,24 @@ export default function Payments() {
                   </div>
                 </div>
 
+                {/* Full-width so the reason sentence has room instead of
+                    wrapping hard inside the 2/12 Status column. */}
+                {(deliveryState === "bounced" || deliveryState === "failed") && (
+                  <p className="flex items-start gap-1 px-4 pb-3 text-[11px] font-medium text-brick">
+                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                    {deliveryState === "bounced" && delivery
+                      ? `Undelivered to ${delivery.toEmail} — confirm the address and resend.`
+                      : "The send failed before it reached the brand — resend to try again."}
+                  </p>
+                )}
+
                 {/* Expanded chase info */}
                 {expandedId === inv.id && inv.status === "open" && (
-                  <InvoiceChasePanel invoiceId={inv.id} isDelivered={isDelivered} />
+                  <InvoiceChasePanel
+                    invoiceId={inv.id}
+                    chaseBlocked={chaseBlocked}
+                    deliveryState={deliveryState}
+                  />
                 )}
               </div>
             );
@@ -467,10 +478,12 @@ function StatCard({
 
 function InvoiceChasePanel({
   invoiceId,
-  isDelivered,
+  chaseBlocked,
+  deliveryState,
 }: {
   invoiceId: string;
-  isDelivered: boolean;
+  chaseBlocked: boolean;
+  deliveryState: DeliveryDisplayState | null;
 }) {
   const { data: state } = trpc.chase.state.useQuery({ invoiceId });
   const { data: events } = trpc.chase.events.useQuery({ invoiceId });
@@ -510,9 +523,7 @@ function InvoiceChasePanel({
         {state?.mode === "armed" && (
           <button
             onClick={() => pause.mutate({ invoiceId, reason: "Manual pause" })}
-            disabled={!isDelivered}
-            aria-disabled={!isDelivered}
-            className="flex h-6 items-center gap-1 rounded border border-hairline px-1.5 text-[11px] text-ink-3 hover:bg-surface disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+            className="flex h-6 items-center gap-1 rounded border border-hairline px-1.5 text-[11px] text-ink-3 hover:bg-surface"
           >
             <Pause className="h-3 w-3" />
             Pause
@@ -521,8 +532,8 @@ function InvoiceChasePanel({
         {state?.mode === "paused" && (
           <button
             onClick={() => resume.mutate({ invoiceId })}
-            disabled={!isDelivered}
-            aria-disabled={!isDelivered}
+            disabled={chaseBlocked}
+            aria-disabled={chaseBlocked}
             className="flex h-6 items-center gap-1 rounded border border-hairline px-1.5 text-[11px] text-pine hover:bg-pine-tint disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
           >
             <Play className="h-3 w-3" />
@@ -531,12 +542,15 @@ function InvoiceChasePanel({
         )}
       </div>
 
-      {state && !isDelivered && (state.mode === "armed" || state.mode === "paused") && (
+      {/* Pause is always available — it only ever de-escalates. Resume is the
+          one control that can arm reminders nowhere would go, so it's the
+          only thing gated here. */}
+      {state?.mode === "paused" && chaseBlocked && (
         <p className="mt-2 flex items-center gap-1 text-[11px] font-medium text-amber">
           <AlertTriangle className="h-3 w-3 shrink-0" />
-          {state.pausedReason === "hard_bounce"
-            ? "Chase controls are locked — this invoice's email bounced, so reminders would go nowhere."
-            : "Chase controls are locked until this invoice is confirmed delivered — chasing a brand that never got the invoice makes things worse."}
+          {deliveryState === "bounced"
+            ? "Resume is locked — this invoice's email bounced, so reminders would go nowhere until it's resent."
+            : "Resume is locked — the last send failed before it reached the brand, so reminders would go nowhere until it's resent."}
         </p>
       )}
 
