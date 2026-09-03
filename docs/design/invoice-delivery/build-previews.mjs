@@ -49,37 +49,65 @@ function render(template, vars, { escapeHtml }) {
 
 // --- derived fields, mirroring what the API should compute at send time ---
 function derive(f) {
+  // paypalLink lands in a live href on the public /i/:token page; HTML-escaping
+  // does not stop javascript:/data: URLs, so the scheme itself is validated.
+  if (f.paypalLink && !/^https:\/\//.test(f.paypalLink)) {
+    throw new Error(`paypalLink must be an https: URL, got: ${f.paypalLink}`);
+  }
   const money = new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: f.currency,
   }).format(f.amountCents / 100);
   const date = (iso) =>
     new Intl.DateTimeFormat("en-US", { dateStyle: "long", timeZone: "UTC" }).format(new Date(iso));
-  const indent = (s) => (s ? String(s).split("\n").join("\n  ") : s);
+  // Text-part treatment for long values: hard-wrap each line at 64 content
+  // chars — worst-case rendered line is "  Milestone: " (13) + 64 = 77, inside
+  // the 78-column plain-text convention. Words longer than the width (URLs)
+  // are left unbroken. Continuation lines are indented by two spaces.
+  const wrapLine = (line, width = 64) => {
+    const out = [];
+    let cur = "";
+    for (const word of line.split(" ")) {
+      if (cur && cur.length + 1 + word.length > width) {
+        out.push(cur);
+        cur = word;
+      } else {
+        cur = cur ? `${cur} ${word}` : word;
+      }
+    }
+    if (cur) out.push(cur);
+    return out.join("\n");
+  };
+  const wrapIndent = (s) =>
+    s ? String(s).split("\n").map((l) => wrapLine(l)).join("\n").split("\n").join("\n  ") : s;
   const termsLabel = { net_15: "Net 15", net_30: "Net 30", net_45: "Net 45" }[f.terms];
+  const dealTitle = f.dealTitle || "Sponsorship services";
   return {
     ...f,
     invoiceNumberFormatted: `INV-${String(f.number).padStart(4, "0")}`,
-    dealTitle: f.dealTitle || "Sponsorship services",
+    dealTitle,
+    dealTitleWrapped: wrapIndent(dealTitle),
     amountFormatted: money,
     termsLabel,
     issuedDate: date(f.issuedAt),
     dueDateLine: f.dueAt ? `Due ${date(f.dueAt)}` : "Due on receipt",
     dueDateValue: f.dueAt ? date(f.dueAt) : "On receipt",
+    dueDatePhrase: f.dueAt ? `due ${date(f.dueAt)}` : "due on receipt",
     greetingLine: f.contactName ? `Hi ${f.contactName.split(" ")[0]},` : "Hello,",
     paidDate: f.paidAt ? date(f.paidAt) : "",
     isPaid: !!f.paidAt,
     isUnpaid: !f.paidAt,
     noRails: !f.paypalLink && !f.wiseText && !f.bankText,
-    milestoneNoteIndented: indent(f.milestoneNote),
-    wiseTextIndented: indent(f.wiseText),
-    bankTextIndented: indent(f.bankText),
+    milestoneNoteIndented: wrapIndent(f.milestoneNote),
+    wiseTextIndented: wrapIndent(f.wiseText),
+    bankTextIndented: wrapIndent(f.bankText),
   };
 }
 
 const base = {
   number: 12,
   creatorDisplayName: "Nightshade Media",
+  creatorEmail: "kaya@nightshademedia.example",
   brandName: "Meridian Peripherals",
   contactName: "Dana Whitfield",
   dealTitle: "Spring hardware launch — dedicated stream + 3 sponsored segments",
@@ -121,13 +149,15 @@ const variants = {
 const emailHtml = readFileSync(join(here, "invoice-email.html"), "utf8");
 const emailText = readFileSync(join(here, "invoice-email.txt"), "utf8");
 const pageHtml = readFileSync(join(here, "invoice-page.html"), "utf8");
+const subjectText = readFileSync(join(here, "invoice-subject.txt"), "utf8");
 
 for (const [name, overrides] of Object.entries(variants)) {
   const vars = derive({ ...base, ...overrides });
   writeFileSync(join(outDir, `${name}.email.html`), render(emailHtml, vars, { escapeHtml: true }));
   writeFileSync(join(outDir, `${name}.email.txt`), render(emailText, vars, { escapeHtml: false }));
+  writeFileSync(join(outDir, `${name}.subject.txt`), render(subjectText, vars, { escapeHtml: false }).trim() + "\n");
   // Previews are served from a flat dir; point font URLs at ./fonts/.
   const page = render(pageHtml, vars, { escapeHtml: true }).replaceAll('url("/fonts/', 'url("./fonts/');
   writeFileSync(join(outDir, `${name}.page.html`), page);
 }
-console.log(`wrote ${Object.keys(variants).length} variants × 3 formats to ${outDir}`);
+console.log(`wrote ${Object.keys(variants).length} variants × 4 formats to ${outDir}`);

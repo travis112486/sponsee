@@ -1,0 +1,350 @@
+/*
+  Sponsee hosted invoice page (/i/:token) — SPO-364 / design SPO-366.
+
+  The print layout IS the deliverable: a brand's AP team prints this to PDF and
+  files it. No app chrome, no nav, no marketing in print. Fonts are the apps/web
+  self-hosted files already declared in index.css, so no @font-face here.
+*/
+
+.invoice-page {
+  --paper: #f7f5f1;
+  --ink: #1b1815;
+  --muted: #8a8178;
+  --border: #e8e3db;
+  --pine: #0e7a5f;
+  --card: #ffffff;
+  --wash: #fbfaf7;
+
+  background: var(--paper);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.invoice-page * {
+  box-sizing: border-box;
+}
+
+.invoice-page .serif {
+  font-family: "Instrument Serif", Georgia, serif;
+  letter-spacing: 0;
+}
+
+.invoice-page .tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.invoice-page .sheet {
+  max-width: 760px;
+  margin: 40px auto 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 56px 64px;
+}
+
+/* ---- Header ---- */
+.invoice-page .head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  padding-bottom: 28px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.invoice-page .head .from-name {
+  font-size: 28px;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.invoice-page .head .from-sub {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.invoice-page .head .doc-id {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.invoice-page .head .doc-label {
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.invoice-page .head .doc-number {
+  font-size: 20px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.invoice-page .chip-paid {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 3px 10px;
+  border: 1.5px solid var(--pine);
+  border-radius: 999px;
+  color: var(--pine);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+/* ---- Meta grid ---- */
+.invoice-page .meta {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 28px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.invoice-page .meta .dates {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  align-content: start;
+  margin: 0;
+}
+
+.invoice-page .meta .dates dt {
+  color: var(--muted);
+  margin: 0;
+}
+
+.invoice-page .meta .dates dd {
+  margin: 0;
+}
+
+/* ---- Line ---- */
+.invoice-page .line {
+  padding: 28px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.invoice-page .line h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+
+.invoice-page .line .deal-title {
+  font-size: 16px;
+  font-weight: 500;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.invoice-page .line .milestone {
+  color: var(--muted);
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Amount ---- */
+.invoice-page .amount {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 24px;
+  padding: 28px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.invoice-page .amount .label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.invoice-page .amount .value {
+  font-size: 36px;
+  line-height: 1.1;
+}
+
+.invoice-page .amount .value .cur {
+  font-size: 17px;
+  color: var(--muted);
+  margin-left: 4px;
+}
+
+/* ---- Payment rails ---- */
+.invoice-page .pay {
+  padding: 28px 0 8px;
+}
+
+.invoice-page .pay > h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 16px;
+}
+
+.invoice-page .rail {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  break-inside: avoid;
+}
+
+.invoice-page .rail:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.invoice-page .rail .rail-name {
+  font-weight: 600;
+}
+
+.invoice-page .rail .rail-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.invoice-page .rail .rail-body a {
+  color: var(--pine);
+}
+
+.invoice-page .pay .no-rails {
+  color: var(--ink);
+  margin: 0;
+}
+
+.invoice-page .paid-note {
+  background: var(--wash);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin: 0;
+}
+
+.invoice-page .paid-note strong {
+  color: var(--pine);
+}
+
+/* ---- Screen-only chrome ---- */
+.invoice-page .screen-bar {
+  max-width: 760px;
+  margin: 0 auto 48px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.invoice-page .print-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.invoice-page .print-btn:hover {
+  border-color: var(--pine);
+  color: var(--pine);
+}
+
+.invoice-page .print-btn:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .invoice-page .sheet {
+    margin: 16px;
+    padding: 32px 24px;
+    border-radius: 10px;
+  }
+  .invoice-page .head {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .invoice-page .head .doc-id {
+    text-align: left;
+  }
+  .invoice-page .amount {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .invoice-page .rail {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
+/* ---- Print: a clean single-page paper invoice ---- */
+@media print {
+  @page {
+    margin: 14mm;
+  }
+  .invoice-page {
+    background: #fff;
+    font-size: 12px;
+  }
+  .invoice-page .screen-bar {
+    display: none;
+  }
+  .invoice-page .sheet {
+    max-width: none;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+  }
+  .invoice-page .head {
+    padding-bottom: 16px;
+  }
+  .invoice-page .head .from-name {
+    font-size: 24px;
+  }
+  .invoice-page .meta,
+  .invoice-page .line,
+  .invoice-page .amount {
+    padding: 16px 0;
+  }
+  .invoice-page .pay {
+    padding: 16px 0 0;
+  }
+  .invoice-page .amount .value {
+    font-size: 30px;
+  }
+  .invoice-page .rail .rail-body a {
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .invoice-page .meta,
+  .invoice-page .line,
+  .invoice-page .amount,
+  .invoice-page .pay {
+    break-inside: avoid;
+  }
+}

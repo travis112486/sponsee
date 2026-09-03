@@ -68,6 +68,22 @@ describe("pre-rendered marketing pages", () => {
     expect(text.split(" ").length).toBeGreaterThan(500);
   });
 
+  it("privacy page describes the product, not only the waitlist", () => {
+    // SPO-375: the waitlist-era page said nothing about pipeline data, chase
+    // mail, or subprocessors. A crawler (and a creator reading before they
+    // enter a brand list) has to see the product policy in the pre-rendered
+    // markup, not after client JS.
+    const text = textOf(renderToString(PAGES["privacy.html"]));
+
+    expect(text).toContain("we email the brand contacts you saved, on your behalf");
+    expect(text).toContain("Neon");
+    expect(text).toContain("unavatar.io");
+    expect(text).toContain("There is no delete button in the app yet");
+    expect(text).not.toContain(
+      "We use your email to send waitlist confirmations and beta launch updates"
+    );
+  });
+
   it("keeps scroll-reveal sections visible in the pre-rendered markup", () => {
     // A section that renders at opacity-0 is copy a crawler may discount and a
     // no-JS visitor cannot read at all.
