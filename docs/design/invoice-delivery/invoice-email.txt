@@ -1,0 +1,49 @@
+{{creatorDisplayName}}
+INVOICE {{invoiceNumberFormatted}}{{#if isPaid}} — PAID{{/if}}
+============================================================
+
+BILLED TO
+  {{brandName}}
+{{#if contactName}}  Attn: {{contactName}}
+{{/if}}
+FROM
+  {{creatorDisplayName}}
+  {{creatorEmail}}
+
+FOR
+  {{dealTitleWrapped}}
+{{#if milestoneNote}}
+  Milestone: {{milestoneNoteIndented}}
+{{/if}}
+{{#if isPaid}}AMOUNT PAID{{/if}}{{#if isUnpaid}}AMOUNT DUE{{/if}}
+  {{amountFormatted}} {{currency}}
+
+  Terms   {{termsLabel}}
+  Issued  {{issuedDate}}
+  Due     {{dueDateValue}}
+{{#if isPaid}}  Paid    {{paidDate}}
+{{/if}}
+{{#if isPaid}}THIS INVOICE HAS BEEN PAID
+------------------------------------------------------------
+Paid {{paidDate}}. No further action is needed.
+
+{{/if}}{{#if isUnpaid}}HOW TO PAY
+------------------------------------------------------------
+{{#if paypalLink}}PayPal
+  {{paypalLink}}
+
+{{/if}}{{#if wiseText}}Wise
+  {{wiseTextIndented}}
+
+{{/if}}{{#if bankText}}Bank transfer
+  {{bankTextIndented}}
+
+{{/if}}{{#if noRails}}To arrange payment, reply to this email and
+{{creatorDisplayName}} will send payment details.
+
+{{/if}}{{/if}}------------------------------------------------------------
+View or print this invoice:
+{{hostedInvoiceUrl}}
+
+Questions about this invoice? Reply to this email —
+it goes directly to {{creatorDisplayName}}.

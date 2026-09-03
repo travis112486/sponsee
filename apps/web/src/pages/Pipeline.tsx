@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { platformBgClasses } from "@/lib/platform-tokens";
 import { startOfZonedQuarterMs } from "@/lib/zoned-quarter";
 import { formatCount, useCountUp } from "@/hooks/useCountUp";
-import { BrandMark } from "@/components/shared/BrandMark";
+import { BrandMark, normalizeBrandDomain } from "@/components/shared/BrandMark";
 import { PlatformDots } from "@/components/shared/PlatformDot";
 import { Progress } from "@/components/ui/progress";
 import { ContactPicker } from "@/components/ContactPicker";
@@ -132,7 +132,7 @@ type PipelineDeal = {
   valueNote?: string | null;
   stageEnteredAt?: string | Date | null;
   primaryContactId?: string | null;
-  brand?: { name?: string | null } | null;
+  brand?: { name?: string | null; domain?: string | null } | null;
   platforms?: readonly string[] | null;
   notes?: string | null;
   deliverables?: DeliverableRow[] | null;
@@ -230,57 +230,81 @@ function DealCardBody({ deal }: { deal: PipelineDeal }) {
 
   return (
     <>
-      <div className="flex items-start gap-2.5">
-        <BrandMark brand={deal.brand?.name ?? "?"} size={30} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-2">
-            <p className="truncate text-[13px] font-semibold text-ink">
-              {deal.brand?.name ?? "Unknown brand"}
-            </p>
-            <span
-              className={cn(
-                "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-3",
-                dealTypeBadge[type]
-              )}
-            >
-              {dealTypeLabels[type]}
-            </span>
-          </div>
-          <p className="mt-0.5 line-clamp-2 text-[12px] leading-[18px] text-ink-2">
-            {deal.title}
-          </p>
-        </div>
+      {/* The brand name owns the full header row (the type chip lives on the
+          value row) so it survives the narrow lg column widths untruncated. */}
+      <div className="flex items-center gap-1.5">
+        <BrandMark
+          brand={deal.brand?.name ?? "?"}
+          domain={deal.brand?.domain}
+          size={28}
+          className="rounded-lg"
+        />
+        <p
+          title={deal.brand?.name ?? undefined}
+          className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-4 tracking-[-0.01em] text-ink"
+        >
+          {deal.brand?.name ?? "Unknown brand"}
+        </p>
       </div>
+      <p className="mt-1.5 line-clamp-2 text-[12px] leading-[17px] text-ink-2">
+        {deal.title}
+      </p>
 
-      <div className="mt-2.5 flex items-center justify-between gap-2">
-        <span className="font-mono text-[13px] font-semibold tabular-nums text-ink">
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate font-mono text-[14px] font-semibold tabular-nums text-ink">
           {formatCents(deal.valueCents)}
           {deal.valueNote && (
-            <span className="ml-1 font-sans text-[10px] font-normal text-ink-3">
+            // Inline where the value row has room (sub-lg 260px columns,
+            // ≥1440). Through the lg–1439 narrow-column band it moves to its
+            // own line below instead of disappearing — the note carries real
+            // pricing context ("per stream") a creator must be able to see.
+            <span className="ml-1 font-sans text-[10px] font-normal text-ink-3 lg:hidden min-[1440px]:inline">
               {deal.valueNote}
             </span>
           )}
         </span>
-        {platformList.length > 0 && <PlatformDots platforms={platformList} />}
+        <span
+          className={cn(
+            "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-3",
+            dealTypeBadge[type]
+          )}
+        >
+          {dealTypeLabels[type]}
+        </span>
       </div>
+      {deal.valueNote && (
+        <p
+          title={deal.valueNote}
+          className="mt-0.5 hidden truncate text-[10px] leading-4 text-ink-3 lg:block min-[1440px]:hidden"
+        >
+          {deal.valueNote}
+        </p>
+      )}
 
-      <div className="mt-2 flex items-center justify-between gap-2 border-t border-hairline pt-2">
+      {/* Through the lg–1439 band the row stacks: the deliverable title takes
+          the full card width (a 46px slot clipped "VOD publish" on every
+          card), with dots + age tucked under it. One row again from 1440. */}
+      <div className="mt-2 flex items-center justify-between gap-2 border-t border-hairline pt-2 lg:flex-col lg:items-stretch lg:gap-1 min-[1440px]:flex-row min-[1440px]:items-center min-[1440px]:gap-2">
         {next ? (
           <p
+            title={next.title}
             className={cn(
               "flex min-w-0 items-center gap-1 truncate text-[11px]",
               nextDue ? "font-medium text-amber" : "text-ink-3"
             )}
           >
             <CalendarDays className="h-3 w-3 shrink-0" />
-            <span className="truncate">Next: {next.title}</span>
+            <span className="truncate">{next.title}</span>
           </p>
         ) : (
           <span className="text-[11px] text-ink-3">No open deliverables</span>
         )}
-        <span className="flex shrink-0 items-center gap-1 rounded-full bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-ink-3">
-          {stale && <span className="h-1.5 w-1.5 rounded-full bg-amber" title="Stale" />}
-          {days}d
+        <span className="flex shrink-0 items-center gap-1.5 lg:self-end min-[1440px]:self-auto">
+          {platformList.length > 0 && <PlatformDots platforms={platformList} />}
+          <span className="flex shrink-0 items-center gap-1 rounded-full bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-ink-3">
+            {stale && <span className="h-1.5 w-1.5 rounded-full bg-amber" title="Stale" />}
+            {days}d
+          </span>
         </span>
       </div>
 
@@ -324,7 +348,12 @@ function DroppableStageColumn({
     <div
       ref={setNodeRef}
       className={cn(
-        "flex w-[260px] shrink-0 flex-col rounded-xl border transition-colors",
+        // Fixed 260px + horizontal scroll on small screens; from lg up the six
+        // columns split the row evenly (basis-0 + min-w floor). Through the app
+        // shell the content width is min(1360, vw - 232) - 48, so six 156px
+        // columns + five 8px gaps (976px) fit without scrolling from a 1280px
+        // viewport up; between lg (1024) and 1280 the board still scrolls.
+        "flex w-[260px] shrink-0 flex-col rounded-xl border transition-colors lg:w-auto lg:min-w-[156px] lg:shrink lg:flex-1 lg:basis-0",
         isOver ? "border-pine bg-pine-tint/40" : "border-hairline bg-surface-subtle"
       )}
     >
@@ -391,7 +420,7 @@ function DraggableDealCard({
           : undefined
       }
       className={cn(
-        "group relative min-h-[118px] cursor-grab touch-manipulation rounded-lg border border-hairline bg-surface p-3 shadow-warm transition-shadow hover:border-pine/30 hover:shadow-warm-md active:cursor-grabbing",
+        "group relative min-h-[118px] cursor-grab touch-manipulation rounded-[10px] border border-hairline bg-surface p-3 shadow-warm transition-shadow hover:border-pine/30 hover:shadow-warm-md active:cursor-grabbing lg:p-2.5",
         isDragging && "opacity-40",
         deal.stage === "paid" && "opacity-70"
       )}
@@ -513,10 +542,10 @@ function DraggableDealCard({
   );
 }
 
-function StageSum({ valueCents }: { valueCents: number }) {
+function StageSum({ valueCents, className }: { valueCents: number; className?: string }) {
   const dollars = useCountUp(valueCents / 100, 300);
   return (
-    <span className="font-mono text-[11px] font-medium tabular-nums text-ink-3">
+    <span className={cn("font-mono text-[11px] font-medium tabular-nums text-ink-3", className)}>
       {formatCount(dollars, { currency: true })}
     </span>
   );
@@ -880,36 +909,38 @@ export default function Pipeline() {
           <div
             ref={boardRef}
             role="region"
-            aria-label="Pipeline stages — six stages, scroll horizontally or use arrow keys for more"
+            aria-label="Pipeline stages — six stages; scroll horizontally or use arrow keys when they overflow"
             tabIndex={0}
             onKeyDown={(e) => {
               if (e.target !== e.currentTarget) return;
               if (e.key === "ArrowRight") scrollBoardBy(280);
               if (e.key === "ArrowLeft") scrollBoardBy(-280);
             }}
-            className="board-scroll flex gap-3 overflow-x-auto pb-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1 rounded-lg"
+            className="board-scroll flex gap-3 overflow-x-auto pb-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1 rounded-lg lg:gap-2"
           >
           {dealStages.map((stage) => {
             const cards = byStage[stage];
             const sum = cards.reduce((s, d) => s + d.valueCents, 0);
             return (
             <DroppableStageColumn key={stage} stage={stage} isOver={overStage === stage}>
-              {/* Column header */}
-              <div className="flex items-center justify-between px-3 py-2.5">
-                <div className="flex items-center gap-2">
-                  <span className={cn("inline-flex h-2 w-2 rounded-full", stageDotColors[stage])} />
-                  <span className="text-[13px] font-semibold text-ink">
+              {/* Column header — single row when the column is wide (sub-lg
+                  260px), stacked label/sum from lg up where the narrow columns
+                  would otherwise wrap "Contract Sent" and misalign card tops. */}
+              <div className="flex items-center justify-between gap-2 px-3 py-2.5 lg:flex-col lg:items-stretch lg:gap-0.5 lg:px-2.5">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className={cn("inline-flex h-2 w-2 shrink-0 rounded-full", stageDotColors[stage])} />
+                  <span className="truncate whitespace-nowrap text-[13px] font-semibold text-ink">
                     {stageLabels[stage]}
                   </span>
-                  <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-medium text-ink-3">
+                  <span className="rounded-full bg-surface px-1.5 py-0.5 text-[11px] font-medium text-ink-3">
                     {cards.length}
                   </span>
                 </div>
-                <StageSum valueCents={sum} />
+                <StageSum valueCents={sum} className="lg:pl-3.5" />
               </div>
 
               {/* Cards */}
-              <div className="flex flex-1 flex-col gap-2 px-2 pb-2">
+              <div className="flex flex-1 flex-col gap-2 px-2 pb-2 lg:px-1.5">
                 {cards.map((deal) => (
                   <DraggableDealCard
                     key={deal.id}
@@ -937,7 +968,7 @@ export default function Pipeline() {
         {/* Follows the cursor so the card being dragged stays legible over other columns */}
         <DragOverlay dropAnimation={null}>
           {activeDeal && (
-            <div className="group w-[244px] rotate-[1.5deg] cursor-grabbing rounded-lg border border-pine/40 bg-surface p-3 shadow-warm-lg">
+            <div className="group w-[244px] rotate-[1.5deg] cursor-grabbing rounded-[10px] border border-pine/40 bg-surface p-3 shadow-warm-lg">
               <DealCardBody deal={activeDeal} />
             </div>
           )}
@@ -973,6 +1004,7 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
   const [selectedBrandId, setSelectedBrandId] = useState("");
   const [newBrandName, setNewBrandName] = useState("");
   const [newBrandCategory, setNewBrandCategory] = useState("");
+  const [newBrandDomain, setNewBrandDomain] = useState("");
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   // Inline contact fields for the "new brand" path, where the brand (and so the
   // contact's brandId) does not exist until the deal is submitted.
@@ -1059,6 +1091,7 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
         const brand = await createBrand.mutateAsync({
           name: newBrandName.trim(),
           category: newBrandCategory.trim() || undefined,
+          domain: normalizeBrandDomain(newBrandDomain) ?? undefined,
         });
         brandId = brand.id;
       } catch {
@@ -1123,16 +1156,16 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
         aria-modal="true"
         aria-labelledby="new-deal-title"
         tabIndex={-1}
-        className="relative w-full max-w-lg rounded-xl border border-hairline bg-surface shadow-lg focus:outline-none"
+        className="relative flex max-h-full w-full max-w-lg flex-col rounded-xl border border-hairline bg-surface shadow-lg focus:outline-none"
       >
-        <div className="flex items-center justify-between border-b border-hairline px-4 py-3">
+        <div className="flex shrink-0 items-center justify-between border-b border-hairline px-4 py-3">
           <h3 id="new-deal-title" className="text-[15px] font-semibold text-ink">New deal</h3>
           <button type="button" onClick={onClose} aria-label="Close" className="text-ink-3 hover:text-ink">
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4 p-4">
+        <form onSubmit={handleSubmit} className="min-h-0 space-y-4 overflow-y-auto overscroll-contain p-4">
           {/* Brand */}
           <div>
             <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3">Brand</label>
@@ -1188,6 +1221,13 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
                   value={newBrandCategory}
                   onChange={(e) => setNewBrandCategory(e.target.value)}
                   placeholder="Category (optional)"
+                  className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
+                />
+                <input
+                  value={newBrandDomain}
+                  onChange={(e) => setNewBrandDomain(e.target.value)}
+                  placeholder="Website (optional — shows the brand's logo)"
+                  aria-label="Brand website"
                   className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-pine"
                 />
               </div>

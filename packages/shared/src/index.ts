@@ -5,6 +5,7 @@ export * from "./calculator.js";
 export * from "./benchmark.js";
 export * from "./subscription.js";
 export * from "./timezone.js";
+export * from "./brand-domain.js";
 
 // Re-export for convenience
 export { renderMergeTokens, validateMergeTokens, hasMergeTokens };
@@ -150,6 +151,7 @@ export const activityKinds = [
   "chase_sent",
   "note",
   "platform_sync",
+  "invoice_sent",
 ] as const;
 export type ActivityKind = (typeof activityKinds)[number];
 

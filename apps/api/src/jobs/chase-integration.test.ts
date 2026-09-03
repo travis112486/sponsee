@@ -1391,8 +1391,8 @@ describe("SPO-298 contact capture end-to-end (router-driven)", () => {
       .values({ creatorId: creator.id, name: "Capture Brand" })
       .returning();
 
-    // Step-1 template must exist (and be enabled) before invoice.create so it
-    // can compute the armed chase state's nextActionAt.
+    // Step-1 template must exist (and be enabled) for chase to compute a
+    // nextActionAt once armed.
     await db.insert(schema.chaseTemplates).values({
       creatorId: creator.id,
       step: 1,
@@ -1404,6 +1404,19 @@ describe("SPO-298 contact capture end-to-end (router-driven)", () => {
     });
 
     return { creator, brand };
+  }
+
+  // invoice.create no longer arms chase (SPO-363 — chase arms on invoice.send).
+  // These tests exercise chase-tick/approve directly, not the send path, so
+  // arm the state the same way invoice.send would rather than invoking a
+  // real provider send here.
+  async function armChase(invoiceId: string, nextActionAt: Date) {
+    await db.insert(schema.invoiceChaseState).values({
+      invoiceId,
+      mode: "armed",
+      nextStep: 1,
+      nextActionAt,
+    });
   }
 
   it("deal -> contact -> invoice -> overdue -> chase-tick -> approve reaches an actual send", async () => {
@@ -1443,6 +1456,7 @@ describe("SPO-298 contact capture end-to-end (router-driven)", () => {
       dueAt: overdue,
     });
     expect(invoice.contactId).toBe(contact.id);
+    await armChase(invoice.id, new Date(Date.now() - 24 * 60 * 60 * 1000));
 
     // 4) chase-tick resolves the recipient from the invoice's contact.
     const created = await runChaseTick();
@@ -1482,6 +1496,7 @@ describe("SPO-298 contact capture end-to-end (router-driven)", () => {
       title: "No Contact Invoice",
       dueAt: overdue,
     });
+    await armChase(invoice.id, new Date(Date.now() - 24 * 60 * 60 * 1000));
 
     await runChaseTick();
 
@@ -1500,6 +1515,74 @@ describe("SPO-298 contact capture end-to-end (router-driven)", () => {
         err.code === "BAD_REQUEST" && err.message === "No recipient email configured"
     );
     expect(mockBossSend).not.toHaveBeenCalled();
+  });
+
+  it("SPO-347: contact added after the invoice was armed unblocks the send and repairs the recipient", async () => {
+    const { creator, brand } = await seedCreatorWithBrandAndTemplate();
+    const ctx = mockCtx(creator.id);
+
+    // Invoice created before any contact exists — the migration/production state.
+    const dealsCaller = dealsRouter.createCaller(ctx);
+    const deal = await dealsCaller.create({
+      brandId: brand.id,
+      title: "Contact After Invoice Deal",
+      type: "flat",
+      valueCents: 10000,
+    });
+
+    const overdue = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const invoiceCaller = invoiceRouter.createCaller(ctx);
+    const invoice = await invoiceCaller.create({
+      dealId: deal.id,
+      amountCents: 10000,
+      title: "Contact After Invoice",
+      dueAt: overdue,
+    });
+    await armChase(invoice.id, new Date(Date.now() - 24 * 60 * 60 * 1000));
+
+    await runChaseTick();
+
+    const [armed] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+    expect(armed.toEmail).toBeNull();
+
+    // Creator follows the Payments hint: add a primary contact to this deal.
+    const brandCaller = brandRouter.createCaller(ctx);
+    const contact = await brandCaller.addContact({
+      brandId: brand.id,
+      name: "Late Contact",
+      email: "late@example.com",
+    });
+    await dealsCaller.update({ id: deal.id, primaryContactId: contact.id });
+
+    // The awaiting-review hint must clear: it now surfaces the *effective*
+    // recipient resolved from the deal's primary contact, with no re-tick.
+    const chaseCaller = chaseRouter.createCaller(ctx);
+    const queue = await chaseCaller.awaitingReview();
+    expect(queue).toHaveLength(1);
+    expect(queue[0].recipientEmail).toBe("late@example.com");
+
+    // Approve resolves the recipient at send time and enqueues a real send.
+    const result = await chaseCaller.approve({ chaseEventId: armed.id });
+    expect(result).toMatchObject({ success: true, queued: true });
+
+    const jobArgs = mockBossSend.mock.calls[0][1];
+    expect(jobArgs.toEmail).toBe("late@example.com");
+
+    // The repair is durable: the event self-heals and the invoice is backfilled.
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, armed.id));
+    expect(event.toEmail).toBe("late@example.com");
+
+    const [repaired] = await db
+      .select()
+      .from(schema.invoices)
+      .where(eq(schema.invoices.id, invoice.id));
+    expect(repaired.contactId).toBe(contact.id);
   });
 });
 

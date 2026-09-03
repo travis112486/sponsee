@@ -1,10 +1,116 @@
+import { randomBytes } from "crypto";
 import { z } from "zod";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { eq, and, desc, sql } from "drizzle-orm";
-import { invoices, invoiceChaseState, chaseTemplates, deals, contacts, brands } from "@sponsee/db/schema";
+import type { DB } from "@sponsee/db";
+import {
+  invoices,
+  invoiceChaseState,
+  invoiceDeliveries,
+  deals,
+  contacts,
+  brands,
+  creators,
+  activityEvents,
+} from "@sponsee/db/schema";
+import { createEmailProvider } from "../email/index.js";
+import { resolveCreatorReplyToEmail } from "../email/reply-to.js";
+import { calculateNextActionAt } from "../jobs/chase-tick.js";
 
 const PAID_REQUIRES_PAID_AT_CONSTRAINT = "invoices_paid_requires_paid_at";
+
+type RailsSnapshot = {
+  displayName: string | null;
+  paypalLink: string | null;
+  wiseText: string | null;
+  bankText: string | null;
+};
+
+/**
+ * Resolve the brand-side recipient for an invoice at send time: the
+ * invoice's own contact first, falling back to the deal's primary contact.
+ * Mirrors resolveChaseRecipient in chase.ts — kept as a separate,
+ * invoice-scoped copy rather than a shared import so this router does not
+ * reach into the chase router's file.
+ *
+ * Read-only and unscoped by tenant, same as its chase.ts counterpart: safe by
+ * construction because every writer of invoices.contactId /
+ * deals.primaryContactId already tenant-validates its input (SPO-347
+ * lineage) before this ever reads it.
+ */
+async function resolveInvoiceRecipientEmail(
+  db: DB,
+  invoice: { contactId: string | null; dealId: string | null }
+): Promise<string | null> {
+  if (invoice.contactId) {
+    const contact = await db.query.contacts.findFirst({
+      where: (c, { eq }) => eq(c.id, invoice.contactId!),
+    });
+    if (contact?.email) return contact.email;
+  }
+
+  if (invoice.dealId) {
+    const deal = await db.query.deals.findFirst({
+      where: (d, { eq }) => eq(d.id, invoice.dealId!),
+    });
+    if (deal?.primaryContactId) {
+      const contact = await db.query.contacts.findFirst({
+        where: (c, { eq }) => eq(c.id, deal.primaryContactId!),
+      });
+      if (contact?.email) return contact.email;
+    }
+  }
+
+  return null;
+}
+
+function formatCents(cents: number, currency: string): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 0,
+  }).format(cents / 100);
+}
+
+/**
+ * Plain-text invoice body. This is the only body a brand's AP inbox is
+ * guaranteed to render — many strip HTML and images — so it must carry the
+ * full invoice, not a "view it online" stub. The Product Designer refines
+ * the HTML companion separately (SPO-358 item 5).
+ */
+function buildInvoiceText(args: {
+  invoice: typeof invoices.$inferSelect;
+  invoiceLabel: string;
+  rails: RailsSnapshot;
+}): string {
+  const { invoice, invoiceLabel, rails } = args;
+  const amount = formatCents(invoice.amountCents, invoice.currency);
+  const dueDate = invoice.dueAt
+    ? new Date(invoice.dueAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    : "on receipt";
+
+  const railLines = [
+    rails.paypalLink ? `PayPal: ${rails.paypalLink}` : null,
+    rails.wiseText ? `Wise: ${rails.wiseText}` : null,
+    rails.bankText ? `Bank transfer: ${rails.bankText}` : null,
+  ].filter((line): line is string => line !== null);
+
+  return [
+    `Invoice ${invoiceLabel}`,
+    invoice.title || null,
+    "",
+    `Amount due: ${amount}`,
+    `Due date: ${dueDate}`,
+    "",
+    "Payment details:",
+    ...(railLines.length > 0 ? railLines : ["Contact the sender for payment instructions."]),
+    "",
+    `From: ${rails.displayName || "your creator partner"}`,
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
 
 /**
  * Did this update fail the DB-level status='paid' <=> paidAt not-null invariant?
@@ -97,25 +203,163 @@ export const invoiceRouter = createTRPCRouter({
         })
         .returning();
 
-      // Initialize chase state with nextActionAt derived from step-1 template offset
-      const [template] = await ctx.db
-        .select()
-        .from(chaseTemplates)
-        .where(and(eq(chaseTemplates.creatorId, ctx.creatorId), eq(chaseTemplates.step, 1)));
-
-      const baseDate = invoice.dueAt ? new Date(invoice.dueAt) : new Date(invoice.issuedAt);
-      const nextActionAt = template && template.enabled
-        ? new Date(baseDate.getTime() + template.offsetDays * 24 * 60 * 60 * 1000)
-        : null;
-
-      await ctx.db.insert(invoiceChaseState).values({
-        invoiceId: invoice.id,
-        mode: "armed",
-        nextStep: 1,
-        nextActionAt,
-      });
+      // Chase arms on invoice.send, not here (SPO-363) — chasing an invoice
+      // that was never delivered is worse than not chasing. No
+      // invoiceChaseState row is written until the first successful send.
 
       return invoice;
+    }),
+
+  send: creatorScopedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [invoice] = await ctx.db
+        .select()
+        .from(invoices)
+        .where(and(eq(invoices.id, input.id), eq(invoices.creatorId, ctx.creatorId)));
+
+      if (!invoice) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      }
+
+      if (invoice.status !== "draft" && invoice.status !== "open") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Cannot send an invoice that is ${invoice.status}.`,
+        });
+      }
+
+      // Re-resolve the recipient at send time, not from a value captured at
+      // create (SPO-347 lesson applied to a second send path): the contact
+      // may not have existed yet, or may have changed since.
+      const toEmail = await resolveInvoiceRecipientEmail(ctx.db, invoice);
+      if (!toEmail) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Add an email for this invoice's contact (or the deal's primary contact) before sending.",
+        });
+      }
+
+      // Unlike chase — machine-authored, so it logs a warning and falls back
+      // to the platform address — an invoice is the creator's own document.
+      // A brand replying to it must reach a human, so a missing owner email
+      // refuses the send outright instead of silently defaulting to the
+      // shared platform inbox.
+      const replyToEmail = await resolveCreatorReplyToEmail(ctx.creatorId);
+      if (!replyToEmail) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "This workspace has no owner email on file; add one before sending invoices.",
+        });
+      }
+
+      const fromEmail =
+        process.env.INVOICE_FROM_EMAIL || process.env.CHASE_FROM_EMAIL || "invoices@sponsee.app";
+
+      const [creator] = await ctx.db.select().from(creators).where(eq(creators.id, ctx.creatorId));
+      const rails: RailsSnapshot = {
+        displayName: creator?.displayName ?? null,
+        paypalLink: creator?.paypalLink ?? null,
+        wiseText: creator?.wiseText ?? null,
+        bankText: creator?.bankText ?? null,
+      };
+
+      const [{ maxAttempt }] = await ctx.db
+        .select({ maxAttempt: sql<number>`COALESCE(MAX(${invoiceDeliveries.attempt}), 0)` })
+        .from(invoiceDeliveries)
+        .where(eq(invoiceDeliveries.invoiceId, invoice.id));
+      const attempt = maxAttempt + 1;
+      const idempotencyKey = `invoice:${invoice.id}:delivery:${attempt}`;
+      const publicToken = randomBytes(16).toString("hex"); // 128 bits
+
+      const invoiceLabel = `INV-${String(invoice.number).padStart(4, "0")}`;
+      const subject = `Invoice ${invoiceLabel} from ${rails.displayName || "your creator partner"}`;
+      const text = buildInvoiceText({ invoice, invoiceLabel, rails });
+
+      // Claim the attempt before calling the provider. The unique index on
+      // (invoice_id, attempt) — and on idempotency_key — means a concurrent
+      // second call for the same attempt fails right here, before it can
+      // reach the provider and send a duplicate email.
+      let delivery: typeof invoiceDeliveries.$inferSelect;
+      try {
+        [delivery] = await ctx.db
+          .insert(invoiceDeliveries)
+          .values({
+            invoiceId: invoice.id,
+            attempt,
+            toEmail,
+            fromEmail,
+            replyToEmail,
+            subjectSnapshot: subject,
+            textSnapshot: text,
+            publicToken,
+            idempotencyKey,
+            status: "queued",
+          })
+          .returning();
+      } catch (error) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "A send for this invoice is already in progress. Please retry.",
+          cause: error,
+        });
+      }
+
+      let providerMessageId: string;
+      try {
+        const info = await createEmailProvider().send({
+          to: toEmail,
+          from: fromEmail,
+          replyTo: replyToEmail,
+          subject,
+          text,
+          metadata: { idempotencyKey, tags: ["invoice"] },
+        });
+        providerMessageId = info.providerMessageId;
+      } catch (error) {
+        await ctx.db
+          .update(invoiceDeliveries)
+          .set({ status: "failed", updatedAt: new Date() })
+          .where(eq(invoiceDeliveries.id, delivery.id));
+        throw error;
+      }
+
+      await ctx.db
+        .update(invoiceDeliveries)
+        .set({ status: "sent", providerMessageId, sentAt: new Date(), updatedAt: new Date() })
+        .where(eq(invoiceDeliveries.id, delivery.id));
+
+      // rails_snapshot freezes at send and is never rewritten by a later
+      // settings edit. draft -> open on first delivery; already-open invoices
+      // (the only status invoice.create currently produces) are left alone.
+      await ctx.db
+        .update(invoices)
+        .set({
+          railsSnapshot: rails,
+          status: invoice.status === "draft" ? "open" : invoice.status,
+          updatedAt: new Date(),
+        })
+        .where(eq(invoices.id, invoice.id));
+
+      // Chase arms on send, not on create (SPO-363). onConflictDoNothing so a
+      // resend never clobbers a creator's pause or an already-armed state.
+      const nextActionAt = await calculateNextActionAt(invoice, 1);
+      await ctx.db
+        .insert(invoiceChaseState)
+        .values({ invoiceId: invoice.id, mode: "armed", nextStep: 1, nextActionAt })
+        .onConflictDoNothing({ target: invoiceChaseState.invoiceId });
+
+      await ctx.db.insert(activityEvents).values({
+        creatorId: ctx.creatorId,
+        actor: "creator",
+        entityType: "invoice",
+        entityId: invoice.id,
+        kind: "invoice_sent",
+        payload: { attempt, toEmail, providerMessageId },
+      });
+
+      return { success: true, deliveryId: delivery.id, publicToken, attempt };
     }),
 
   update: creatorScopedProcedure
@@ -127,10 +371,27 @@ export const invoiceRouter = createTRPCRouter({
         status: z.enum(["draft", "open", "paid", "void"]).optional(),
         paidAt: z.date().optional().nullable(),
         paidNote: z.string().optional().nullable(),
+        contactId: z.string().uuid().optional().nullable(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+
+      // Verify contact ownership when the caller sets it (mirrors create). Zod
+      // strips unknown keys silently, so a repair attempt referencing a
+      // cross-tenant contact must be rejected loudly, never silently dropped.
+      if (data.contactId) {
+        const [contact] = await ctx.db
+          .select()
+          .from(contacts)
+          .innerJoin(brands, eq(contacts.brandId, brands.id))
+          .where(
+            and(eq(contacts.id, data.contactId), eq(brands.creatorId, ctx.creatorId))
+          );
+        if (!contact) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+        }
+      }
 
       // `paidAt` with no `status` is undecidable from the input alone, in both
       // directions, so both are rejected rather than resolved by reading the row.

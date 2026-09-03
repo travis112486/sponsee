@@ -1,4 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
+import { useState } from "react";
+import { normalizeBrandDomain } from "@sponsee/shared";
 import { cn } from "@/lib/utils";
 
 /**
@@ -18,27 +20,106 @@ export function brandInitials(brand: string): string {
 }
 
 /**
- * Brand monogram tile — initials on a tinted neutral (ported from the mockup's
- * `DealCard.tsx`).
- *
- * There is no logo image path: the `brands` table has `name`, `category` and
- * `domain` but no logo column, so a logo would be invented data. If brand logos
- * are added later, this is the one component to change.
+ * `normalizeBrandDomain` lives in `@sponsee/shared` (SPO-395) because
+ * `/api/brand-icon` uses the same function as its first SSRF gate — a second
+ * copy here would let the client's "is this domain worth rendering" check and
+ * the server's "may we fetch this" check drift apart. Re-exported, not just
+ * imported, so `@/components/shared/BrandMark` stays a valid import site for it
+ * — `Pipeline.tsx`'s New-deal brand form gets it from here. Edit the rule in
+ * `packages/shared/src/brand-domain.ts`, not here.
+ */
+export { normalizeBrandDomain };
+
+/**
+ * unavatar.io aggregates favicon/logo sources and, with `fallback=false`,
+ * answers 404 with an EMPTY body when it finds nothing — which is what lets
+ * the <img> onError path (→ monogram) actually fire. The obvious alternatives
+ * fail here: Google's favicon endpoints and DuckDuckGo's ip3 both ship their
+ * placeholder as the 404 *body*, and browsers render a 404 image body without
+ * raising onError, so unknown brands would show a grey globe instead of our
+ * monogram (verified against redbull.com / bangenergy.com / voltaic.energy).
+ */
+function brandIconUrl(domain: string): string {
+  return `https://unavatar.io/${encodeURIComponent(domain)}?fallback=false`;
+}
+
+/**
+ * Deterministic warm tint for the monogram fallback, keyed on the name so a
+ * brand keeps its color across screens. Stays inside the warm-paper set —
+ * brick is excluded because red tiles would read as overdue/error states.
+ */
+const monogramTints = [
+  "bg-pine-tint text-pine",
+  "bg-amber-tint text-amber",
+  "bg-ink/[.06] text-ink-2",
+];
+
+function tintFor(brand: string): string {
+  let h = 0;
+  for (let i = 0; i < brand.length; i++) h = (h * 31 + brand.charCodeAt(i)) | 0;
+  return monogramTints[Math.abs(h) % monogramTints.length];
+}
+
+/**
+ * Brand mark tile. With a resolvable `domain` it shows the brand's real icon
+ * (inset on white so odd-shaped favicons still read as a tidy tile); without
+ * one — or when the icon 404s — it falls back to the initials monogram from
+ * the mockup's `DealCard.tsx`, now on a deterministic warm tint.
  */
 export function BrandMark({
   brand,
+  domain,
   size = 28,
   className,
 }: {
   brand: string;
+  domain?: string | null;
   size?: number;
   className?: string;
 }) {
+  // Failure is remembered per-domain, so editing a brand's website retries the
+  // new domain instead of staying stuck on the monogram forever.
+  const [failedDomain, setFailedDomain] = useState<string | null>(null);
+  const cleanDomain = normalizeBrandDomain(domain);
+  const logoFailed = cleanDomain !== null && failedDomain === cleanDomain;
+
+  if (cleanDomain && !logoFailed) {
+    const inset = Math.round(size * 0.66);
+    return (
+      <span
+        aria-hidden
+        className={cn(
+          "flex shrink-0 items-center justify-center overflow-hidden rounded-md bg-white ring-1 ring-inset ring-hairline",
+          className
+        )}
+        style={{ width: size, height: size }}
+      >
+        <img
+          // Remount on domain change. The per-domain `failedDomain` state above
+          // is what the jsdom regression pins, but the key guarantees a real
+          // browser tears down the old <img> (and any in-flight load / stale
+          // frame) instead of mutating `src` on a retained node — behaviour a
+          // jsdom `fireEvent.error` cannot observe. Kept deliberately; if it is
+          // ever removed, re-check real-browser retry, not just the test.
+          key={cleanDomain}
+          src={brandIconUrl(cleanDomain)}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setFailedDomain(cleanDomain)}
+          className="object-contain"
+          style={{ width: inset, height: inset }}
+        />
+      </span>
+    );
+  }
+
   return (
     <span
       aria-hidden
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-md bg-surface-subtle font-semibold text-ink-2 ring-1 ring-inset ring-hairline",
+        "flex shrink-0 items-center justify-center rounded-md font-semibold ring-1 ring-inset ring-hairline",
+        tintFor(brand),
         className
       )}
       style={{ width: size, height: size, fontSize: Math.round(size * 0.36) }}

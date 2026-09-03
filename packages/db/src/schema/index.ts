@@ -60,6 +60,14 @@ export const activityKindEnum = pgEnum("activity_kind", [
   "chase_sent",
   "note",
   "platform_sync",
+  "invoice_sent",
+]);
+export const invoiceDeliveryStatusEnum = pgEnum("invoice_delivery_status", [
+  "queued",
+  "sent",
+  "delivered",
+  "bounced",
+  "failed",
 ]);
 export const platformSyncStatusEnum = pgEnum("platform_sync_status", ["never", "ok", "error"]);
 export const planTierEnum = pgEnum("plan_tier", ["starter", "creator", "pro"]);
@@ -379,6 +387,46 @@ export const invoices = pgTable(
   ]
 );
 
+// Invoice deliveries — one row per send attempt, so a resend is auditable.
+// Everything the brand actually received is snapshotted here rather than
+// re-derived on read, because invoices.rails_snapshot (and the invoice row
+// itself) can change after the send.
+export const invoiceDeliveries = pgTable(
+  "invoice_deliveries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => invoices.id, { onDelete: "cascade" }),
+    attempt: integer("attempt").notNull(),
+    toEmail: varchar("to_email", { length: 255 }).notNull(),
+    fromEmail: varchar("from_email", { length: 255 }).notNull(),
+    replyToEmail: varchar("reply_to_email", { length: 255 }).notNull(),
+    subjectSnapshot: text("subject_snapshot").notNull(),
+    textSnapshot: text("text_snapshot").notNull(),
+    htmlSnapshot: text("html_snapshot"),
+    // >=128 bits from crypto.randomBytes — see invoice.ts. Keys the public,
+    // unauthenticated hosted view (SPO-358 item 3), so it must not be guessable.
+    publicToken: text("public_token").notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
+    status: invoiceDeliveryStatusEnum("status").notNull().default("queued"),
+    providerMessageId: text("provider_message_id"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    openedAt: timestamp("opened_at", { withTimezone: true }),
+    bouncedAt: timestamp("bounced_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("invoice_deliveries_invoice_attempt_idx").on(t.invoiceId, t.attempt),
+    uniqueIndex("invoice_deliveries_public_token_idx").on(t.publicToken),
+    uniqueIndex("invoice_deliveries_idempotency_key_idx").on(t.idempotencyKey),
+    index("invoice_deliveries_provider_message_id_idx").on(t.providerMessageId),
+    index("invoice_deliveries_invoice_idx").on(t.invoiceId),
+  ]
+);
+
 // Chase templates
 export const chaseTemplates = pgTable(
   "chase_templates",
@@ -601,6 +649,32 @@ export const waitlistSignups = pgTable(
     uniqueIndex("waitlist_signups_email_idx").on(t.email),
     index("waitlist_signups_source_idx").on(t.source),
     index("waitlist_signups_confirmed_idx").on(t.confirmed),
+  ]
+);
+
+// Brand-icon proxy cache (SPO-374). Domain-keyed, not creator-scoped: the
+// whole point is that unavatar sees one fetch per brand domain per TTL for
+// the entire product instead of one per creator per view, so this table is
+// deliberately not partitioned by creator_id the way brands/contacts are.
+export const brandIconOutcomeEnum = pgEnum("brand_icon_outcome", ["hit", "miss"]);
+
+export const brandIconCache = pgTable(
+  "brand_icon_cache",
+  {
+    domain: varchar("domain", { length: 255 }).primaryKey(),
+    outcome: brandIconOutcomeEnum("outcome").notNull(),
+    // Populated only when outcome = 'hit'.
+    contentType: varchar("content_type", { length: 128 }),
+    bodyBase64: text("body_base64"),
+    sizeBytes: integer("size_bytes"),
+    source: varchar("source", { length: 16 }), // 'favicon' | 'unavatar'
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      "brand_icon_cache_hit_has_body",
+      sql`(${t.outcome} <> 'hit') OR (${t.bodyBase64} IS NOT NULL AND ${t.contentType} IS NOT NULL AND ${t.sizeBytes} IS NOT NULL)`
+    ),
   ]
 );
 
