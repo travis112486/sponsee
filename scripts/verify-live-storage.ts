@@ -6,7 +6,7 @@
  * This is the write-bytes half of the go-live storage check. It drives the
  * application's own `presign.ts` / `delete.ts` against whatever bucket the
  * five `STORAGE_*` vars point at — in practice production `sponsee-uploads`
- * on Cloudflare R2 — and asserts the nine properties that gated go-live, for
+ * on Cloudflare R2 — and asserts the ten properties that gated go-live, for
  * both the `proofs` and `contracts` scopes.
  *
  * WHY THIS IS NOT A CI JOB. `storage.e2e.test.ts` (SPO-171, the `storage-e2e`
@@ -27,6 +27,11 @@
  * QA verified both by hand during SPO-167; they are cheap to keep and they are
  * the only checks here that would catch a bucket-policy regression rather than
  * an application one.
+ *
+ * CHECK 10 closes the coverage gap QA found reviewing this script: the 25 MB
+ * size cap is advisory unless the bucket enforces the signed `Content-Length`,
+ * and that property was proven only against MinIO. It is now proven against
+ * the bucket that actually holds creator evidence.
  *
  * SAFETY. Every object this writes lives under a single freshly-generated
  * `creators/{uuid}/` prefix, and the only key ever passed to `deleteObject` is
@@ -91,8 +96,14 @@ interface ScopeFixture {
   mimeType: string;
   extension: string;
   filename: string;
-  /** `Uint8Array` so it is unambiguously a `fetch` BodyInit; still a Buffer at runtime. */
-  bytes: Uint8Array;
+  /**
+   * `Uint8Array<ArrayBuffer>` rather than a bare `Uint8Array`: since TS 5.7 the
+   * element type is generic, and `fetch`'s `BodyInit` only accepts the
+   * `ArrayBuffer`-backed instantiation. `Buffer.from` already returns exactly
+   * that. (Found by `pnpm typecheck:scripts` — this file compiled nowhere
+   * before that existed.)
+   */
+  bytes: Uint8Array<ArrayBuffer>;
 }
 
 // Both allowlisted content classes, because the download path branches on them:
@@ -153,6 +164,28 @@ function objectUrlOf(presignedUrl: string): string {
 function errorCodeOf(body: string): string {
   const match = /<Code>([^<]+)<\/Code>/.exec(body);
   return match ? match[1] : body.slice(0, 80).replace(/\s+/g, " ").trim() || "(empty body)";
+}
+
+/**
+ * Drops a key from the cleanup list — only ever called once the bucket has been
+ * *observed* not to hold it. Optimistically forgetting a key right after
+ * issuing the delete would disarm cleanup in exactly the case cleanup exists
+ * for: a delete that returned without throwing but did not land.
+ */
+function forget(keys: string[], key: string): void {
+  const index = keys.indexOf(key);
+  if (index >= 0) keys.splice(index, 1);
+}
+
+/** Is this key readable in the bucket right now? Goes through the app's own read path. */
+async function stillStored(key: string, filename: string, env: Record<string, string>): Promise<{ present: boolean; detail: string }> {
+  const { url } = await createDownloadUrl({ key, filename, env });
+  const res = await fetch(url);
+  if (res.status === 200) return { present: true, detail: "200 (still readable)" };
+  if (res.status === 404) return { present: false, detail: `404 ${errorCodeOf(await res.text())}` };
+  // Anything else (403, 5xx) is not proof of absence — keep the key on the
+  // cleanup list rather than assume it away.
+  return { present: true, detail: `${res.status} ${errorCodeOf(await res.text())}` };
 }
 
 async function preflight(
@@ -312,18 +345,15 @@ async function verifyScope(fixture: ScopeFixture, ids: { creatorId: string; deal
     // 7. Delete really removes the object. Asserted through a presigned GET
     //    rather than a HeadObject so the check goes through the same read path
     //    a creator would.
+    //
+    //    The key stays on the cleanup list until the 404 is *observed*. The
+    //    one failure mode this check exists to catch — `deleteObject` returns
+    //    happily but the object is still there — is precisely the one where
+    //    cleanup must still retry.
     await deleteObject(upload.key, env);
-    createdKeys.length = 0;
-    const afterDelete = await createDownloadUrl({ key: upload.key, filename, env });
-    const goneRes = await fetch(afterDelete.url);
-    const goneCode = goneRes.ok ? "(still readable)" : errorCodeOf(await goneRes.text());
-    record(
-      7,
-      tag,
-      "deleteObject really removes the object",
-      goneRes.status === 404,
-      `GET after delete -> ${goneRes.status} ${goneCode}`
-    );
+    const gone = await stillStored(upload.key, filename, env);
+    if (!gone.present) forget(createdKeys, upload.key);
+    record(7, tag, "deleteObject really removes the object", !gone.present, `GET after delete -> ${gone.detail}`);
 
     // 8. Negative control: the bucket's CORS policy is an allowlist, not a
     //    wildcard echo. A 403 with no allow headers is the PASS; a 204 that
@@ -336,6 +366,50 @@ async function verifyScope(fixture: ScopeFixture, ids: { creatorId: string; deal
       `CORS preflight from ${DISALLOWED_ORIGIN} is refused`,
       denied.status === 403 && denied.allowOrigin === null && denied.allowMethods === null,
       `${denied.status} allow-origin=${denied.allowOrigin ?? "(none)"} methods=${denied.allowMethods ?? "(none)"}`
+    );
+
+    // 10. The 25 MB size cap is only real if the *bucket* enforces the signed
+    //     `Content-Length`. `assertWithinSizeCap` runs before signing, so it
+    //     stops nothing on its own: a client that presigns for 1 KB and then
+    //     PUTs 40 MB is refused by the wire or not at all. `presign.ts`'s doc
+    //     comment asserts that enforcement as fact, and `storage.e2e.test.ts`
+    //     proves it — against MinIO. Different server, different codebase; the
+    //     property was never checked on the bucket that actually holds creator
+    //     evidence. This is that check.
+    //
+    //     `fetch` computes Content-Length from the body it is given, so sending
+    //     extra bytes lands on the wire as a declared length that disagrees
+    //     with the one inside the signature. PASS is: rejected, AND nothing
+    //     stored. A rejection alone would not be enough — a partial write that
+    //     is refused but still persists the bytes fails this for real reasons.
+    const capUpload = await createUploadUrl({
+      creatorId: ids.creatorId,
+      dealId: ids.dealId,
+      scope,
+      mimeType,
+      sizeBytes: bytes.length,
+      filename,
+      env,
+    });
+    createdKeys.push(capUpload.key);
+    const oversized = Buffer.concat([
+      Buffer.from(bytes),
+      Buffer.from("extra trailing bytes not covered by the signed Content-Length"),
+    ]);
+    const oversizeRes = await fetch(capUpload.url, {
+      method: "PUT",
+      headers: { "Content-Type": mimeType },
+      body: oversized,
+    });
+    const oversizeCode = oversizeRes.ok ? "(accepted)" : errorCodeOf(await oversizeRes.text());
+    const stored = await stillStored(capUpload.key, filename, env);
+    if (!stored.present) forget(createdKeys, capUpload.key);
+    record(
+      10,
+      tag,
+      "oversize body is refused at the wire and nothing is stored",
+      !oversizeRes.ok && !stored.present,
+      `PUT ${oversizeRes.status} ${oversizeCode}; GET after -> ${stored.detail}`
     );
   } finally {
     // Best-effort: check 7 clears this list on the happy path, so this only
@@ -375,7 +449,7 @@ async function main(): Promise<void> {
     console.log("");
   }
 
-  // 10. Nothing left behind. Scoped to this run's own prefix so a concurrent
+  // 11. Nothing left behind. Scoped to this run's own prefix so a concurrent
   //     run, a real creator upload, or the SPO-355 canary under `_ops/` can
   //     never make this fail — and so a green here means *this* run cleaned up,
   //     not that the bucket happens to be empty.
@@ -386,14 +460,14 @@ async function main(): Promise<void> {
     );
     const keyCount = listed.KeyCount ?? 0;
     record(
-      10,
+      11,
       "run",
       "run prefix is empty afterwards",
       keyCount === 0,
       `KeyCount=${keyCount}${keyCount ? ` (${(listed.Contents ?? []).map((o) => o.Key).join(", ")})` : ""}`
     );
   } catch (err) {
-    record(10, "run", "run prefix is empty afterwards", false, `list threw: ${(err as Error).message}`);
+    record(11, "run", "run prefix is empty afterwards", false, `list threw: ${(err as Error).message}`);
   }
 
   const passed = results.filter((r) => r.ok).length;
