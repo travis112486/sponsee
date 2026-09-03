@@ -270,7 +270,14 @@ async function verifyScope(fixture: ScopeFixture, ids: { creatorId: string; deal
 
     const objectUrl = objectUrlOf(upload.url);
 
-    // 3. Preflight from the real web origin.
+    // 3. Preflight from the real web origin. Asserted for PUT because both
+    //    upload paths (evidence-upload.ts's XHR, ContractCard.tsx's fetch)
+    //    are CORS-preflighted. The GET response's CORS headers are
+    //    deliberately unasserted: every read path in the web app is an
+    //    <img>/<object>/<a>, none of which are CORS-governed, so that
+    //    property is inert today. It becomes load-bearing the moment
+    //    anything fetches a download URL from script (e.g. rendering a PDF
+    //    through pdf.js) — that's the trigger to add it here.
     const allowed = await preflight(objectUrl, ALLOWED_ORIGIN, "PUT");
     record(
       3,
