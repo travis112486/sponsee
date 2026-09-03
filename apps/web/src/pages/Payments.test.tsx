@@ -254,6 +254,7 @@ describe("Payments send/resend", () => {
 
 describe("Payments delivery status chip", () => {
   it.each([
+    ["queued", delivery({ status: "queued", sentAt: null }), "Sending"],
     ["sent", delivery({ status: "sent" }), "Sent"],
     ["delivered", delivery({ status: "delivered", deliveredAt: "2026-01-02T00:00:00Z" }), "Delivered"],
     [
@@ -288,6 +289,70 @@ describe("Payments delivery status chip", () => {
 });
 
 describe("Payments chase gating on delivery", () => {
+  // The bug this epic exists to fix: an invoice that was never sent still
+  // offered a working Resume, so the creator could arm reminders chasing an
+  // email the brand never received.
+  it("disables Resume when the invoice has never been sent, and says so in static text", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = []; // no send attempt has ever been made
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
+
+    render(<Payments />);
+    fireEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    const resumeButton = screen.getByRole("button", { name: /resume/i });
+    expect(resumeButton).toBeDisabled();
+
+    const reason = screen.getByText(/has not been sent to the brand yet/i);
+    expect(reason).toBeVisible();
+    expect(reason.closest("[title]")).toBeNull();
+
+    fireEvent.click(resumeButton);
+    expect(resumeMutate).not.toHaveBeenCalled();
+  });
+
+  it("disables Resume while the send is still queued", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [delivery({ status: "queued", sentAt: null })];
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
+
+    render(<Payments />);
+    fireEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    expect(screen.getByRole("button", { name: /resume/i })).toBeDisabled();
+    expect(screen.getByText(/has not left the queue yet/i)).toBeVisible();
+  });
+
+  // An armed chase on a never-sent invoice is the state the creator most
+  // needs told about, and there is no Resume button rendered to hang the
+  // explanation off — so the line must stand on its own.
+  it("shows the lock reason on a never-sent invoice even while the chase is armed", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [];
+    chaseStateByInvoice = { "inv-1": { mode: "armed", pausedReason: null } };
+
+    render(<Payments />);
+    fireEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    expect(screen.queryByRole("button", { name: /resume/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/has not been sent to the brand yet/i)).toBeVisible();
+  });
+
+  it("still lets the creator Pause a chase on a never-sent invoice", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [];
+    chaseStateByInvoice = { "inv-1": { mode: "armed", pausedReason: null } };
+
+    render(<Payments />);
+    fireEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    const pauseButton = screen.getByRole("button", { name: /pause/i });
+    expect(pauseButton).not.toBeDisabled();
+
+    fireEvent.click(pauseButton);
+    expect(pauseMutate).toHaveBeenCalledWith({ invoiceId: "inv-1", reason: "Manual pause" });
+  });
+
   it("never disables Pause, even before the invoice is delivered — pausing only de-escalates", () => {
     invoicesData = [openInvoice];
     deliveriesData = [delivery({ status: "sent" })]; // sent, not yet delivered

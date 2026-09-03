@@ -24,16 +24,17 @@ import StatusChip from "@/components/shared/StatusChip";
 
 type LatestDelivery = inferRouterOutputs<AppRouter>["invoice"]["latestDeliveries"][number];
 
-type DeliveryDisplayState = "sent" | "delivered" | "opened" | "bounced" | "failed";
+type DeliveryDisplayState = "queued" | "sent" | "delivered" | "opened" | "bounced" | "failed";
 
-// The bounced/opened/delivered branches are inert until SPO-367 wires the
-// webhook correlation to invoice_deliveries — kept for forward-compat, not
-// currently reachable outside tests.
+// Every branch here is live: `invoice.send` writes queued -> sent (or -> failed
+// on a provider throw), and SPO-364's webhook correlation writes delivered /
+// openedAt / bounced onto invoice_deliveries (see webhooks.ts).
 function deliveryDisplayState(delivery: LatestDelivery): DeliveryDisplayState {
   if (delivery.status === "bounced") return "bounced";
   if (delivery.status === "failed") return "failed";
   if (delivery.openedAt) return "opened";
   if (delivery.deliveredAt || delivery.status === "delivered") return "delivered";
+  if (delivery.status === "queued") return "queued";
   return "sent";
 }
 
@@ -41,12 +42,41 @@ const deliveryChipConfig: Record<
   DeliveryDisplayState,
   { label: string; tone: "amber" | "accent" | "pine" | "danger" }
 > = {
+  queued: { label: "Sending", tone: "amber" },
   sent: { label: "Sent", tone: "amber" },
   delivered: { label: "Delivered", tone: "accent" },
   opened: { label: "Opened", tone: "pine" },
   bounced: { label: "Bounced", tone: "danger" },
   failed: { label: "Send failed", tone: "danger" },
 };
+
+/**
+ * Why Resume is gated on "a send actually left", not on `delivered`.
+ *
+ * The epic's bug is chasing an invoice the brand never received, so the gate
+ * has to cover the never-sent case — that is the one this UI can definitely
+ * see. `delivered` is a strictly stronger signal but it only ever arrives via
+ * a provider webhook (webhooks.ts): if that endpoint is unregistered, or the
+ * provider drops the event, no `delivered` row is ever written and gating on
+ * it would strand Resume permanently with no self-service way out. So a
+ * successful `sent` clears the gate and the panel says delivery is still
+ * unconfirmed, rather than locking the creator out of their own chase.
+ *
+ * Pause is never gated — see InvoiceChasePanel.
+ */
+function chaseLockReason(
+  deliveryState: DeliveryDisplayState | null
+): string | null {
+  if (deliveryState === null)
+    return 'Chase is locked — this invoice has not been sent to the brand yet. Use "Send invoice" above first, so reminders have something to follow up on.';
+  if (deliveryState === "queued")
+    return "Chase is locked — this invoice's send has not left the queue yet. Refresh in a moment.";
+  if (deliveryState === "bounced")
+    return "Chase is locked — this invoice's email bounced, so reminders would go nowhere until it's resent to a working address.";
+  if (deliveryState === "failed")
+    return "Chase is locked — the last send failed before it reached the brand, so reminders would go nowhere until it's resent.";
+  return null;
+}
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -318,12 +348,10 @@ export default function Payments() {
             const delivery = deliveryByInvoice.get(inv.id);
             const deliveryState = delivery ? deliveryDisplayState(delivery) : null;
             const deliveryChip = deliveryState ? deliveryChipConfig[deliveryState] : null;
-            // Fails open: an errored deliveries query means we don't know the
-            // state, so don't block Resume on it. Bounced is currently
-            // unreachable (SPO-367); failed is reachable via invoice.send's
-            // provider-throw path.
-            const chaseBlocked =
-              !deliveriesError && (deliveryState === "bounced" || deliveryState === "failed");
+            // Fails open: an errored deliveries query makes "no delivery row"
+            // indistinguishable from "never sent", so we don't know the state
+            // and must not lock a control on a guess.
+            const chaseLock = deliveriesError ? null : chaseLockReason(deliveryState);
             const canSend = inv.status === "draft" || inv.status === "open";
 
             return (
@@ -438,11 +466,7 @@ export default function Payments() {
 
                 {/* Expanded chase info */}
                 {expandedId === inv.id && inv.status === "open" && (
-                  <InvoiceChasePanel
-                    invoiceId={inv.id}
-                    chaseBlocked={chaseBlocked}
-                    deliveryState={deliveryState}
-                  />
+                  <InvoiceChasePanel invoiceId={inv.id} chaseLock={chaseLock} />
                 )}
               </div>
             );
@@ -478,12 +502,11 @@ function StatCard({
 
 function InvoiceChasePanel({
   invoiceId,
-  chaseBlocked,
-  deliveryState,
+  chaseLock,
 }: {
   invoiceId: string;
-  chaseBlocked: boolean;
-  deliveryState: DeliveryDisplayState | null;
+  /** Non-null when Resume must be gated; the string is the visible reason. */
+  chaseLock: string | null;
 }) {
   const { data: state } = trpc.chase.state.useQuery({ invoiceId });
   const { data: events } = trpc.chase.events.useQuery({ invoiceId });
@@ -532,8 +555,8 @@ function InvoiceChasePanel({
         {state?.mode === "paused" && (
           <button
             onClick={() => resume.mutate({ invoiceId })}
-            disabled={chaseBlocked}
-            aria-disabled={chaseBlocked}
+            disabled={chaseLock !== null}
+            aria-disabled={chaseLock !== null}
             className="flex h-6 items-center gap-1 rounded border border-hairline px-1.5 text-[11px] text-pine hover:bg-pine-tint disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
           >
             <Play className="h-3 w-3" />
@@ -542,15 +565,19 @@ function InvoiceChasePanel({
         )}
       </div>
 
-      {/* Pause is always available — it only ever de-escalates. Resume is the
-          one control that can arm reminders nowhere would go, so it's the
-          only thing gated here. */}
-      {state?.mode === "paused" && chaseBlocked && (
-        <p className="mt-2 flex items-center gap-1 text-[11px] font-medium text-amber">
-          <AlertTriangle className="h-3 w-3 shrink-0" />
-          {deliveryState === "bounced"
-            ? "Resume is locked — this invoice's email bounced, so reminders would go nowhere until it's resent."
-            : "Resume is locked — the last send failed before it reached the brand, so reminders would go nowhere until it's resent."}
+      {/* Pause is always available — it only ever de-escalates, and this panel
+          is the product's only pause surface, so gating it could trap a
+          creator in a running chase. Resume is the one control that can arm
+          reminders nowhere would go, so it's the only thing gated here.
+
+          Rendered whenever the lock applies, not only when the chase is
+          paused: an armed chase on a never-sent invoice is exactly the state
+          the creator most needs told about, and a static line beats a
+          hover-only reveal (WCAG 2.4.7). */}
+      {chaseLock && (
+        <p className="mt-2 flex items-start gap-1 text-[11px] font-medium text-amber">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          {chaseLock}
         </p>
       )}
 
