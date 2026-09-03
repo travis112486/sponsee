@@ -11,7 +11,18 @@ export default defineConfig({
       "apps/web/src/**/*.{test,spec}.{ts,tsx}",
       "apps/marketing/src/**/*.{test,spec}.{ts,tsx}",
     ],
-    exclude: ["**/node_modules/**", "**/dist/**", "**/.turbo/**"],
+    // *.viewport.test.{ts,tsx} runs in real Chromium via
+    // apps/web/vitest.viewport.config.ts (SPO-379). The include glob above
+    // matches them too, and without this exclude the jsdom pool imports them
+    // and the whole `test` job dies on "vitest/browser can be imported only
+    // inside the Browser Mode". The browser suite is additive, not a
+    // replacement.
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/.turbo/**",
+      "**/*.viewport.test.{ts,tsx}",
+    ],
   },
   resolve: {
     alias: {

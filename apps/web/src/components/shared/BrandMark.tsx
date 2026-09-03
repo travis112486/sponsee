@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useState } from "react";
+import { normalizeBrandDomain } from "@sponsee/shared";
 import { cn } from "@/lib/utils";
 
 /**
@@ -19,31 +20,28 @@ export function brandInitials(brand: string): string {
 }
 
 /**
- * Normalize a user-entered website to a bare registrable domain:
- * "https://www.redbull.com/energydrink" → "redbull.com". Returns null when
- * nothing domain-shaped is left, so callers can treat "no domain" and
- * "garbage domain" the same way. Exported for the New-deal brand form.
+ * `normalizeBrandDomain` lives in `@sponsee/shared` (SPO-395) because
+ * `/api/brand-icon` uses the same function as its first SSRF gate — a second
+ * copy here would let the client's "is this domain worth rendering" check and
+ * the server's "may we fetch this" check drift apart. Re-exported, not just
+ * imported, so `@/components/shared/BrandMark` stays a valid import site for it
+ * — `Pipeline.tsx`'s New-deal brand form gets it from here. Edit the rule in
+ * `packages/shared/src/brand-domain.ts`, not here.
  */
-export function normalizeBrandDomain(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  let d = raw.trim().toLowerCase();
-  d = d.replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/^www\./, "");
-  d = d.split(/[/?#]/, 1)[0] ?? "";
-  if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/.test(d)) return null;
-  return d;
-}
+export { normalizeBrandDomain };
 
 /**
- * unavatar.io aggregates favicon/logo sources and, with `fallback=false`,
- * answers 404 with an EMPTY body when it finds nothing — which is what lets
- * the <img> onError path (→ monogram) actually fire. The obvious alternatives
- * fail here: Google's favicon endpoints and DuckDuckGo's ip3 both ship their
- * placeholder as the 404 *body*, and browsers render a 404 image body without
- * raising onError, so unknown brands would show a grey globe instead of our
- * monogram (verified against redbull.com / bangenergy.com / voltaic.energy).
+ * SPO-374/377: the browser never talks to unavatar.io directly. This hits our
+ * own `/api/brand-icon` proxy — same-origin via the `/api/*` Vercel rewrite,
+ * so a relative URL, not the Render host — which does the favicon-first-then-
+ * unavatar lookup server-side and, on every miss, answers 404 with an EMPTY
+ * body. That empty body is what lets the <img> onError path (→ monogram)
+ * actually fire, the same contract that ruled out Google's and DuckDuckGo's
+ * favicon endpoints, which ship their placeholder as the 404 *body* and never
+ * raise onError.
  */
 function brandIconUrl(domain: string): string {
-  return `https://unavatar.io/${encodeURIComponent(domain)}?fallback=false`;
+  return `/api/brand-icon?domain=${encodeURIComponent(domain)}`;
 }
 
 /**
@@ -98,6 +96,12 @@ export function BrandMark({
         style={{ width: size, height: size }}
       >
         <img
+          // Remount on domain change. The per-domain `failedDomain` state above
+          // is what the jsdom regression pins, but the key guarantees a real
+          // browser tears down the old <img> (and any in-flight load / stale
+          // frame) instead of mutating `src` on a retained node — behaviour a
+          // jsdom `fireEvent.error` cannot observe. Kept deliberately; if it is
+          // ever removed, re-check real-browser retry, not just the test.
           key={cleanDomain}
           src={brandIconUrl(cleanDomain)}
           alt=""

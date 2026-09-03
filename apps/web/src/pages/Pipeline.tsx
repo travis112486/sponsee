@@ -1156,16 +1156,16 @@ function NewDealModal({ onClose }: { onClose: () => void }) {
         aria-modal="true"
         aria-labelledby="new-deal-title"
         tabIndex={-1}
-        className="relative w-full max-w-lg rounded-xl border border-hairline bg-surface shadow-lg focus:outline-none"
+        className="relative flex max-h-full w-full max-w-lg flex-col rounded-xl border border-hairline bg-surface shadow-lg focus:outline-none"
       >
-        <div className="flex items-center justify-between border-b border-hairline px-4 py-3">
+        <div className="flex shrink-0 items-center justify-between border-b border-hairline px-4 py-3">
           <h3 id="new-deal-title" className="text-[15px] font-semibold text-ink">New deal</h3>
           <button type="button" onClick={onClose} aria-label="Close" className="text-ink-3 hover:text-ink">
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4 p-4">
+        <form onSubmit={handleSubmit} className="min-h-0 space-y-4 overflow-y-auto overscroll-contain p-4">
           {/* Brand */}
           <div>
             <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3">Brand</label>
