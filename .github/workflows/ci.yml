@@ -103,6 +103,42 @@ jobs:
       # they exercise.
       - run: pnpm test
 
+  # SPO-379: responsive/media-query regression coverage in a REAL browser. jsdom
+  # cannot evaluate media queries, so the pipeline board's `lg:`/`min-[1440px]:`
+  # variants are invisible to the `test` job — a break there leaves every other
+  # suite green. This runs the *same* Pipeline.test.tsx idiom (vi.mock("@/trpc"),
+  # @testing-library/react) through Vitest 4 browser mode in real Chromium.
+  web-viewport:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      # Same reason as `test`: apps/web resolves @sponsee/shared through its
+      # gitignored `dist`, so the library must be built before the suite runs.
+      - run: pnpm --filter "./packages/*" build
+      # Keyed on the lockfile, which pins the exact playwright version — a
+      # playwright bump busts the cache and re-downloads the right browser.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        # --only-shell pulls the headless shell (~196 MB) instead of full
+        # Chromium (~356 MB). Vitest browser mode is headless, so the shell is
+        # all this job needs. If a future Playwright release stops honoring it,
+        # drop the flag and eat the larger download rather than fight it.
+        run: npx playwright install --with-deps --only-shell chromium
+      - run: pnpm test:viewport
+
   # SPO-171: wire-level proof the storage module works against a real S3
   # server. Separate job (not folded into `test`) because it needs MinIO and
   # is the one suite here that must never silently no-op if that's missing —
