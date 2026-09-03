@@ -94,9 +94,31 @@ describe("BrandMark", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("span")).toHaveTextContent("VE");
   });
+
+  it("retries the logo after the domain changes, and stays on the monogram for the failed one", () => {
+    const { container, rerender } = render(
+      <BrandMark brand="Voltaic Energy" domain="voltaic.energy" />
+    );
+    fireEvent.error(container.querySelector("img")!);
+    expect(container.querySelector("img")).toBeNull();
+
+    // Brand website edited -> must retry the NEW domain.
+    rerender(<BrandMark brand="Voltaic Energy" domain="https://www.redbull.com/energy" />);
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute("src")).toBe("https://unavatar.io/redbull.com?fallback=false");
+
+    // Editing back to the known-bad domain still shows the monogram (no flicker loop).
+    rerender(<BrandMark brand="Voltaic Energy" domain="voltaic.energy" />);
+    expect(container.querySelector("img")).toBeNull();
+  });
 });
 
-describe("normalizeBrandDomain", () => {
+// The rule itself is pinned by packages/shared/src/brand-domain.test.ts — as of
+// SPO-395 that is the only implementation. These cases stay as the smoke test
+// that `@/components/shared/BrandMark` still re-exports a working function, so
+// the New-deal brand form's import site can't break silently.
+describe("normalizeBrandDomain (re-exported from @sponsee/shared)", () => {
   it("strips protocol, www and path down to the bare domain", () => {
     expect(normalizeBrandDomain("https://www.redbull.com/energydrink")).toBe("redbull.com");
     expect(normalizeBrandDomain("HTTP://Bang-Energy.com?utm=x")).toBe("bang-energy.com");

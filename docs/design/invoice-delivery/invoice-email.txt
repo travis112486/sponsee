@@ -1,5 +1,5 @@
 {{creatorDisplayName}}
-INVOICE {{invoiceNumberFormatted}}
+INVOICE {{invoiceNumberFormatted}}{{#if isPaid}} — PAID{{/if}}
 ============================================================
 
 BILLED TO
@@ -8,20 +8,26 @@ BILLED TO
 {{/if}}
 FROM
   {{creatorDisplayName}}
+  {{creatorEmail}}
 
 FOR
-  {{dealTitle}}
+  {{dealTitleWrapped}}
 {{#if milestoneNote}}
   Milestone: {{milestoneNoteIndented}}
 {{/if}}
-AMOUNT DUE
+{{#if isPaid}}AMOUNT PAID{{/if}}{{#if isUnpaid}}AMOUNT DUE{{/if}}
   {{amountFormatted}} {{currency}}
 
   Terms   {{termsLabel}}
   Issued  {{issuedDate}}
   Due     {{dueDateValue}}
+{{#if isPaid}}  Paid    {{paidDate}}
+{{/if}}
+{{#if isPaid}}THIS INVOICE HAS BEEN PAID
+------------------------------------------------------------
+Paid {{paidDate}}. No further action is needed.
 
-HOW TO PAY
+{{/if}}{{#if isUnpaid}}HOW TO PAY
 ------------------------------------------------------------
 {{#if paypalLink}}PayPal
   {{paypalLink}}
@@ -35,7 +41,7 @@ HOW TO PAY
 {{/if}}{{#if noRails}}To arrange payment, reply to this email and
 {{creatorDisplayName}} will send payment details.
 
-{{/if}}------------------------------------------------------------
+{{/if}}{{/if}}------------------------------------------------------------
 View or print this invoice:
 {{hostedInvoiceUrl}}
 
