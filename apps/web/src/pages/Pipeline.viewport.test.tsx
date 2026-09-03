@@ -41,6 +41,11 @@ const deals = STAGES.map((stage, i) => ({
   deliverables: [
     {
       id: `del${i}`,
+      // Load-bearing: the clip check below measures THIS title's overflow, and
+      // its width sits ~0.5px from the band column's clip boundary — rename it
+      // ("VOD") and mutation A ships green. The flex-direction test is the
+      // categorical guard (string-independent); this clip check is the
+      // width-sensitive secondary, so keep the string's width in mind on tidy-up.
       title: "VOD publish",
       status: "not_started",
       dueAt: null,
@@ -108,8 +113,8 @@ vi.mock("@/lib/use-creator-identity", () => ({
 
 afterEach(() => cleanup());
 
-function renderApp() {
-  return render(
+async function renderApp() {
+  render(
     <MemoryRouter initialEntries={["/pipeline"]}>
       <MotionProvider>
         <Routes>
@@ -120,12 +125,29 @@ function renderApp() {
       </MotionProvider>
     </MemoryRouter>
   );
+  // Self-hosted Inter loads lazily. A measurement taken before it resolves
+  // reads fallback metrics (~0.8px wider title) and eats most of the clip
+  // assertion's +1px tolerance. Awaiting the font set makes every measurement
+  // run against final metrics regardless of test order, so `-t` isolation or a
+  // reorder can't change what's measured.
+  await document.fonts.ready;
 }
 
 function board() {
   const el = document.querySelector(".board-scroll");
   if (!el) throw new Error("board-scroll not found — the shell did not render");
   return el as HTMLElement;
+}
+
+// The deliverable row is the flex container whose `flex-direction` the SPO-376
+// N2 band classes control: stacked `column` in the lg–1439 band, one `row`
+// from 1440. Mutation A drops those classes and the band silently flips to
+// `row`. Located via the deliverable-title `<p>` (its parent is the row), the
+// same selector the clip check uses.
+function deliverableRows() {
+  return [...document.querySelectorAll<HTMLElement>('p[title="VOD publish"]')]
+    .map((t) => t.parentElement)
+    .filter((el): el is HTMLElement => el !== null);
 }
 
 // Non-vacuity guard: the board must actually hold one card per stage. If the
@@ -139,7 +161,7 @@ function assertCardsRendered(expected: number) {
 describe("Pipeline responsive geometry (real browser)", () => {
   it("renders through the real Layout shell (232px sidebar present)", async () => {
     await page.viewport(1280, 900);
-    renderApp();
+    await renderApp();
     const main = document.querySelector("main");
     expect(main).not.toBeNull();
     // Pins the shell, not the bare page. A future refactor that renders the
@@ -150,9 +172,15 @@ describe("Pipeline responsive geometry (real browser)", () => {
   });
 
   it("fits without horizontal scroll at 1280 and up (SPO-369 F5)", async () => {
+    // Fit budget at 1280: the content column is 1000px (min(1360, 1280-232) -
+    // 48) and the column floor needs 6 x 156 + 5 x 8 = 976px, leaving 24px of
+    // headroom. A seventh stage in dealStages — or a gap bump — needs 1140px
+    // and silently breaks this no-scroll guarantee, so keep this budget in mind
+    // before editing either. At 1024 the board legitimately overflows by 232px;
+    // the guarantee correctly starts at 1280, not lg.
     for (const width of [1280, 1366, 1440, 1512]) {
       await page.viewport(width, 900);
-      renderApp();
+      await renderApp();
       assertCardsRendered(deals.length);
       const b = board();
       expect(b.clientWidth, `board clientWidth > 0 at ${width}`).toBeGreaterThan(0);
@@ -167,7 +195,7 @@ describe("Pipeline responsive geometry (real browser)", () => {
   it("does not clip deliverable titles in the 1024-1439 band (SPO-376 N2)", async () => {
     for (const width of [1024, 1280, 1366]) {
       await page.viewport(width, 900);
-      renderApp();
+      await renderApp();
       assertCardsRendered(deals.length);
       const titles = [
         ...document.querySelectorAll<HTMLElement>('p[title="VOD publish"] span.truncate'),
@@ -181,10 +209,46 @@ describe("Pipeline responsive geometry (real browser)", () => {
     }
   });
 
+  it("stacks the deliverable row in the 1024-1439 band, one row from 1440 (SPO-376 N2 geometry)", async () => {
+    // Categorical, not clip-based: asserts the computed flex-direction the
+    // band classes actually control. Mutation A (drop the band classes) flips
+    // the band from `column` to `row`, and an empty Tailwind stylesheet also
+    // resolves `row` — so this fails loudly in both cases instead of measuring
+    // naked DOM. This is the string-independent guard the clip check is not.
+    for (const width of [1024, 1280, 1366]) {
+      await page.viewport(width, 900);
+      await renderApp();
+      assertCardsRendered(deals.length);
+      const rows = deliverableRows();
+      // Non-vacuity guard: an empty row list would make the flex-direction
+      // assertion below trivially true.
+      expect(rows.length, `deliverable rows found at ${width}`).toBe(deals.length);
+      for (const row of rows) {
+        expect(getComputedStyle(row).flexDirection, `deliverable row stacks at ${width}`).toBe(
+          "column"
+        );
+      }
+      cleanup();
+    }
+    for (const width of [1440, 1512]) {
+      await page.viewport(width, 900);
+      await renderApp();
+      assertCardsRendered(deals.length);
+      const rows = deliverableRows();
+      expect(rows.length, `deliverable rows found at ${width}`).toBe(deals.length);
+      for (const row of rows) {
+        expect(getComputedStyle(row).flexDirection, `deliverable row single-line at ${width}`).toBe(
+          "row"
+        );
+      }
+      cleanup();
+    }
+  });
+
   it("keeps exactly one visible copy of the value note at every width (SPO-376 N3)", async () => {
     for (const width of [900, 1024, 1280, 1366, 1440, 1512]) {
       await page.viewport(width, 900);
-      renderApp();
+      await renderApp();
       assertCardsRendered(deals.length);
       const notes = [...screen.queryAllByText("per stream")];
       // Non-vacuity guard: the note is rendered twice in the DOM (inline copy +
