@@ -29,7 +29,7 @@ never escape in the text template.**
 |---|---|
 | `invoiceNumberFormatted` | `INV-` + `invoices.number` zero-padded to 4 (`INV-0012`). Per-creator sequence. |
 | `creatorDisplayName` | `rails_snapshot.displayName` (frozen at send). |
-| `creatorEmail` | `rails_snapshot.replyToEmail` (frozen at send) — the same address the email's Reply-To carries. New snapshot field; engineering captures it at send alongside the rails. Gives the printed page and the text part a contact path — the paper artifact must let AP reach the creator without the original email. |
+| `creatorEmail` | `rails_snapshot.replyToEmail` (frozen at send) — the same address the email's Reply-To carries. New snapshot field; engineering captures it at send alongside the rails. Gives the printed page and the text part a contact path — the paper artifact must let AP reach the creator without the original email. **Null/absent rule:** snapshots frozen before this field shipped lack it, and SPO-365 resends re-render from the stored snapshot. At render time resolve `rails_snapshot.replyToEmail ?? creator's current account email` — the same fallback that send's Reply-To header uses, so the printed contact line always matches where replies actually go. If neither resolves (defensive only), the contact line **drops entirely**: both templates wrap it in `{{#if creatorEmail}}`, so null *or* an absent key renders cleanly — never an empty line, an empty `.from-sub` div, or a template throw. The `no-email` fixture variant renders this path (with the key absent, the harsher case). |
 | `brandName`, `contactName` | contact's brand + contact name. `contactName` optional → Attn line drops. |
 | `greetingLine` | `Hi {first token of contactName},` else `Hello,` |
 | `dealTitle` | `invoices.title`; **fallback `"Sponsorship services"`** when null — an invoice needs a description line for AP filing. Text part uses `dealTitleWrapped` (see wrapping rule in engineering notes). |
@@ -48,7 +48,7 @@ never escape in the text template.**
 - **Plain text carries the whole invoice.** Number, parties, deal, milestone,
   amount+currency, terms, issued, due, rails, hosted link. The hosted link is
   an *addition*; the text part alone must be filable. Verified as literal text
-  for all six fixture variants.
+  for all seven fixture variants.
 - **No images, no webfonts in the email.** Nothing to strip, nothing to block,
   no "load remote content" nag. Serif accents (creator name, amount) use
   Georgia — the email stand-in for Instrument Serif. Warm-paper palette:
@@ -63,13 +63,21 @@ never escape in the text template.**
   Print/save PDF button). `@media print` strips background, border, footer,
   compacts type, and `break-inside: avoid`s each section. **Every variant
   prints to exactly one Letter page** (verified, incl. the long-title/long-note
-  stress case).
+  stress case). Re-verifying this claim: use a **fresh browser context per
+  render** — reusing one Playwright `Page` and toggling
+  `emulateMedia({media:'print'})` between variants poisons the next
+  `page.pdf()` (it paginates at the screen viewport width, falsely splitting
+  `stress` to 2 pages). Measured headroom is comfortable, not marginal:
+  `stress` ~260px spare, `baseline` ~348px; the contact line costs 24px.
 - **Paid state — all three artifacts, not just the page.** Hosted page:
   pine-outline PAID chip in the header, `Paid` date row, label flips to
   "Amount paid", rails replaced by a "This invoice has been paid" note.
-  Both email parts: same flips (label, `Paid` date row/sub-line, rails →
-  paid note), subject and preheader say `paid {date}` instead of the due
-  phrase. AP files paid invoices; pay instructions on a settled invoice
+  Both email parts flip label, `Paid` date row/sub-line, and rails → paid
+  note. The text part additionally marks its title block (`INVOICE INV-0012
+  — PAID`); the HTML part deliberately carries **no header marker** — its
+  amount card *is* the header, so paid state is signaled there (`Amount
+  paid` + `Paid {date}`), not by a chip. Subject and preheader say
+  `paid {date}` instead of the due phrase. AP files paid invoices; pay instructions on a settled invoice
   invite double payment. **Resend rule (gates SPO-365):** resending a paid
   invoice re-renders with the *current* status, so the brand gets a
   receipt-style copy carrying no rails and no amount due — a resend must
@@ -108,7 +116,10 @@ never escape in the text template.**
   or `data:` URLs, and this value is creator-controlled and rendered as a
   live `href` on the public unauthenticated `/i/:token` page. Escaping is not
   a substitute for scheme validation; `derive()` in `build-previews.mjs` is
-  the reference implementation (it throws).
+  the reference implementation (it throws). The build self-tests the guard:
+  four non-`https:` links (`javascript:`, `data:`, `http:`, uppercase
+  `HTTPS:` — scheme match is lowercase-strict on purpose) must each throw or
+  the build exits 1 before writing any variant.
 - Hosted page fonts are the apps/web self-hosted files (`/fonts/…woff2`, see
   `index.css`); previews rewrite to `./fonts/` because they're served flat.
 - `noindex, nofollow` meta on the hosted page — tokened URLs must not end up

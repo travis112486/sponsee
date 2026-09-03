@@ -8,8 +8,8 @@ BILLED TO
 {{/if}}
 FROM
   {{creatorDisplayName}}
-  {{creatorEmail}}
-
+{{#if creatorEmail}}  {{creatorEmail}}
+{{/if}}
 FOR
   {{dealTitleWrapped}}
 {{#if milestoneNote}}
