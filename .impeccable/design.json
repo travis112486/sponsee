@@ -5,7 +5,7 @@
   "extensions": {
     "colorMeta": {
       "pine": { "role": "primary", "displayName": "Pine", "canonical": "#0E7A5F", "tonalRamp": ["oklch(20% 0.06 168)", "oklch(30% 0.08 168)", "oklch(40% 0.1 168)", "oklch(50% 0.11 168)", "oklch(60% 0.1 168)", "oklch(72% 0.08 168)", "oklch(85% 0.05 168)", "oklch(95% 0.02 168)"] },
-      "amber": { "role": "secondary", "displayName": "Amber", "canonical": "#B87208", "tonalRamp": ["oklch(25% 0.07 70)", "oklch(35% 0.09 70)", "oklch(45% 0.11 70)", "oklch(56% 0.12 70)", "oklch(66% 0.11 70)", "oklch(76% 0.09 70)", "oklch(87% 0.06 70)", "oklch(95% 0.03 70)"] },
+      "amber": { "role": "secondary", "displayName": "Amber", "canonical": "#945E06", "tonalRamp": ["oklch(25% 0.07 70)", "oklch(35% 0.09 70)", "oklch(45% 0.11 70)", "oklch(56% 0.12 70)", "oklch(66% 0.11 70)", "oklch(76% 0.09 70)", "oklch(87% 0.06 70)", "oklch(95% 0.03 70)"] },
       "brick": { "role": "secondary", "displayName": "Brick", "canonical": "#B3402A", "tonalRamp": ["oklch(22% 0.08 30)", "oklch(32% 0.11 30)", "oklch(42% 0.13 30)", "oklch(52% 0.14 30)", "oklch(62% 0.12 30)", "oklch(74% 0.09 30)", "oklch(86% 0.05 30)", "oklch(95% 0.02 30)"] },
       "paper": { "role": "neutral", "displayName": "Warm Paper", "canonical": "#F7F5F1", "tonalRamp": ["oklch(20% 0.008 75)", "oklch(32% 0.008 75)", "oklch(45% 0.009 75)", "oklch(58% 0.01 75)", "oklch(70% 0.01 75)", "oklch(82% 0.009 75)", "oklch(91% 0.008 75)", "oklch(97% 0.006 75)"] },
       "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#1B1815", "tonalRamp": ["oklch(15% 0.008 60)", "oklch(25% 0.008 60)", "oklch(35% 0.009 60)", "oklch(45% 0.009 60)", "oklch(56% 0.009 60)", "oklch(68% 0.008 60)", "oklch(80% 0.007 60)", "oklch(93% 0.005 60)"] },
