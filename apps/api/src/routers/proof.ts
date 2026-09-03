@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
 import { eq, and, desc } from "drizzle-orm";
+import type { DB } from "@sponsee/db";
 import { proofs, deliverables, deals, activityEvents } from "@sponsee/db/schema";
 import { proofKinds } from "@sponsee/shared";
 import { httpUrl } from "./validators.js";
@@ -10,7 +11,10 @@ import {
   deleteObject,
   keyBelongsToDeal,
   MAX_UPLOAD_BYTES,
+  registerCreatorFile,
+  removeCreatorFile,
   StorageNotConfiguredError,
+  tombstoneCreatorFile,
 } from "../storage/index.js";
 
 export const proofRouter = createTRPCRouter({
@@ -73,10 +77,13 @@ export const proofRouter = createTRPCRouter({
         .refine((v) => v.url || v.note?.trim() || v.storageKey, {
           message: "Evidence needs a link, a file, or a note",
         })
+        .refine((v) => !v.storageKey || (v.mimeType && v.sizeBytes != null), {
+          message: "A file needs its mimeType and sizeBytes",
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const [deal] = await ctx.db
-        .select({ id: deals.id })
+        .select({ id: deals.id, title: deals.title })
         .from(deals)
         .where(and(eq(deals.id, input.dealId), eq(deals.creatorId, ctx.creatorId)));
 
@@ -112,20 +119,40 @@ export const proofRouter = createTRPCRouter({
         }
       }
 
-      const [proof] = await ctx.db
-        .insert(proofs)
-        .values({
-          dealId: input.dealId,
-          deliverableId: input.deliverableId,
-          kind: input.kind,
-          url: input.url,
-          note: input.note?.trim() || null,
-          storageKey: input.storageKey ?? null,
-          mimeType: input.mimeType ?? null,
-          sizeBytes: input.sizeBytes ?? null,
-          originalFilename: input.originalFilename ?? null,
-        })
-        .returning();
+      const proof = await ctx.db.transaction(async (tx) => {
+        const [inserted] = await tx
+          .insert(proofs)
+          .values({
+            dealId: input.dealId,
+            deliverableId: input.deliverableId,
+            kind: input.kind,
+            url: input.url,
+            note: input.note?.trim() || null,
+            storageKey: input.storageKey ?? null,
+            mimeType: input.mimeType ?? null,
+            sizeBytes: input.sizeBytes ?? null,
+            originalFilename: input.originalFilename ?? null,
+          })
+          .returning();
+
+        // Registered in the same transaction as the proof row (SPO-348): a
+        // crash between the two must never leave an object the orphan sweep
+        // can't see as referenced.
+        if (input.storageKey) {
+          await registerCreatorFile(tx as unknown as DB, {
+            creatorId: ctx.creatorId,
+            storageKey: input.storageKey,
+            mimeType: input.mimeType!,
+            sizeBytes: input.sizeBytes!,
+            originalFilename: input.originalFilename ?? null,
+            originDealId: input.dealId,
+            originDealTitle: deal.title,
+            scope: "evidence",
+          });
+        }
+
+        return inserted;
+      });
 
       await ctx.db.insert(activityEvents).values({
         creatorId: ctx.creatorId,
@@ -184,10 +211,14 @@ export const proofRouter = createTRPCRouter({
       // The row delete above is the user-visible contract and has already
       // committed, so this object delete is best-effort: if it throws (a
       // transient S3/R2 error, or storage not configured) we log and move on —
-      // the orphan sweep is the backstop that reclaims the object.
+      // the orphan sweep is the backstop that reclaims the object. The
+      // registry row is tombstoned first (SPO-348) so that backstop can find
+      // it even if the delete below never runs again.
       if (owned.storageKey) {
+        await tombstoneCreatorFile(ctx.db, owned.storageKey);
         try {
           await deleteObject(owned.storageKey);
+          await removeCreatorFile(ctx.db, owned.storageKey);
         } catch (err) {
           console.warn(
             `[proof.delete] Failed to delete object ${owned.storageKey}; orphan sweep will reclaim it:`,

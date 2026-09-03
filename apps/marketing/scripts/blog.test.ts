@@ -260,6 +260,16 @@ describe("renderPostPage", () => {
     expect(html).not.toContain("/blog/sponsor-paying-late.html");
   });
 
+  // SPO-306 self-hosted the blog fonts after PR #100 fixed every other page
+  // and blog.mjs drifted unnoticed. The preload pair is the positive control:
+  // without it, the not.toContain half would pass vacuously on an empty head.
+  it("preloads the self-hosted fonts and never calls out to Google Fonts", () => {
+    expect(html).toContain('<link rel="preload" href="/fonts/inter-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />');
+    expect(html).toContain('<link rel="preload" href="/fonts/instrument-serif-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />');
+    expect(html).not.toContain("fonts.googleapis.com");
+    expect(html).not.toContain("fonts.gstatic.com");
+  });
+
   it("emits Article and FAQPage structured data", () => {
     const jsonLd = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(html);
     const parsed = JSON.parse(jsonLd![1]);

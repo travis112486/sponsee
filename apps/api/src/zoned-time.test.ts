@@ -8,8 +8,11 @@ import {
   resolveTimeZone,
   startOfZonedDay,
   startOfZonedMonth,
+  startOfZonedMonthOffset,
   startOfZonedQuarter,
+  startOfZonedQuarterOffset,
   startOfZonedWeek,
+  startOfZonedWeekOffset,
   startOfZonedYear,
   zonedMonthKey,
   zonedWallClockToUtc,
@@ -44,6 +47,9 @@ const MIDNIGHT_TRANSITION_ZONES = [
   "Antarctica/Davis",
   "Asia/Chita",
   "Asia/Magadan",
+  // Paraguay abolished DST in 2024, so this one only transitions in the
+  // historical half of the window — which is exactly where it broke (SPO-251).
+  "America/Asuncion",
 ];
 
 describe("getZonedParts", () => {
@@ -249,6 +255,157 @@ describe("period starts across a midnight DST transition (SPO-245)", () => {
     },
     30_000
   );
+});
+
+describe("period ends land on the next period's start (SPO-251)", () => {
+  // A correct period START does not imply a correct period END. `dashboard.ts`
+  // used to derive the end by shifting the resolved start forward
+  // (addZonedMonths/addZonedDays), and those preserve the start's local time of
+  // day — which is 01:00, not 00:00, whenever a spring-forward opens at
+  // midnight. The end then overran the next period's start by the gap width, so
+  // the half-open filter `paidAt >= start && paidAt < end` counted an invoice
+  // paid in the seam in BOTH periods.
+
+  it("closes America/Asuncion Q4-2023 exactly where Q1-2024 opens", () => {
+    // Paraguay sprang forward at midnight on 2023-10-01: local 00:00 → 01:00.
+    const AS = "America/Asuncion";
+    const inQ4 = new Date("2023-11-15T12:00:00Z");
+    const inQ1 = new Date("2024-02-15T12:00:00Z");
+
+    // The start is the transition instant, reading 01:00 local — correct, and
+    // exactly what makes the naive end wrong.
+    expect(startOfZonedQuarter(inQ4, AS).toISOString()).toBe("2023-10-01T04:00:00.000Z");
+    expect(startOfZonedQuarterOffset(inQ4, 1, AS).toISOString()).toBe("2024-01-01T03:00:00.000Z");
+    expect(startOfZonedQuarter(inQ1, AS).toISOString()).toBe("2024-01-01T03:00:00.000Z");
+    expect(startOfZonedQuarterOffset(inQ4, 1, AS).getTime()).toBe(
+      startOfZonedQuarter(inQ1, AS).getTime()
+    );
+  });
+
+  it("closes the Asia/Tehran week of 2016-03-21 exactly where the next week opens", () => {
+    // Iran sprang forward at midnight on 2016-03-21, a Monday.
+    const TE = "Asia/Tehran";
+    const inWeek = new Date("2016-03-23T12:00:00Z");
+    const inNext = new Date("2016-03-30T12:00:00Z");
+
+    expect(startOfZonedWeek(inWeek, TE).toISOString()).toBe("2016-03-20T20:30:00.000Z");
+    expect(startOfZonedWeekOffset(inWeek, 1, TE).toISOString()).toBe("2016-03-27T19:30:00.000Z");
+    expect(startOfZonedWeek(inNext, TE).toISOString()).toBe("2016-03-27T19:30:00.000Z");
+  });
+
+  it("still differs from the shift-the-start derivation that caused the defect", () => {
+    // Positive control. If these two ever agree, the pins above have stopped
+    // discriminating and would pass against the broken derivation too.
+    //
+    // It also pins the `addZoned*` contract the fix deliberately did NOT change
+    // (SPO-251 AC 3): they preserve the input's local time of day, so from a
+    // 01:00 start they land on 01:00 — one gap width past the boundary.
+    const AS = "America/Asuncion";
+    const TE = "Asia/Tehran";
+    expect(
+      addZonedMonths(startOfZonedQuarter(new Date("2023-11-15T12:00:00Z"), AS), 3, AS).toISOString()
+    ).toBe("2024-01-01T04:00:00.000Z"); // one hour past Q1-2024's start
+    expect(
+      addZonedDays(startOfZonedWeek(new Date("2016-03-23T12:00:00Z"), TE), 7, TE).toISOString()
+    ).toBe("2016-03-27T20:30:00.000Z"); // one hour past the next week's start
+  });
+
+  // The pins above are samples. This is the invariant, swept: walking forward
+  // through a zone, every period's END must be the very instant the NEXT period
+  // starts — no overlap (double-counted revenue) and no gap (dropped revenue).
+  //
+  // The whole-tzdata version of this sweep — all 418 zones, ~685k assertions,
+  // checked against an independent offset-segment-table reference rather than
+  // against these same helpers — is scripts/verify-zoned-period-seams.mjs. It
+  // is too slow for CI; this is the zones that actually move.
+  const ends = {
+    week: (d: Date, tz: string) => startOfZonedWeekOffset(d, 1, tz),
+    month: (d: Date, tz: string) => startOfZonedMonthOffset(d, 1, tz),
+    quarter: (d: Date, tz: string) => startOfZonedQuarterOffset(d, 1, tz),
+  };
+  const brokenEnds = {
+    week: (d: Date, tz: string) => addZonedDays(startOfZonedWeek(d, tz), 7, tz),
+    month: (d: Date, tz: string) => addZonedMonths(startOfZonedMonth(d, tz), 1, tz),
+    quarter: (d: Date, tz: string) => addZonedMonths(startOfZonedQuarter(d, tz), 3, tz),
+  };
+  const seamStarts = {
+    week: startOfZonedWeek,
+    month: startOfZonedMonth,
+    quarter: startOfZonedQuarter,
+  };
+  const seamKey = {
+    week: (p: ZonedParts) => {
+      const civil = Date.UTC(p.year, p.month - 1, p.day);
+      const sinceMonday = (new Date(civil).getUTCDay() + 6) % 7;
+      return new Date(civil - sinceMonday * 86_400_000).toISOString().slice(0, 10);
+    },
+    month: (p: ZonedParts) => `${p.year}-${p.month}`,
+    quarter: (p: ZonedParts) => `${p.year}-Q${Math.floor((p.month - 1) / 3) + 1}`,
+  };
+  type Kind = keyof typeof ends;
+  const KINDS = ["week", "month", "quarter"] as const;
+
+  /** Every `end(P) !== start(P+1)` seam `endsUnderTest` opens in [from, to). */
+  function seamFailures(
+    tz: string,
+    fromYear: number,
+    toYear: number,
+    endsUnderTest: typeof ends
+  ): string[] {
+    const failures: string[] = [];
+    // 12h steps: no local week/month/quarter is anywhere near that short, so
+    // every period in range is visited exactly once (periods a zone skips
+    // entirely are never invented).
+    const last: Partial<Record<Kind, { key: string; end: Date }>> = {};
+    for (let t = Date.UTC(fromYear, 0, 1); t < Date.UTC(toYear + 1, 0, 1); t += 12 * 3_600_000) {
+      const probe = new Date(t);
+      const parts = getZonedParts(probe, tz);
+      for (const kind of KINDS) {
+        const key = seamKey[kind](parts);
+        if (last[kind]?.key === key) continue;
+        const start = seamStarts[kind](probe, tz);
+        const prev = last[kind];
+        if (prev && prev.end.getTime() !== start.getTime()) {
+          const drift = (prev.end.getTime() - start.getTime()) / 60_000;
+          failures.push(
+            `${tz} ${kind} ${prev.key} ends ${prev.end.toISOString()} but ${key} starts ` +
+              `${start.toISOString()} (${drift > 0 ? "overlap" : "gap"} ${Math.abs(drift)}min)`
+          );
+        }
+        last[kind] = { key, end: endsUnderTest[kind](probe, tz) };
+      }
+    }
+    return failures;
+  }
+
+  it.each(MIDNIGHT_TRANSITION_ZONES)(
+    "leaves no overlap or gap between consecutive week/month/quarter periods in %s",
+    (tz) => {
+      // Both halves of tzdata's live range: 2024-2040 is what creators will hit,
+      // 2010-2016 is where Egypt, Jordan, Syria, Cuba, Iran and Paraguay
+      // actually scheduled midnight transitions on a 1st or a Monday. Zero
+      // 2024-2040 failures is a fact about today's tzdata, not an invariant —
+      // these rules move by decree.
+      expect(seamFailures(tz, 2024, 2040, ends).slice(0, 5)).toEqual([]);
+      expect(seamFailures(tz, 2010, 2016, ends).slice(0, 5)).toEqual([]);
+    },
+    30_000
+  );
+
+  it("the same sweep catches the pre-fix derivation, so passing it means something", () => {
+    // Guards the assert-empty above from going vacuous: run the identical sweep
+    // against the shift-the-start derivation and it must light up. If a future
+    // refactor breaks the sweep itself, this goes red first.
+    // Through 2024, so the window reaches Paraguay's 2023-10-01 midnight jump.
+    const broken = MIDNIGHT_TRANSITION_ZONES.flatMap((tz) =>
+      seamFailures(tz, 2010, 2024, brokenEnds)
+    );
+    expect(broken.length).toBeGreaterThan(0);
+    expect(broken.join("\n")).toContain("America/Asuncion quarter 2023-Q4");
+    expect(broken.join("\n")).toContain("Asia/Tehran week 2016-03-21");
+    // Every one of them is an overlap of exactly one DST gap width, never a gap.
+    expect(broken.every((f) => f.includes("overlap"))).toBe(true);
+  }, 30_000);
 });
 
 describe("startOfZonedWeek", () => {

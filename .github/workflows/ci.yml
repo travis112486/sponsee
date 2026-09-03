@@ -41,6 +41,11 @@ jobs:
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # SPO-241: a route chunk that quietly triples is not a failing test. This
+      # asserts framer-motion's engine stayed in the shared `motion-*` chunk
+      # instead of being statically linked into a route, and holds every chunk
+      # to a gzip ceiling. Reads apps/web/dist, so it must follow `pnpm build`.
+      - run: node scripts/verify-web-bundle-budget.mjs
 
   test:
     runs-on: ubuntu-latest
@@ -73,7 +78,14 @@ jobs:
         run: |
           curl -fsSL "https://github.com/axllent/mailpit/releases/download/${MAILPIT_VERSION}/mailpit-linux-amd64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin mailpit
-          mailpit version
+          # SPO-275: --no-release-check is load-bearing, not cosmetic. Bare
+          # `mailpit version` queries api.github.com for a newer release and
+          # exits 1 if that call fails, so under `bash -e` a transient
+          # api.github.com timeout reds the whole `test` job (it did, on main:
+          # run 33565003071). The flag keeps the smoke line proving the binary
+          # is on PATH and runs, without coupling it to a third-party network
+          # call. Verify it still exists before bumping MAILPIT_VERSION.
+          mailpit version --no-release-check
           nohup mailpit -d "$RUNNER_TEMP/mailpit-ci.db" -q >"$RUNNER_TEMP/mailpit.log" 2>&1 &
           for _ in $(seq 1 30); do
             if curl -sf http://localhost:8025/api/v1/messages >/dev/null; then
@@ -114,12 +126,17 @@ jobs:
       # command — so this starts it directly instead, the same way the
       # Mailpit step above installs and backgrounds a binary rather than
       # using a service container.
+      #
+      # Pinned (SPO-351): unpinned `minio/minio` tracks `latest`, and a future
+      # MinIO release that starts validating checksums would fail this job on
+      # an unrelated PR with a confusing error — see storage.test.ts's
+      # "no checksum query parameters" test for the underlying issue.
       - name: Start MinIO
         run: |
           docker run -d --name minio -p 9000:9000 -p 9001:9001 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio server /data --console-address ":9001"
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data --console-address ":9001"
           for _ in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/ready >/dev/null; then
               echo "MinIO ready on :9000"

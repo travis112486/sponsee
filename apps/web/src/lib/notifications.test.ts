@@ -15,6 +15,7 @@ function activityEvent(overrides: Partial<ActivityEventLike> = {}): ActivityEven
     actor: "system",
     entityType: "invoice",
     entityId: "inv-1",
+    kind: "chase_sent",
     payload: { status: "sent", step: 1 },
     createdAt: "2026-03-10T09:00:00.000Z",
     ...overrides,
@@ -45,6 +46,32 @@ describe("buildNotifications", () => {
     const [n] = buildNotifications({ activity: [activityEvent()], now: NOW });
     expect(n.title).toBe("Chase step 1 sent");
     expect(n.tone).toBe("default");
+  });
+
+  it("names non-chase events by kind instead of falling back to chase copy (SPO-334)", () => {
+    const [contract] = buildNotifications({
+      activity: [
+        activityEvent({ id: "c1", kind: "contract", actor: "creator", payload: { action: "attached" } }),
+      ],
+      now: NOW,
+    });
+    expect(contract.title).toBe("Contract attached");
+
+    const [stage] = buildNotifications({
+      activity: [
+        activityEvent({ id: "s1", kind: "stage_change", payload: { from: "negotiating", to: "contract_sent" } }),
+      ],
+      now: NOW,
+    });
+    expect(stage.title).toBe("Deal moved to Contract Sent");
+
+    const [sync] = buildNotifications({
+      activity: [
+        activityEvent({ id: "p1", kind: "platform_sync", payload: { platform: "twitch" } }),
+      ],
+      now: NOW,
+    });
+    expect(sync.title).toBe("Twitch stats synced");
   });
 
   it("surfaces open invoices past their due date as alerts", () => {

@@ -1,0 +1,43 @@
+{{creatorDisplayName}}
+INVOICE {{invoiceNumberFormatted}}
+============================================================
+
+BILLED TO
+  {{brandName}}
+{{#if contactName}}  Attn: {{contactName}}
+{{/if}}
+FROM
+  {{creatorDisplayName}}
+
+FOR
+  {{dealTitle}}
+{{#if milestoneNote}}
+  Milestone: {{milestoneNoteIndented}}
+{{/if}}
+AMOUNT DUE
+  {{amountFormatted}} {{currency}}
+
+  Terms   {{termsLabel}}
+  Issued  {{issuedDate}}
+  Due     {{dueDateValue}}
+
+HOW TO PAY
+------------------------------------------------------------
+{{#if paypalLink}}PayPal
+  {{paypalLink}}
+
+{{/if}}{{#if wiseText}}Wise
+  {{wiseTextIndented}}
+
+{{/if}}{{#if bankText}}Bank transfer
+  {{bankTextIndented}}
+
+{{/if}}{{#if noRails}}To arrange payment, reply to this email and
+{{creatorDisplayName}} will send payment details.
+
+{{/if}}------------------------------------------------------------
+View or print this invoice:
+{{hostedInvoiceUrl}}
+
+Questions about this invoice? Reply to this email —
+it goes directly to {{creatorDisplayName}}.

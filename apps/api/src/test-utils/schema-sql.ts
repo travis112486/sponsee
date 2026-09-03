@@ -18,7 +18,9 @@ DROP TABLE IF EXISTS activity_events CASCADE;
 DROP TABLE IF EXISTS chase_events CASCADE;
 DROP TABLE IF EXISTS invoice_chase_state CASCADE;
 DROP TABLE IF EXISTS chase_templates CASCADE;
+DROP TABLE IF EXISTS invoice_deliveries CASCADE;
 DROP TABLE IF EXISTS invoices CASCADE;
+DROP TABLE IF EXISTS creator_files CASCADE;
 DROP TABLE IF EXISTS contracts CASCADE;
 DROP TABLE IF EXISTS proofs CASCADE;
 DROP TABLE IF EXISTS deliverables CASCADE;
@@ -192,6 +194,8 @@ CREATE TABLE deals (
   value_cents INTEGER NOT NULL DEFAULT 0,
   currency CHAR(3) NOT NULL DEFAULT 'USD',
   value_note TEXT,
+  ccv INTEGER,
+  sponsored_minutes INTEGER,
   stage VARCHAR(32) NOT NULL DEFAULT 'inbound',
   platforms VARCHAR(32)[],
   payment_terms VARCHAR(32) NOT NULL DEFAULT 'net_30',
@@ -265,6 +269,24 @@ CREATE TABLE contracts (
 -- so a plain INDEX here would silently un-test the race guard.
 CREATE UNIQUE INDEX contracts_deal_idx ON contracts(deal_id);
 
+CREATE TABLE creator_files (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  storage_key TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  original_filename TEXT,
+  origin_deal_id UUID REFERENCES deals(id) ON DELETE SET NULL,
+  origin_deal_title TEXT,
+  scope VARCHAR(32) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX creator_files_storage_key_idx ON creator_files(storage_key);
+CREATE INDEX creator_files_creator_idx ON creator_files(creator_id);
+CREATE INDEX creator_files_origin_deal_idx ON creator_files(origin_deal_id);
+
 CREATE TABLE invoices (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
@@ -285,13 +307,41 @@ CREATE TABLE invoices (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(creator_id, number),
-  CONSTRAINT invoices_paid_requires_paid_at CHECK (status <> 'paid' OR paid_at IS NOT NULL)
+  CONSTRAINT invoices_paid_requires_paid_at CHECK ((status = 'paid') = (paid_at IS NOT NULL))
 );
 
 CREATE INDEX invoices_creator_idx ON invoices(creator_id);
 CREATE INDEX invoices_deal_idx ON invoices(deal_id);
 CREATE INDEX invoices_status_idx ON invoices(status);
 CREATE INDEX invoices_due_at_idx ON invoices(due_at);
+
+CREATE TABLE invoice_deliveries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  attempt INTEGER NOT NULL,
+  to_email VARCHAR(255) NOT NULL,
+  from_email VARCHAR(255) NOT NULL,
+  reply_to_email VARCHAR(255) NOT NULL,
+  subject_snapshot TEXT NOT NULL,
+  text_snapshot TEXT NOT NULL,
+  html_snapshot TEXT,
+  public_token TEXT NOT NULL,
+  idempotency_key VARCHAR(255) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'queued',
+  provider_message_id TEXT,
+  sent_at TIMESTAMPTZ,
+  delivered_at TIMESTAMPTZ,
+  opened_at TIMESTAMPTZ,
+  bounced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(invoice_id, attempt),
+  UNIQUE(public_token),
+  UNIQUE(idempotency_key)
+);
+
+CREATE INDEX invoice_deliveries_provider_message_id_idx ON invoice_deliveries(provider_message_id);
+CREATE INDEX invoice_deliveries_invoice_idx ON invoice_deliveries(invoice_id);
 
 CREATE TABLE chase_templates (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

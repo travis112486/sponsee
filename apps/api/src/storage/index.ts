@@ -4,6 +4,7 @@ export { deleteObject } from "./delete.js";
 export {
   FileTooLargeError,
   InvalidSizeError,
+  QuotaExceededError,
   StorageNotConfiguredError,
   UnsupportedMimeTypeError,
 } from "./errors.js";
@@ -33,3 +34,16 @@ export {
   type PresignedUpload,
 } from "./presign.js";
 export { runStorageOrphanSweep, STORAGE_ORPHAN_GRACE_PERIOD_MS, type StorageSweepResult } from "./sweep.js";
+export {
+  registerCreatorFile,
+  removeCreatorFile,
+  tombstoneCreatorFile,
+  type CreatorFileScope,
+  type RegisterCreatorFileParams,
+} from "./registry.js";
+export {
+  assertStorageQuotaAvailable,
+  getStorageUsage,
+  STORAGE_QUOTA_BYTES_BY_PLAN,
+  type StorageUsage,
+} from "./quota.js";

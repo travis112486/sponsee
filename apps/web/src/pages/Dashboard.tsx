@@ -1,268 +1,892 @@
-import { trpc } from "@/trpc";
-import { stageLabels, dealStages } from "@sponsee/shared";
-import { cn } from "@/lib/utils";
-import { describeActivity } from "@/lib/activity-label";
-import {
-  KanbanSquare,
-  Wallet,
-  AlertCircle,
-  TrendingUp,
-  ArrowRight,
-  Mail,
-} from "lucide-react";
+import { useState } from "react";
 import { useNavigate } from "react-router";
-import QueryError from "@/components/QueryError";
+import { toast } from "sonner";
+import {
+  AlarmClock,
+  ArrowRight,
+  Banknote,
+  CalendarDays,
+  CheckCircle2,
+  Eye,
+  FileText,
+  Inbox,
+  Loader2,
+  MoveRight,
+  Plus,
+  StickyNote,
+  RefreshCw,
+  Send,
+} from "lucide-react";
+import { stageLabels, type ActivityKind, type DealStage, type Platform } from "@sponsee/shared";
+import type { LucideIcon } from "lucide-react";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@sponsee/api/routers";
 
-function formatCents(cents: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(cents / 100);
+import { trpc } from "@/trpc";
+import QueryError from "@/components/QueryError";
+import { Skeleton } from "@/components/Skeleton";
+import { StatCard } from "@/components/shared/StatCard";
+import { StatusChip } from "@/components/shared/StatusChip";
+import { BrandMark } from "@/components/shared/BrandMark";
+import { PlatformDot } from "@/components/shared/PlatformDot";
+import { describeActivity } from "@/lib/activity-label";
+import { useCreatorIdentity } from "@/lib/use-creator-identity";
+import { motion, DURATION, EASE, STAGGER, entrance, prefersReducedMotion } from "@/lib/motion";
+import { cn } from "@/lib/utils";
+
+import { RevenueChart } from "./dashboard/RevenueChart";
+import {
+  formatCents,
+  formatDueChip,
+  formatExactTime,
+  formatRelativeTime,
+  zonedMonthShort,
+} from "./dashboard/format";
+
+type Period = "month" | "quarter";
+
+/**
+ * The `dashboard.overview` payload, inferred from the router rather than
+ * re-declared here. A hand-written mirror is how the client/server schema
+ * parity traps happen: the section components below would keep compiling
+ * against a shape the API no longer returns.
+ *
+ * Type-only import — erased at build, so this adds no runtime dependency from
+ * the web bundle onto `@sponsee/api`.
+ */
+type Overview = inferRouterOutputs<AppRouter>["dashboard"]["overview"];
+
+/* ─────────────────────────── Period comparison ─────────────────────────── */
+
+/**
+ * Signed period-over-period change for the Revenue card, from the server's
+ * own like-for-like baseline (`revenue.previousTotalCents`), not a rollup of
+ * the trailing-12 `monthly` buckets re-done in the browser.
+ *
+ * `previousTotalCents` is the *same elapsed offset* into the immediately
+ * preceding period, truncated exactly the way `totalCents` is truncated at
+ * `now` — so mid-month the card compares 9 days of September against 9 days of
+ * August, not against all 30. The monthly buckets have no sub-month
+ * resolution, so no client-side sum of them can reproduce that; summing whole
+ * calendar months under-reports for most of every month. The field is the
+ * source of truth precisely to kill that bug (SPO-294).
+ *
+ * `null` means the prior window has no paid invoice at all, and `0` makes the
+ * percentage undefined — either way there is no honest delta to show.
+ */
+function revenueDelta(revenue: Overview["revenue"]) {
+  const prev = revenue.previousTotalCents;
+  if (prev === null || prev === 0) return undefined;
+  const pct = Math.round(((revenue.totalCents - prev) / prev) * 100);
+  if (pct === 0) return { text: "flat", tone: "neutral" as const, prev };
+  return {
+    text: `${pct > 0 ? "▲" : "▼"} ${Math.abs(pct)}%`,
+    tone: (pct > 0 ? "accent" : "danger") as "accent" | "danger",
+    prev,
+  };
 }
 
-export default function Dashboard() {
+/* ───────────────────────────── Section: greeting ───────────────────────── */
+
+function greetingFor(hour: number): string {
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+function Greeting({
+  name,
+  subline,
+  period,
+  onPeriodChange,
+}: {
+  name: string | null;
+  subline: string;
+  period: Period;
+  onPeriodChange: (p: Period) => void;
+}) {
   const navigate = useNavigate();
-  const {
-    data: deals,
-    isLoading: dealsLoading,
-    isError: dealsError,
-    refetch: refetchDeals,
-  } = trpc.deals.list.useQuery();
-  const {
-    data: invoices,
-    isLoading: invoicesLoading,
-    isError: invoicesError,
-    refetch: refetchInvoices,
-  } = trpc.invoice.list.useQuery();
-  const {
-    data: activity,
-    isLoading: activityLoading,
-    isError: activityError,
-  } = trpc.activity.list.useQuery({ limit: 8 });
-
-  if (dealsLoading || invoicesLoading) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-pine border-t-transparent" />
-      </div>
-    );
-  }
-
-  if (dealsError || invoicesError) {
-    return (
-      <QueryError
-        message="Couldn't load your dashboard."
-        onRetry={() => {
-          if (dealsError) refetchDeals();
-          if (invoicesError) refetchInvoices();
-        }}
-      />
-    );
-  }
-
-  const activeDeals = deals?.filter((d) => d.stage !== "paid") ?? [];
-  const pipelineValue = activeDeals.reduce((s, d) => s + d.valueCents, 0);
-
-  const openInvoices = invoices?.filter((i) => i.status === "open") ?? [];
-  const overdueInvoices = openInvoices.filter(
-    (i) => i.dueAt && new Date(i.dueAt) < new Date()
-  );
-  const outstanding = openInvoices.reduce((s, i) => s + i.amountCents, 0);
-  const overdueAmountCents = overdueInvoices.reduce((s, i) => s + i.amountCents, 0);
-
-  const stageCounts = Object.fromEntries(
-    dealStages.map((s) => [
-      s,
-      deals?.filter((d) => d.stage === s).length ?? 0,
-    ])
+  const reduced = prefersReducedMotion();
+  const words = `${greetingFor(new Date().getHours())}${name ? `, ${name}` : ""}`.split(
+    " "
   );
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="font-serif text-[19px] text-ink">Dashboard</h2>
-        <p className="text-[13px] text-ink-3">
-          Overview of your sponsorship business
-        </p>
-      </div>
-
-      {/* KPIs */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard
-          icon={KanbanSquare}
-          label="Active deals"
-          value={String(activeDeals.length)}
-          sub={`${deals?.length ?? 0} total`}
-          onClick={() => navigate("/pipeline")}
-        />
-        <KpiCard
-          icon={TrendingUp}
-          label="Pipeline value"
-          value={formatCents(pipelineValue)}
-          sub="Weighted forecast"
-          onClick={() => navigate("/pipeline")}
-        />
-        <KpiCard
-          icon={Wallet}
-          label="Outstanding"
-          value={formatCents(outstanding)}
-          sub={`${openInvoices.length} open invoices`}
-          onClick={() => navigate("/payments")}
-        />
-        <KpiCard
-          icon={AlertCircle}
-          label="Overdue"
-          value={String(overdueInvoices.length)}
-          sub="Needs attention"
-          accent="text-brick"
-          onClick={() => navigate("/payments")}
-        />
-      </div>
-
-      {/* Overdue callout — money-at-risk reads before operational detail (P-01) */}
-      {overdueInvoices.length > 0 && (
-        <div className="rounded-xl border border-brick/20 bg-brick-tint/40 p-4">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 text-brick" />
-            <h3 className="text-[13px] font-semibold text-brick">
-              {overdueInvoices.length} overdue invoice{overdueInvoices.length > 1 ? "s" : ""}
-            </h3>
-          </div>
-          <p className="mt-1 text-[12.5px] text-ink-2">
-            {formatCents(overdueAmountCents)} at risk across{" "}
-            {overdueInvoices.length} unpaid invoice{overdueInvoices.length > 1 ? "s" : ""}
-          </p>
-          <button
-            onClick={() => navigate("/payments")}
-            className="mt-2 text-[12px] font-medium text-brick underline-offset-2 hover:underline"
-          >
-            Review payments
-          </button>
-        </div>
-      )}
-
-      {/* Stage breakdown */}
-      <div className="rounded-xl border border-hairline bg-surface p-4">
-        <h3 className="text-[13px] font-semibold text-ink">Pipeline stages</h3>
-        <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-6">
-          {dealStages.map((stage) => (
-            <button
-              key={stage}
-              onClick={() => navigate("/pipeline")}
-              className="rounded-lg border border-hairline bg-surface-subtle p-2 text-left transition-colors hover:border-pine/30"
+    <header className="flex flex-wrap items-end justify-between gap-4">
+      <div className="min-w-0">
+        <h2 className="font-serif text-[28px] leading-tight text-ink sm:text-[34px]">
+          {words.map((w, i) => (
+            <span
+              key={`${w}-${i}`}
+              className="inline-block overflow-hidden pb-1 align-bottom"
             >
-              <p className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
-                {stageLabels[stage]}
-              </p>
-              <p className="mt-1 text-[18px] font-semibold text-ink">
-                {stageCounts[stage]}
-              </p>
+              <motion.span
+                className="inline-block"
+                initial={reduced ? false : { y: 14, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{
+                  duration: DURATION.entrance,
+                  delay: reduced ? 0 : i * STAGGER.tight,
+                  ease: EASE,
+                }}
+              >
+                {w}
+                {i < words.length - 1 ? " " : ""}
+              </motion.span>
+            </span>
+          ))}
+        </h2>
+        <p className="mt-1 text-[13px] text-ink-2">{subline}</p>
+      </div>
+
+      <motion.div className="flex items-center gap-3" {...entrance(0, { delay: 0.12 })}>
+        <div
+          role="group"
+          aria-label="Reporting period"
+          className="flex rounded-lg border border-hairline bg-surface p-0.5"
+        >
+          {(["month", "quarter"] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => onPeriodChange(p)}
+              aria-pressed={period === p}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40",
+                period === p ? "bg-pine text-white" : "text-ink-2 hover:text-ink"
+              )}
+            >
+              {p === "month" ? "This month" : "This quarter"}
             </button>
           ))}
         </div>
-      </div>
+        <button
+          type="button"
+          onClick={() => navigate("/pipeline?new=1")}
+          className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-pine px-3.5 text-[13px] font-medium text-white transition-all duration-150 hover:bg-pine-hover active:scale-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2"
+        >
+          <Plus className="h-4 w-4" aria-hidden /> Log a deal
+        </button>
+      </motion.div>
+    </header>
+  );
+}
 
-      {/* Recent deals */}
-      <div className="rounded-xl border border-hairline bg-surface p-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-[13px] font-semibold text-ink">Recent deals</h3>
+/* ─────────────────────────── Section: overdue alert ────────────────────── */
+
+function describeChase(chase: NonNullable<Overview["overdue"]["mostUrgent"]>["chase"], now: Date) {
+  if (!chase) return "No chase sequence has started on this invoice yet.";
+  if (chase.mode === "paused") {
+    return chase.pausedReason
+      ? `Chasing is paused — ${chase.pausedReason}.`
+      : "Chasing is paused.";
+  }
+  if (chase.mode === "completed") return "The chase sequence has run out of steps.";
+  if (chase.nextActionAt) {
+    const at = new Date(chase.nextActionAt);
+    return at.getTime() > now.getTime()
+      ? `Chase step ${chase.nextStep} goes out ${formatExactTime(at)}.`
+      : `Chase step ${chase.nextStep} is queued to send.`;
+  }
+  return `Chasing is armed at step ${chase.nextStep}.`;
+}
+
+function OverdueAlert({
+  invoice,
+  count,
+  totalCents,
+  now,
+}: {
+  invoice: NonNullable<Overview["overdue"]["mostUrgent"]>;
+  count: number;
+  totalCents: number;
+  now: Date;
+}) {
+  const navigate = useNavigate();
+  const who = invoice.brandName ?? invoice.dealTitle ?? invoice.title ?? "an unnamed invoice";
+  const days = Math.max(invoice.dueAgeDays, 0);
+
+  return (
+    <motion.section
+      aria-label="Overdue invoice"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brick/20 border-l-[3px] border-l-brick bg-brick-tint/50 px-4 py-3"
+      {...entrance(0, { delay: 0.08, y: -8 })}
+    >
+      <div className="flex min-w-0 items-start gap-2.5 text-[13.5px] text-ink">
+        <AlarmClock className="mt-0.5 h-4 w-4 shrink-0 text-brick" aria-hidden />
+        <p className="min-w-0">
+          <strong className="font-semibold">
+            <span className="tnum font-mono">{formatCents(invoice.amountCents)}</span> from{" "}
+            {who} is {days} {days === 1 ? "day" : "days"} overdue
+            {invoice.number ? ` (${invoice.number})` : ""}.
+          </strong>{" "}
+          <span className="text-ink-2">{describeChase(invoice.chase, now)}</span>
+          {count > 1 && (
+            <span className="text-ink-2">
+              {" "}
+              {count - 1} other overdue {count - 1 === 1 ? "invoice" : "invoices"} —{" "}
+              <span className="tnum font-mono">{formatCents(totalCents)}</span> at risk in
+              total.
+            </span>
+          )}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {invoice.dealId && (
           <button
-            onClick={() => navigate("/pipeline")}
-            className="flex items-center gap-1 text-[12px] font-medium text-pine hover:text-pine-hover"
+            type="button"
+            onClick={() => navigate(`/pipeline/${invoice.dealId}`)}
+            className="flex h-8 items-center gap-1 rounded-lg px-3 text-[12.5px] font-medium text-ink-2 transition-colors hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40"
           >
-            View all
-            <ArrowRight className="h-3 w-3" />
+            Open the deal <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => navigate("/payments")}
+          className="h-8 rounded-lg border border-hairline bg-surface px-3 text-[12.5px] font-medium text-ink transition-all duration-150 hover:border-ink-3/40 active:scale-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40"
+        >
+          Review chase timeline
+        </button>
+      </div>
+    </motion.section>
+  );
+}
+
+/* ────────────────────────────── Section: KPI row ───────────────────────── */
+
+/**
+ * `deals.cpvhSummary` is a second source with its own lifecycle, so the card
+ * carries all three of its states instead of collapsing them into the value:
+ * a loading summary rendered as `null` would show "Not enough data yet" to a
+ * creator who has data — the founder-ratified truthfulness rule in a
+ * different costume.
+ */
+type CpvhCardState =
+  | { kind: "loading" }
+  | { kind: "error"; retry: () => void }
+  | { kind: "ready"; value: number | null };
+
+function KpiRow({
+  overview,
+  now,
+  cpvh,
+}: {
+  overview: Overview;
+  now: Date;
+  cpvh: CpvhCardState;
+}) {
+  const navigate = useNavigate();
+  const { revenue, pipeline, deliverablesDue, outstanding, timeZone } = overview;
+
+  // The creator's zone, not UTC and not the browser's: `periodStart` is the
+  // instant their local month began, so any other zone can name the month
+  // before the one this card is reporting (SPO-239).
+  const periodName = zonedMonthShort(new Date(revenue.periodStart), timeZone);
+  const delta = revenueDelta(revenue);
+  const spark = revenue.monthly.slice(-6).map((m) => m.valueCents / 100);
+
+  // Three-way on the period, not an `isMonth` boolean: a boolean silently
+  // collapses YTD into the quarter branch — wrong eyebrow, wrong basis label.
+  const periodEyebrow: Record<Overview["revenue"]["period"], string> = {
+    month: `Revenue (${periodName})`,
+    quarter: "Revenue (this quarter)",
+    ytd: "Revenue (this year)",
+  };
+  const basisLabel: Record<Overview["revenue"]["period"], string> = {
+    month: "last month",
+    quarter: "last quarter",
+    ytd: "Jan–now last year",
+  };
+
+  const stageCount = (s: DealStage) =>
+    pipeline.find((p) => p.stage === s)?.count ?? 0;
+  const activeDeals = pipeline
+    .filter((p) => p.stage !== "paid")
+    .reduce((s, p) => s + p.count, 0);
+  const activeContext =
+    [
+      stageCount("negotiating") && `${stageCount("negotiating")} negotiating`,
+      stageCount("live") && `${stageCount("live")} live`,
+    ]
+      .filter(Boolean)
+      .join(", ") || "nothing in flight";
+
+  const nextDue = deliverablesDue[0];
+
+  return (
+    // Five cards: 5/3/2/1 columns (SPO-237). At the 2-col range CPVH spans the
+    // full last row so the fifth card is a deliberate wide card, not a stranded
+    // half-width orphan; 3-col ends 3 + 2, which is a short row, not an orphan.
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <StatCard
+        index={0}
+        eyebrow={periodEyebrow[revenue.period]}
+        value={revenue.totalCents / 100}
+        currency
+        delta={delta && { text: delta.text, tone: delta.tone }}
+        context={
+          delta
+            ? `vs ${formatCents(delta.prev)} ${basisLabel[revenue.period]}`
+            : "Paid invoices, dated by when the money landed"
+        }
+        sparkline={spark.length >= 2 ? spark : undefined}
+      />
+      {/* Every OPEN invoice regardless of due date — a strict superset of the
+          overdue alert below, so it is not `overdue.totalCents`. `0` is a real
+          balance and renders as money; only `null` (which the contract cannot
+          send here) would mean "unknown". No delta: the contract exposes no
+          prior-period window for this figure (SPO-237). */}
+      <StatCard
+        index={1}
+        eyebrow="Outstanding"
+        value={outstanding.totalCents / 100}
+        currency
+        context="All open invoices"
+        onClick={() => navigate("/payments")}
+      />
+      <StatCard
+        index={2}
+        eyebrow="Active deals"
+        value={activeDeals}
+        context={activeContext}
+        onClick={() => navigate("/pipeline")}
+      />
+      <StatCard
+        index={3}
+        eyebrow="Due this week"
+        value={deliverablesDue.length}
+        delta={{ text: "deliverables", tone: "neutral" }}
+        context={
+          nextDue
+            ? `next: ${formatDueChip(nextDue.dueAt, nextDue.dueLabel, now)} · ${nextDue.title}`
+            : "nothing due before Monday"
+        }
+        onClick={() => navigate("/calendar")}
+      />
+      {/* Whatever state the summary is in, the fifth tile keeps SPO-237's
+          span — sm:col-span-2 lg:col-span-1 — so a loading or failed card
+          cannot re-shape the row. */}
+      {cpvh.kind === "loading" ? (
+        // No entrance() on the loading/error tiles: a skeleton must reserve
+        // layout instantly, and the real StatCard plays entrance(4) when it
+        // mounts — animating both would enter the same tile twice (SPO-331).
+        <div
+          role="status"
+          className="rounded-xl border border-hairline bg-surface p-5 shadow-warm sm:col-span-2 lg:col-span-1"
+          aria-busy="true"
+          aria-label="Loading effective CPVH"
+        >
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="mt-3 h-7 w-28" />
+          <Skeleton className="mt-3 h-3 w-32" />
+        </div>
+      ) : cpvh.kind === "error" ? (
+        <div className="flex flex-col rounded-xl border border-hairline bg-surface p-5 shadow-warm sm:col-span-2 lg:col-span-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-3">
+            Effective CPVH
+          </span>
+          <p className="mt-2 text-[13px] text-ink-2">Couldn't load this figure.</p>
+          <button
+            type="button"
+            onClick={cpvh.retry}
+            aria-label="Retry effective CPVH"
+            className="mt-auto flex items-center gap-1 pt-2 text-[12.5px] font-medium text-pine transition-colors hover:text-pine-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40"
+          >
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Retry
           </button>
         </div>
-        {activeDeals.length > 0 ? (
-          <div className="mt-3 space-y-2">
-            {activeDeals.slice(0, 5).map((deal) => (
-              <button
-                key={deal.id}
-                type="button"
-                aria-label={`Open ${deal.title} — ${deal.brand?.name ?? "Unknown brand"}`}
-                onClick={() => navigate(`/pipeline/${deal.id}`)}
-                className="flex w-full cursor-pointer items-center justify-between rounded-lg border border-hairline bg-surface-subtle px-3 py-2 text-left transition-colors hover:border-pine/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-pine focus-visible:ring-offset-1"
-              >
-                <span className="min-w-0">
-                  <span className="block text-[13px] font-medium text-ink">{deal.title}</span>
-                  <span className="block text-[11px] text-ink-3">
-                    {deal.brand?.name} · {stageLabels[deal.stage]}
-                  </span>
-                </span>
-                <span className="text-[13px] font-semibold text-ink">
-                  {formatCents(deal.valueCents)}
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <p className="mt-3 text-[13px] text-ink-3">No active deals yet.</p>
-        )}
+      ) : (
+        <StatCard
+          index={4}
+          className="sm:col-span-2 lg:col-span-1"
+          eyebrow="Effective CPVH"
+          value={cpvh.value}
+          currency
+          decimals={2}
+          emptyLabel="Not enough data yet"
+          context={
+            cpvh.value === null
+              ? "Add concurrent viewers and sponsored minutes to a deal"
+              : "Per viewer-hour, across deals with CCV and duration"
+          }
+          onClick={() => navigate("/calculator")}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ──────────────────────── Section: deliverables due ────────────────────── */
+
+function DeliverablesCard({
+  items,
+  now,
+  className,
+}: {
+  items: Overview["deliverablesDue"];
+  now: Date;
+  className?: string;
+}) {
+  const navigate = useNavigate();
+  const utils = trpc.useUtils();
+  const [pendingId, setPendingId] = useState<string | null>(null);
+
+  const markDone = trpc.deliverable.update.useMutation({
+    onSuccess: () => {
+      // The checked row leaves this list (the API excludes `done`), and the
+      // "Due this week" KPI counts the same rows, so both come from one refetch.
+      utils.dashboard.overview.invalidate();
+      utils.deals.list.invalidate();
+      utils.activity.list.invalidate();
+      toast.success("Marked done");
+    },
+    onError: (err) => toast.error(err.message || "Couldn't update that deliverable."),
+    onSettled: () => setPendingId(null),
+  });
+
+  return (
+    <section
+      className={cn(
+        "rounded-xl border border-hairline bg-surface p-5 shadow-warm",
+        className
+      )}
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-[14px] font-semibold text-ink">Deliverables due this week</h3>
+        <span className="text-[11px] text-ink-3">
+          {items.length === 0
+            ? "all clear"
+            : `${items.length} open`}
+        </span>
       </div>
 
-      {/* Recent activity — newest first (D-010) */}
-      <div className="rounded-xl border border-hairline bg-surface p-4">
-        <h3 className="text-[13px] font-semibold text-ink">Recent activity</h3>
-        {activityLoading ? (
-          <div className="mt-3 flex h-16 items-center justify-center">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-pine border-t-transparent" />
-          </div>
-        ) : activityError ? (
-          <p className="mt-3 text-[13px] text-ink-3">Couldn't load recent activity.</p>
-        ) : activity && activity.length > 0 ? (
-          <div className="mt-3 space-y-1">
-            {activity.map((event) => (
-              <div key={event.id} className="flex items-center gap-2.5 rounded-lg px-1 py-1.5">
-                <Mail className="h-3.5 w-3.5 shrink-0 text-ink-3" />
-                <p className="min-w-0 flex-1 truncate text-[12.5px] text-ink-2">
-                  {describeActivity(event.actor, event.payload)}
-                </p>
-                <span className="shrink-0 text-[11px] text-ink-3">
-                  {new Date(event.createdAt).toLocaleDateString()}
+      {items.length === 0 ? (
+        <div className="flex flex-col items-center gap-1 py-8 text-center">
+          <CheckCircle2 className="h-5 w-5 text-ink-3" aria-hidden />
+          <p className="text-[13px] font-medium text-ink-2">Nothing due this week</p>
+          <p className="text-[12px] text-ink-3">
+            Deliverables with a due date between Monday and Sunday land here.
+          </p>
+        </div>
+      ) : (
+        <ul className="mt-3 space-y-0.5">
+          {items.map((d, i) => {
+            const isPending = pendingId === d.id;
+            return (
+              <motion.li
+                key={d.id}
+                className="flex items-center gap-3 rounded-lg px-2 py-2.5 transition-colors hover:bg-surface-subtle"
+                {...entrance(i, { stagger: STAGGER.tight, delay: 0.1, y: 0 })}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingId(d.id);
+                    markDone.mutate({ id: d.id, status: "done" });
+                  }}
+                  disabled={isPending}
+                  aria-label={`Mark ${d.title} done`}
+                  aria-busy={isPending}
+                  className={cn(
+                    "flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-ink-3/50 bg-surface transition-colors duration-150",
+                    "hover:border-pine focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-1",
+                    isPending && "cursor-wait opacity-60"
+                  )}
+                >
+                  {isPending && (
+                    <Loader2 className="h-3 w-3 animate-spin text-ink-3" aria-hidden />
+                  )}
+                </button>
+
+                {d.platform && <PlatformDot platform={d.platform as Platform} />}
+
+                <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
+                  {d.title}
+                  {d.progressTotal != null && d.progressTotal > 0 && (
+                    <span className="ml-1.5 text-[11px] text-ink-3">
+                      ({d.progressDone ?? 0}/{d.progressTotal} done)
+                    </span>
+                  )}
                 </span>
-              </div>
-            ))}
+
+                {d.brandName && (
+                  <span className="hidden shrink-0 items-center gap-1.5 text-[12.5px] text-ink-2 sm:flex">
+                    <BrandMark brand={d.brandName} size={20} />
+                    {d.brandName}
+                  </span>
+                )}
+
+                <StatusChip
+                  tone="quiet"
+                  label={formatDueChip(d.dueAt, d.dueLabel, now)}
+                  className="shrink-0 font-mono"
+                />
+              </motion.li>
+            );
+          })}
+        </ul>
+      )}
+
+      <button
+        type="button"
+        onClick={() => navigate("/calendar")}
+        className="mt-3 flex items-center gap-1 text-[12.5px] font-medium text-pine transition-colors hover:text-pine-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40"
+      >
+        Open full calendar <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </section>
+  );
+}
+
+/* ────────────────────── Section: pipeline snapshot ─────────────────────── */
+
+const stageDot: Record<DealStage, string> = {
+  inbound: "bg-ink-3",
+  negotiating: "bg-amber",
+  contract_sent: "bg-ink",
+  live: "bg-pine",
+  delivered: "bg-ink-2",
+  paid: "bg-pine",
+};
+
+function PipelineSnapshot({
+  pipeline,
+  className,
+}: {
+  pipeline: Overview["pipeline"];
+  className?: string;
+}) {
+  const navigate = useNavigate();
+  const reduced = prefersReducedMotion();
+  const max = Math.max(...pipeline.map((s) => s.valueCents), 0);
+  // "Total pipeline" is money still in flight, so a paid deal is no longer in
+  // it — that is what makes this different from lifetime revenue.
+  const total = pipeline
+    .filter((s) => s.stage !== "paid")
+    .reduce((s, p) => s + p.valueCents, 0);
+  const isEmpty = pipeline.every((s) => s.count === 0);
+
+  return (
+    <section
+      className={cn(
+        "flex flex-col rounded-xl border border-hairline bg-surface p-5 shadow-warm",
+        className
+      )}
+    >
+      <h3 className="text-[14px] font-semibold text-ink">Pipeline snapshot</h3>
+
+      {isEmpty ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-1 py-8 text-center">
+          <Inbox className="h-5 w-5 text-ink-3" aria-hidden />
+          <p className="text-[13px] font-medium text-ink-2">No deals yet</p>
+          <button
+            type="button"
+            onClick={() => navigate("/pipeline?new=1")}
+            className="mt-1 text-[12.5px] font-medium text-pine hover:text-pine-hover"
+          >
+            Log your first deal
+          </button>
+        </div>
+      ) : (
+        <ul className="mt-3 flex-1 space-y-2.5">
+          {pipeline.map((s, i) => (
+            <li key={s.stage} className="flex items-center gap-2.5">
+              <span
+                className={cn("h-2 w-2 shrink-0 rounded-full", stageDot[s.stage])}
+                aria-hidden
+              />
+              <span className="w-28 shrink-0 text-[12.5px] text-ink-2">
+                {stageLabels[s.stage]} <span className="text-ink-3">· {s.count}</span>
+              </span>
+              <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-hairline/60">
+                <motion.span
+                  className="block h-full rounded-full bg-pine/70"
+                  style={{ transformOrigin: "left" }}
+                  initial={reduced ? false : { scaleX: 0 }}
+                  animate={{ scaleX: max === 0 ? 0 : s.valueCents / max }}
+                  transition={{
+                    duration: DURATION.grow,
+                    delay: reduced ? 0 : i * STAGGER.tight,
+                    ease: EASE,
+                  }}
+                />
+              </span>
+              <span className="tnum w-16 shrink-0 text-right font-mono text-[12px] font-medium text-ink">
+                {formatCents(s.valueCents)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-4 flex items-center justify-between border-t border-hairline pt-3">
+        <span className="text-[12.5px] text-ink-2">
+          Total pipeline{" "}
+          <span className="tnum font-mono font-semibold text-ink">
+            {formatCents(total)}
+          </span>
+        </span>
+        <button
+          type="button"
+          onClick={() => navigate("/pipeline")}
+          className="flex items-center gap-1 text-[12.5px] font-medium text-pine transition-colors hover:text-pine-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40"
+        >
+          Open board <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/* ────────────────────────── Section: recent activity ───────────────────── */
+
+/**
+ * One icon per `activity_kind`. Total against the shared `ActivityKind` union
+ * (which `activity-kinds.parity.test.ts` holds against the DB enum), so adding
+ * a tenth kind to the schema reds this file instead of silently falling back
+ * to the generic FileText icon the shipped feed used for all nine. The
+ * `?? FileText` below is a runtime-only safety net for a kind that reaches the
+ * client before this build has shipped — it is not the totality guard.
+ */
+const activityIcon = {
+  invoice: FileText,
+  contract: Eye,
+  deliverable: CheckCircle2,
+  payment: Banknote,
+  inquiry: Inbox,
+  stage_change: MoveRight,
+  chase_sent: Send,
+  note: StickyNote,
+  platform_sync: RefreshCw,
+  invoice_sent: Send,
+} as const satisfies Record<ActivityKind, LucideIcon>;
+
+function ActivityCard({
+  events,
+  isLoading,
+  isError,
+  onRetry,
+  now,
+}: {
+  events: { id: string; kind: ActivityKind; actor: string; payload: unknown; createdAt: Date | string }[];
+  isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
+  now: Date;
+}) {
+  return (
+    <section className="rounded-xl border border-hairline bg-surface p-5 shadow-warm">
+      <h3 className="flex items-center gap-2 text-[14px] font-semibold text-ink">
+        <CalendarDays className="h-4 w-4 text-ink-3" aria-hidden /> Recent activity
+      </h3>
+
+      {isLoading ? (
+        // Deliberate call (SPO-335): this skeleton is module-scoped — it can
+        // appear while the rest of the page is already interactive — but it
+        // still announces, because the CPVH tile above is the same shape and
+        // already does, and `isLoading` only fires with no data (first load /
+        // post-error retry), never on background refetches. One polite
+        // announcement per hard load; silence would recreate the L1 gap.
+        <div
+          role="status"
+          aria-busy="true"
+          aria-label="Loading recent activity"
+          className="mt-2 space-y-3 pt-2"
+        >
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="flex items-center gap-3">
+              <Skeleton className="h-7 w-7 rounded-full" />
+              <Skeleton className="h-3 flex-1" />
+              <Skeleton className="h-3 w-10" />
+            </div>
+          ))}
+        </div>
+      ) : isError ? (
+        <div className="flex items-center justify-between gap-3 pt-3">
+          <p className="text-[13px] text-ink-2">Couldn't load recent activity.</p>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-lg border border-hairline px-2.5 py-1 text-[12px] font-medium text-ink-2 transition-colors hover:bg-surface-subtle"
+          >
+            Retry
+          </button>
+        </div>
+      ) : events.length === 0 ? (
+        <p className="pt-3 text-[13px] text-ink-3">
+          Nothing has happened yet. Chases, payments and signed contracts show up here.
+        </p>
+      ) : (
+        <ul className="mt-2 divide-y divide-hairline">
+          {events.map((e, i) => {
+            const Icon = activityIcon[e.kind] ?? FileText;
+            return (
+              <motion.li
+                key={e.id}
+                className="flex items-center gap-3 py-2.5"
+                {...entrance(i, { stagger: STAGGER.tight, delay: 0.1, y: 0 })}
+              >
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-subtle">
+                  <Icon className="h-3.5 w-3.5 text-ink-2" aria-hidden />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">
+                  {describeActivity(e.actor, e.payload, e.kind)}
+                </span>
+                <time
+                  dateTime={new Date(e.createdAt).toISOString()}
+                  title={formatExactTime(e.createdAt)}
+                  className="shrink-0 font-mono text-[11px] text-ink-3"
+                >
+                  {formatRelativeTime(e.createdAt, now)}
+                </time>
+              </motion.li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/* ──────────────────────────────── Loading ──────────────────────────────── */
+
+function DashboardSkeleton() {
+  return (
+    <div
+      role="status"
+      className="space-y-4"
+      aria-busy="true"
+      aria-label="Loading your dashboard"
+    >
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <Skeleton className="h-8 w-64" />
+          <Skeleton className="mt-2 h-3 w-80" />
+        </div>
+        <Skeleton className="h-9 w-56" />
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div
+            key={i}
+            className={cn(
+              "rounded-xl border border-hairline bg-surface p-5",
+              // Mirrors the loaded row's CPVH span so settling doesn't reflow.
+              i === 4 && "sm:col-span-2 lg:col-span-1"
+            )}
+          >
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="mt-3 h-7 w-28" />
+            <Skeleton className="mt-3 h-3 w-32" />
           </div>
-        ) : (
-          <p className="mt-3 text-[13px] text-ink-3">No activity yet.</p>
-        )}
+        ))}
+      </div>
+      <Skeleton className="h-[300px] w-full rounded-xl" />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <Skeleton className="h-64 w-full rounded-xl lg:col-span-7" />
+        <Skeleton className="h-64 w-full rounded-xl lg:col-span-5" />
       </div>
     </div>
   );
 }
 
-function KpiCard({
-  icon: Icon,
-  label,
-  value,
-  sub,
-  accent,
-  onClick,
-}: {
-  icon: React.ElementType;
-  label: string;
-  value: string;
-  sub: string;
-  accent?: string;
-  onClick?: () => void;
-}) {
+/* ───────────────────────────────── Page ────────────────────────────────── */
+
+export default function Dashboard() {
+  const [period, setPeriod] = useState<Period>("month");
+  const { name } = useCreatorIdentity();
+
+  const overviewQuery = trpc.dashboard.overview.useQuery({ period });
+  const activityQuery = trpc.activity.list.useQuery({ limit: 8 });
+  // Account-level effective CPVH (SPO-197). A second source with its own
+  // failure modes, so it degrades card-by-card instead of gating the page.
+  const cpvhQuery = trpc.deals.cpvhSummary.useQuery();
+
+  // One clock for the whole render pass, so the due chips, the relative
+  // timestamps and the overdue copy cannot disagree by a tick.
+  const now = new Date();
+
+  if (overviewQuery.isLoading) return <DashboardSkeleton />;
+
+  if (overviewQuery.isError || !overviewQuery.data) {
+    return (
+      <QueryError
+        message="Couldn't load your dashboard."
+        onRetry={() => overviewQuery.refetch()}
+      />
+    );
+  }
+
+  const overview = overviewQuery.data;
+  const { revenue, pipeline, deliverablesDue, overdue } = overview;
+
+  const dateLine = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+  const dueLine =
+    deliverablesDue.length === 0
+      ? "nothing due this week"
+      : `${deliverablesDue.length} deliverable${deliverablesDue.length === 1 ? "" : "s"} due this week`;
+  const moneyLine =
+    overdue.count > 0
+      ? ` · ${formatCents(overdue.totalCents)} overdue`
+      : revenue.totalCents > 0
+        ? ` · ${formatCents(revenue.totalCents)} in ${period === "month" ? "this month" : "this quarter"}`
+        : "";
+
   return (
-    <button
-      onClick={onClick}
-      className="min-h-[112px] rounded-xl border border-hairline bg-surface p-4 text-left shadow-warm transition-all hover:border-pine/30 hover:shadow-warm-md"
-    >
-      <div className="flex items-center gap-2">
-        <Icon className={cn("h-4 w-4", accent ?? "text-pine")} />
-        <span className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
-          {label}
-        </span>
+    <div className="space-y-4">
+      <Greeting
+        name={name}
+        subline={`${dateLine} · ${dueLine}${moneyLine}`}
+        period={period}
+        onPeriodChange={setPeriod}
+      />
+
+      {/* Money at risk reads before operational detail (P-01). */}
+      {overdue.mostUrgent && (
+        <OverdueAlert
+          invoice={overdue.mostUrgent}
+          count={overdue.count}
+          totalCents={overdue.totalCents}
+          now={now}
+        />
+      )}
+
+      <KpiRow
+        overview={overview}
+        now={now}
+        cpvh={
+          cpvhQuery.isError
+            ? { kind: "error", retry: () => cpvhQuery.refetch() }
+            : cpvhQuery.data === undefined
+              ? { kind: "loading" }
+              : { kind: "ready", value: cpvhQuery.data.effectiveCpvh }
+        }
+      />
+
+      <RevenueChart months={revenue.monthly} />
+
+      {/* 7/5 on desktop, stacked below it — the checklist is the wider read. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <DeliverablesCard
+          items={deliverablesDue}
+          now={now}
+          className="lg:col-span-7"
+        />
+        <PipelineSnapshot pipeline={pipeline} className="lg:col-span-5" />
       </div>
-      <p className={cn("mt-2 font-serif text-[22px] leading-none", accent ?? "text-ink")}>
-        {value}
-      </p>
-      <p className="mt-1.5 text-[11px] text-ink-3">{sub}</p>
-    </button>
+
+      <ActivityCard
+        events={activityQuery.data ?? []}
+        isLoading={activityQuery.isLoading}
+        isError={activityQuery.isError}
+        onRetry={() => activityQuery.refetch()}
+        now={now}
+      />
+    </div>
   );
 }

@@ -60,11 +60,20 @@ export const activityKindEnum = pgEnum("activity_kind", [
   "chase_sent",
   "note",
   "platform_sync",
+  "invoice_sent",
+]);
+export const invoiceDeliveryStatusEnum = pgEnum("invoice_delivery_status", [
+  "queued",
+  "sent",
+  "delivered",
+  "bounced",
+  "failed",
 ]);
 export const platformSyncStatusEnum = pgEnum("platform_sync_status", ["never", "ok", "error"]);
 export const planTierEnum = pgEnum("plan_tier", ["starter", "creator", "pro"]);
 export const proofKindEnum = pgEnum("proof_kind", ["vod", "clip", "chat", "overlay", "link", "file"]);
 export const contractStatusEnum = pgEnum("contract_status", ["draft", "sent", "viewed", "signed"]);
+export const creatorFileScopeEnum = pgEnum("creator_file_scope", ["evidence", "contract"]);
 
 // Mirrors Stripe's `Subscription.status`. `paused` is the one Stripe sends that
 // isn't part of the normal lifecycle — it only appears once someone sets
@@ -212,6 +221,12 @@ export const deals = pgTable(
     valueCents: integer("value_cents").notNull().default(0),
     currency: char("currency", { length: 3 }).notNull().default("USD"),
     valueNote: text("value_note"),
+    // Effective CPVH inputs (SPO-197). Nullable on purpose: every row that
+    // predates this column, and any deal a creator logs before they know
+    // their CCV, must stay NULL rather than be back-filled or defaulted to 0
+    // — impliedCpvh()'s 0 return for missing inputs is not a real rate.
+    ccv: integer("ccv"),
+    sponsoredMinutes: integer("sponsored_minutes"),
     stage: dealStageEnum("stage").notNull().default("inbound"),
     platforms: platformEnum("platforms").array(),
     paymentTerms: paymentTermsEnum("payment_terms").notNull().default("net_30"),
@@ -304,6 +319,39 @@ export const contracts = pgTable(
   (t) => [uniqueIndex("contracts_deal_idx").on(t.dealId)]
 );
 
+// Creator-scoped file registry (SPO-348). Owns the storage object's lifecycle
+// independently of the deal it was uploaded against: `proofs.dealId` and
+// `contracts.dealId` cascade-delete with their deal, but a creator's files
+// must survive that (the founder's retention call on SPO-155 is "keep files
+// indefinitely until explicitly deleted"), so this table's link back to the
+// deal is `set null`, not `cascade`. `originDealTitle` is denormalized at
+// insert time so a file can still say what it was attached to after the deal
+// row itself is gone. The orphan sweep (storage/sweep.ts) treats a row here —
+// not deal existence — as the signal that an object is still referenced.
+export const creatorFiles = pgTable(
+  "creator_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    creatorId: uuid("creator_id")
+      .notNull()
+      .references(() => creators.id, { onDelete: "cascade" }),
+    storageKey: text("storage_key").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    originalFilename: text("original_filename"),
+    originDealId: uuid("origin_deal_id").references(() => deals.id, { onDelete: "set null" }),
+    originDealTitle: text("origin_deal_title"),
+    scope: creatorFileScopeEnum("scope").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("creator_files_storage_key_idx").on(t.storageKey),
+    index("creator_files_creator_idx").on(t.creatorId),
+    index("creator_files_origin_deal_idx").on(t.originDealId),
+  ]
+);
+
 // Invoices
 export const invoices = pgTable(
   "invoices",
@@ -335,7 +383,47 @@ export const invoices = pgTable(
     index("invoices_status_idx").on(t.status),
     index("invoices_due_at_idx").on(t.dueAt),
     uniqueIndex("invoices_creator_number_idx").on(t.creatorId, t.number),
-    check("invoices_paid_requires_paid_at", sql`${t.status} <> 'paid' OR ${t.paidAt} IS NOT NULL`),
+    check("invoices_paid_requires_paid_at", sql`(${t.status} = 'paid') = (${t.paidAt} IS NOT NULL)`),
+  ]
+);
+
+// Invoice deliveries — one row per send attempt, so a resend is auditable.
+// Everything the brand actually received is snapshotted here rather than
+// re-derived on read, because invoices.rails_snapshot (and the invoice row
+// itself) can change after the send.
+export const invoiceDeliveries = pgTable(
+  "invoice_deliveries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => invoices.id, { onDelete: "cascade" }),
+    attempt: integer("attempt").notNull(),
+    toEmail: varchar("to_email", { length: 255 }).notNull(),
+    fromEmail: varchar("from_email", { length: 255 }).notNull(),
+    replyToEmail: varchar("reply_to_email", { length: 255 }).notNull(),
+    subjectSnapshot: text("subject_snapshot").notNull(),
+    textSnapshot: text("text_snapshot").notNull(),
+    htmlSnapshot: text("html_snapshot"),
+    // >=128 bits from crypto.randomBytes — see invoice.ts. Keys the public,
+    // unauthenticated hosted view (SPO-358 item 3), so it must not be guessable.
+    publicToken: text("public_token").notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
+    status: invoiceDeliveryStatusEnum("status").notNull().default("queued"),
+    providerMessageId: text("provider_message_id"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    openedAt: timestamp("opened_at", { withTimezone: true }),
+    bouncedAt: timestamp("bounced_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("invoice_deliveries_invoice_attempt_idx").on(t.invoiceId, t.attempt),
+    uniqueIndex("invoice_deliveries_public_token_idx").on(t.publicToken),
+    uniqueIndex("invoice_deliveries_idempotency_key_idx").on(t.idempotencyKey),
+    index("invoice_deliveries_provider_message_id_idx").on(t.providerMessageId),
+    index("invoice_deliveries_invoice_idx").on(t.invoiceId),
   ]
 );
 

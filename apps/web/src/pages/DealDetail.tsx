@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { BenchmarkBand } from "@/components/BenchmarkBand";
 import { ContractCard } from "@/components/ContractCard";
+import { ContactPicker } from "@/components/ContactPicker";
 import {
   ArrowLeft,
   Check,
@@ -42,6 +43,18 @@ function formatCents(cents: number) {
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(cents / 100);
+}
+
+// `null` means "no CCV/duration captured yet" — never render that as $0.00
+// (SPO-197: that class of lie is exactly what this migration replaces).
+function formatCpvh(dollarsPerViewerHour: number | null | undefined) {
+  if (dollarsPerViewerHour == null) return "—";
+  return `${new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(dollarsPerViewerHour)}/hr`;
 }
 
 const statusBadge: Record<string, string> = {
@@ -79,6 +92,7 @@ export default function DealDetail() {
       utils.deals.list.invalidate();
       toast("Deal updated");
     },
+    onError: (err) => toast.error(err.message || "Failed to update deal"),
   });
 
   const createInvoice = trpc.invoice.create.useMutation({
@@ -137,6 +151,7 @@ export default function DealDetail() {
 
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>("");
+  const [showContactPicker, setShowContactPicker] = useState(false);
   const [showAddDeliverable, setShowAddDeliverable] = useState(false);
   const [deliverableTitle, setDeliverableTitle] = useState("");
   const [deliverablePlatform, setDeliverablePlatform] = useState<string>("");
@@ -188,6 +203,16 @@ export default function DealDetail() {
     if (field === "valueCents") {
       const num = parseInt(editValue, 10);
       if (!isNaN(num)) payload.valueCents = num * 100;
+    } else if (field === "ccv") {
+      // Clearing the field means "unknown", not zero (SPO-197) — send null,
+      // not 0, so the account-level aggregate keeps excluding this deal.
+      const num = parseInt(editValue, 10);
+      payload.ccv = editValue.trim() && !isNaN(num) && num > 0 ? num : null;
+    } else if (field === "sponsoredMinutes") {
+      // Whole-hours input, stored as minutes (SPO-197).
+      const hours = parseFloat(editValue);
+      payload.sponsoredMinutes =
+        editValue.trim() && !isNaN(hours) && hours > 0 ? Math.round(hours * 60) : null;
     } else if (field === "notes" || field === "source" || field === "valueNote") {
       payload[field] = editValue || null;
     } else {
@@ -385,6 +410,76 @@ export default function DealDetail() {
                 label="Platforms"
                 value={deal.platforms?.join(", ") ?? "—"}
               />
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                  Avg. CCV
+                </p>
+                {editingField === "ccv" ? (
+                  <div className="mt-0.5 flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      className="w-24 rounded border border-hairline px-2 py-1 text-[13px] text-ink outline-none focus:border-pine"
+                      autoFocus
+                    />
+                    <button onClick={() => saveEdit("ccv")} className="text-pine">
+                      <Check className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => setEditingField(null)} className="text-ink-3">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <p
+                    onClick={() => startEdit("ccv", deal.ccv != null ? String(deal.ccv) : "")}
+                    className="mt-0.5 cursor-text text-[13px] text-ink hover:text-ink-2"
+                  >
+                    {deal.ccv ?? "Click to add"}
+                  </p>
+                )}
+              </div>
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                  Sponsored duration
+                </p>
+                {editingField === "sponsoredMinutes" ? (
+                  <div className="mt-0.5 flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0.25}
+                      step="0.25"
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      className="w-24 rounded border border-hairline px-2 py-1 text-[13px] text-ink outline-none focus:border-pine"
+                      autoFocus
+                    />
+                    <span className="text-[12px] text-ink-3">hrs</span>
+                    <button onClick={() => saveEdit("sponsoredMinutes")} className="text-pine">
+                      <Check className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => setEditingField(null)} className="text-ink-3">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <p
+                    onClick={() =>
+                      startEdit(
+                        "sponsoredMinutes",
+                        deal.sponsoredMinutes != null ? String(deal.sponsoredMinutes / 60) : ""
+                      )
+                    }
+                    className="mt-0.5 cursor-text text-[13px] text-ink hover:text-ink-2"
+                  >
+                    {deal.sponsoredMinutes != null
+                      ? `${(deal.sponsoredMinutes / 60).toFixed(2).replace(/\.?0+$/, "")} hrs`
+                      : "Click to add"}
+                  </p>
+                )}
+              </div>
+              <DetailRow label="Effective CPVH" value={formatCpvh(deal.effectiveCpvh)} />
               <div className="col-span-2">
                 <p className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
                   Notes
@@ -715,7 +810,17 @@ export default function DealDetail() {
         <div className="space-y-4">
           {/* Contact */}
           <div className="rounded-xl border border-hairline bg-surface p-4">
-            <h3 className="text-[13px] font-semibold text-ink">Contact</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-[13px] font-semibold text-ink">Contact</h3>
+              {deal.primaryContact && (
+                <button
+                  onClick={() => setShowContactPicker((s) => !s)}
+                  className="flex items-center gap-1 text-[11px] font-medium text-pine hover:text-pine-hover"
+                >
+                  {showContactPicker ? "Close" : "Change"}
+                </button>
+              )}
+            </div>
             {deal.primaryContact ? (
               <div className="mt-3 space-y-2">
                 <div className="flex items-center gap-2">
@@ -737,6 +842,22 @@ export default function DealDetail() {
               <p className="mt-3 text-[13px] text-ink-3">
                 No primary contact set.
               </p>
+            )}
+
+            {(showContactPicker || !deal.primaryContact) && (
+              <div className={deal.primaryContact ? "mt-3" : "mt-1"}>
+                <ContactPicker
+                  brandId={deal.brand?.id ?? null}
+                  selectedId={deal.primaryContactId ?? null}
+                  onSelect={(contactId) => {
+                    updateDeal.mutate({
+                      id: deal.id,
+                      primaryContactId: contactId,
+                    });
+                    setShowContactPicker(false);
+                  }}
+                />
+              </div>
             )}
           </div>
 

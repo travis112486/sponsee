@@ -4,6 +4,9 @@ import * as schema from "@sponsee/db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { runChaseTick, sendChaseEmail } from "./chase-tick.js";
 import { chaseRouter } from "../routers/chase.js";
+import { brandRouter } from "../routers/brand.js";
+import { dealsRouter } from "../routers/deals.js";
+import { invoiceRouter } from "../routers/invoice.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
 import { spawn, type ChildProcess, execSync } from "child_process";
@@ -1351,6 +1354,235 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(event).toBeDefined();
     expect(event.updatedAt).not.toBeNull();
     expect(new Date(event.updatedAt!).getTime()).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * SPO-298 — the missing-contact dead end.
+ *
+ * The backend contact surface (`brand.addContact`, `deals.create/update` with
+ * `primaryContactId`, `invoice.create` with `contactId`) existed, but the web
+ * app never called it, so every deal's `primaryContactId` was null and every
+ * chase email died at approve with "No recipient email configured". This suite
+ * drives the chain the UI now exercises — through the routers, not by
+ * hand-inserting a contact — and proves a chase email reaches a real recipient
+ * instead of the approve guard.
+ */
+describe("SPO-298 contact capture end-to-end (router-driven)", () => {
+  async function seedCreatorWithBrandAndTemplate() {
+    const [creator] = await db
+      .insert(schema.creators)
+      .values({ displayName: "Contact Capture Streamer" })
+      .returning();
+
+    await db.insert(schema.user).values({
+      id: `user-${creator.id}`,
+      name: "Test Creator",
+      email: "creator@example.com",
+    });
+    await db.insert(schema.memberships).values({
+      userId: `user-${creator.id}`,
+      creatorId: creator.id,
+      role: "owner",
+    });
+
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ creatorId: creator.id, name: "Capture Brand" })
+      .returning();
+
+    // Step-1 template must exist (and be enabled) for chase to compute a
+    // nextActionAt once armed.
+    await db.insert(schema.chaseTemplates).values({
+      creatorId: creator.id,
+      step: 1,
+      name: "Friendly reminder",
+      offsetDays: 1,
+      subject: "Payment reminder for {invoice_id}",
+      body: "Hi {brand_contact}, please pay {amount} for {deal_title}.",
+      enabled: true,
+    });
+
+    return { creator, brand };
+  }
+
+  // invoice.create no longer arms chase (SPO-363 — chase arms on invoice.send).
+  // These tests exercise chase-tick/approve directly, not the send path, so
+  // arm the state the same way invoice.send would rather than invoking a
+  // real provider send here.
+  async function armChase(invoiceId: string, nextActionAt: Date) {
+    await db.insert(schema.invoiceChaseState).values({
+      invoiceId,
+      mode: "armed",
+      nextStep: 1,
+      nextActionAt,
+    });
+  }
+
+  it("deal -> contact -> invoice -> overdue -> chase-tick -> approve reaches an actual send", async () => {
+    const { creator, brand } = await seedCreatorWithBrandAndTemplate();
+    const ctx = mockCtx(creator.id);
+
+    // 1) Contact captured through brand.addContact, exactly as the UI does.
+    const brandCaller = brandRouter.createCaller(ctx);
+    const contact = await brandCaller.addContact({
+      brandId: brand.id,
+      name: "Jane Buyer",
+      email: "jane@example.com",
+      role: "Sponsorships",
+    });
+    expect(contact.email).toBe("jane@example.com");
+
+    // 2) Deal created with that contact as its primary contact.
+    const dealsCaller = dealsRouter.createCaller(ctx);
+    const deal = await dealsCaller.create({
+      brandId: brand.id,
+      primaryContactId: contact.id,
+      title: "Capture Deal",
+      type: "flat",
+      valueCents: 10000,
+    });
+    expect(deal.primaryContactId).toBe(contact.id);
+
+    // 3) Invoice created from the deal carrying a non-null contactId, already
+    //    past due so chase-tick arms it immediately.
+    const overdue = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const invoiceCaller = invoiceRouter.createCaller(ctx);
+    const invoice = await invoiceCaller.create({
+      dealId: deal.id,
+      contactId: contact.id,
+      amountCents: 10000,
+      title: "Capture Invoice",
+      dueAt: overdue,
+    });
+    expect(invoice.contactId).toBe(contact.id);
+    await armChase(invoice.id, new Date(Date.now() - 24 * 60 * 60 * 1000));
+
+    // 4) chase-tick resolves the recipient from the invoice's contact.
+    const created = await runChaseTick();
+    expect(created).toBe(1);
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+    expect(event.toEmail).toBe("jane@example.com");
+
+    // 5) Approve passes the recipient guard and enqueues a real send.
+    const chaseCaller = chaseRouter.createCaller(ctx);
+    const result = await chaseCaller.approve({ chaseEventId: event.id });
+    expect(result).toMatchObject({ success: true, queued: true });
+
+    const jobArgs = mockBossSend.mock.calls[0][1];
+    expect(jobArgs.toEmail).toBe("jane@example.com");
+  });
+
+  it("regression guard: a contact-less invoice yields a null toEmail that the approve guard rejects loudly", async () => {
+    const { creator, brand } = await seedCreatorWithBrandAndTemplate();
+    const ctx = mockCtx(creator.id);
+
+    const dealsCaller = dealsRouter.createCaller(ctx);
+    const deal = await dealsCaller.create({
+      brandId: brand.id,
+      title: "No Contact Deal",
+      type: "flat",
+    });
+
+    const overdue = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const invoiceCaller = invoiceRouter.createCaller(ctx);
+    const invoice = await invoiceCaller.create({
+      dealId: deal.id,
+      amountCents: 10000,
+      title: "No Contact Invoice",
+      dueAt: overdue,
+    });
+    await armChase(invoice.id, new Date(Date.now() - 24 * 60 * 60 * 1000));
+
+    await runChaseTick();
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+    expect(event.toEmail).toBeNull();
+
+    // The failure is loud (a typed BAD_REQUEST), never a silent drop.
+    const chaseCaller = chaseRouter.createCaller(ctx);
+    await expect(
+      chaseCaller.approve({ chaseEventId: event.id })
+    ).rejects.toSatisfy(
+      (err: { code?: string; message?: string }) =>
+        err.code === "BAD_REQUEST" && err.message === "No recipient email configured"
+    );
+    expect(mockBossSend).not.toHaveBeenCalled();
+  });
+
+  it("SPO-347: contact added after the invoice was armed unblocks the send and repairs the recipient", async () => {
+    const { creator, brand } = await seedCreatorWithBrandAndTemplate();
+    const ctx = mockCtx(creator.id);
+
+    // Invoice created before any contact exists — the migration/production state.
+    const dealsCaller = dealsRouter.createCaller(ctx);
+    const deal = await dealsCaller.create({
+      brandId: brand.id,
+      title: "Contact After Invoice Deal",
+      type: "flat",
+      valueCents: 10000,
+    });
+
+    const overdue = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const invoiceCaller = invoiceRouter.createCaller(ctx);
+    const invoice = await invoiceCaller.create({
+      dealId: deal.id,
+      amountCents: 10000,
+      title: "Contact After Invoice",
+      dueAt: overdue,
+    });
+    await armChase(invoice.id, new Date(Date.now() - 24 * 60 * 60 * 1000));
+
+    await runChaseTick();
+
+    const [armed] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+    expect(armed.toEmail).toBeNull();
+
+    // Creator follows the Payments hint: add a primary contact to this deal.
+    const brandCaller = brandRouter.createCaller(ctx);
+    const contact = await brandCaller.addContact({
+      brandId: brand.id,
+      name: "Late Contact",
+      email: "late@example.com",
+    });
+    await dealsCaller.update({ id: deal.id, primaryContactId: contact.id });
+
+    // The awaiting-review hint must clear: it now surfaces the *effective*
+    // recipient resolved from the deal's primary contact, with no re-tick.
+    const chaseCaller = chaseRouter.createCaller(ctx);
+    const queue = await chaseCaller.awaitingReview();
+    expect(queue).toHaveLength(1);
+    expect(queue[0].recipientEmail).toBe("late@example.com");
+
+    // Approve resolves the recipient at send time and enqueues a real send.
+    const result = await chaseCaller.approve({ chaseEventId: armed.id });
+    expect(result).toMatchObject({ success: true, queued: true });
+
+    const jobArgs = mockBossSend.mock.calls[0][1];
+    expect(jobArgs.toEmail).toBe("late@example.com");
+
+    // The repair is durable: the event self-heals and the invoice is backfilled.
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.id, armed.id));
+    expect(event.toEmail).toBe("late@example.com");
+
+    const [repaired] = await db
+      .select()
+      .from(schema.invoices)
+      .where(eq(schema.invoices.id, invoice.id));
+    expect(repaired.contactId).toBe(contact.id);
   });
 });
 
