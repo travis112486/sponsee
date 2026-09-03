@@ -29,9 +29,15 @@ export interface RegisterCreatorFileParams {
  * with the proof/contract write that references it (SPO-353): a bare insert
  * would raise 23505 on a repeat key and take that write down too. The row's
  * content is fully derivable from the key, so a repeat has nothing to
- * update — `onConflictDoNothing` makes re-registering the same key a no-op
- * instead of an error, mirroring how `contract.upsert` already converges
- * concurrent writes via `onConflictDoUpdate` rather than throwing.
+ * update — except `deletedAt`. sweep.ts and quota.ts both read this table
+ * filtered on `deletedAt IS NULL`, so if the repeat key belongs to a
+ * tombstoned row (see `tombstoneCreatorFile` below), leaving `deletedAt` set
+ * would let the orphan sweep destroy an object a live proof/contract row
+ * still references, and its bytes would escape quota accounting. Clearing
+ * `deletedAt` on conflict — `onConflictDoUpdate` — makes re-registering the
+ * same key a resurrection instead of a no-op, mirroring how `contract.upsert`
+ * already converges concurrent writes via `onConflictDoUpdate` rather than
+ * throwing.
  */
 export async function registerCreatorFile(tx: DB, params: RegisterCreatorFileParams): Promise<void> {
   await tx
@@ -46,7 +52,7 @@ export async function registerCreatorFile(tx: DB, params: RegisterCreatorFilePar
       originDealTitle: params.originDealTitle,
       scope: params.scope,
     })
-    .onConflictDoNothing({ target: creatorFiles.storageKey });
+    .onConflictDoUpdate({ target: creatorFiles.storageKey, set: { deletedAt: null } });
 }
 
 /**
@@ -54,7 +60,8 @@ export async function registerCreatorFile(tx: DB, params: RegisterCreatorFilePar
  * tombstones the registry row *before* the object delete is attempted. If
  * the object delete then fails, the tombstoned row (deletedAt set) is what
  * tells the orphan sweep the object is safe to reclaim later instead of
- * leaking forever — see the `deletedAt IS NULL` filter in sweep.ts.
+ * leaking forever — see the `deletedAt IS NULL` filter in sweep.ts and the
+ * matching filter in quota.ts, which excludes tombstoned rows from usage.
  */
 export async function tombstoneCreatorFile(db: DB, storageKey: string): Promise<void> {
   await db.update(creatorFiles).set({ deletedAt: new Date() }).where(eq(creatorFiles.storageKey, storageKey));

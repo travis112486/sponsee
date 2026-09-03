@@ -4,7 +4,7 @@ import * as schema from "@sponsee/db/schema";
 import { sql, eq } from "drizzle-orm";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
-import { registerCreatorFile } from "./registry.js";
+import { registerCreatorFile, tombstoneCreatorFile } from "./registry.js";
 
 // ── Schema SQL (shared with every other PGlite suite via test-utils/schema-sql.ts;
 // fileParallelism: false / maxWorkers: 1 in scripts/vitest-api.config.ts (SPO-86)
@@ -116,5 +116,55 @@ describe("registerCreatorFile", () => {
     const [row] = await db.select().from(schema.creatorFiles).where(eq(schema.creatorFiles.storageKey, storageKey));
     expect(row.sizeBytes).toBe(100);
     expect(row.originalFilename).toBe("first.png");
+  });
+
+  // QA follow-up on SPO-353: onConflictDoNothing left a tombstoned row dead
+  // on re-registration, so sweep.ts (isNull(deletedAt)) would still reclaim
+  // the object out from under a live proof/contract row, and quota.ts
+  // (isNull(deletedAt)) would undercount usage. Re-registering a tombstoned
+  // key must clear deletedAt to resurrect the row.
+  it("clears deletedAt when a tombstoned storage key is re-registered", async () => {
+    const { creator, deal } = await seedDeal();
+    const storageKey = `creators/${creator.id}/deals/${deal.id}/proofs/dddddddd-dddd-dddd-dddd-dddddddddddd.png`;
+
+    await db.transaction(async (tx) => {
+      await registerCreatorFile(tx, {
+        creatorId: creator.id,
+        storageKey,
+        mimeType: "image/png",
+        sizeBytes: 100,
+        originalFilename: "first.png",
+        originDealId: deal.id,
+        originDealTitle: deal.title,
+        scope: "evidence",
+      });
+    });
+
+    await tombstoneCreatorFile(db, storageKey);
+
+    const [tombstoned] = await db
+      .select()
+      .from(schema.creatorFiles)
+      .where(eq(schema.creatorFiles.storageKey, storageKey));
+    expect(tombstoned.deletedAt).not.toBeNull();
+
+    await db.transaction(async (tx) => {
+      await registerCreatorFile(tx, {
+        creatorId: creator.id,
+        storageKey,
+        mimeType: "image/png",
+        sizeBytes: 100,
+        originalFilename: "first.png",
+        originDealId: deal.id,
+        originDealTitle: deal.title,
+        scope: "evidence",
+      });
+    });
+
+    const [resurrected] = await db
+      .select()
+      .from(schema.creatorFiles)
+      .where(eq(schema.creatorFiles.storageKey, storageKey));
+    expect(resurrected.deletedAt).toBeNull();
   });
 });
