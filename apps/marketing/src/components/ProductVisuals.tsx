@@ -158,7 +158,7 @@ export function HeroDashboard() {
                 stage: "Inbound",
                 total: "$1,450",
                 deals: [
-                  { brand: "Astrofall", amount: "$650", platform: "twitch", meta: "new" },
+                  { brand: "Quillfrost", amount: "$650", platform: "twitch", meta: "new" },
                   { brand: "CometEnergy", amount: "$800", platform: "kick" },
                 ],
               },
@@ -166,7 +166,7 @@ export function HeroDashboard() {
                 stage: "Negotiating",
                 total: "$3,200",
                 deals: [
-                  { brand: "Polar VPN", amount: "$2,400", platform: "twitch", meta: "6d in stage", metaTone: "amber" },
+                  { brand: "Basalt VPN", amount: "$2,400", platform: "twitch", meta: "6d in stage", metaTone: "amber" },
                   { brand: "MealCrate", amount: "$800", platform: "youtube" },
                 ],
               },
@@ -181,7 +181,7 @@ export function HeroDashboard() {
                 stage: "Live",
                 total: "$2,650",
                 deals: [
-                  { brand: "Volt Fuel", amount: "$1,450", platform: "twitch", meta: "live", metaTone: "accent" },
+                  { brand: "Emberfizz", amount: "$1,450", platform: "twitch", meta: "live", metaTone: "accent" },
                   { brand: "DriftEnergy", amount: "$1,200", platform: "tiktok" },
                 ],
               },
@@ -211,9 +211,9 @@ export function HeroDashboard() {
 export function PipelineBoard() {
   const cols = [
     { stage: "Inbound", count: "2", deals: [{ brand: "CometEnergy", amount: "$800", platform: "kick" as const }] },
-    { stage: "Negotiating", count: "2", deals: [{ brand: "Polar VPN", amount: "$2,400", platform: "twitch" as const, meta: "6d in stage", metaTone: "amber" as const }] },
+    { stage: "Negotiating", count: "2", deals: [{ brand: "Basalt VPN", amount: "$2,400", platform: "twitch" as const, meta: "6d in stage", metaTone: "amber" as const }] },
     { stage: "Contract Sent", count: "1", deals: [{ brand: "Gridgear", amount: "$1,900", platform: "youtube" as const }] },
-    { stage: "Live", count: "2", deals: [{ brand: "Volt Fuel", amount: "$1,450", platform: "twitch" as const, meta: "live", metaTone: "accent" as const }] },
+    { stage: "Live", count: "2", deals: [{ brand: "Emberfizz", amount: "$1,450", platform: "twitch" as const, meta: "live", metaTone: "accent" as const }] },
     { stage: "Delivered", count: "1", deals: [{ brand: "MealCrate", amount: "$850", platform: "youtube" as const }] },
     { stage: "Paid", count: "3", deals: [{ brand: "DriftEnergy", amount: "$1,200", platform: "tiktok" as const, meta: "paid", metaTone: "accent" as const }] },
   ];
@@ -326,7 +326,7 @@ export function PaymentsMock() {
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-twitch" />
-              <span className="text-[11px] font-medium text-ink">Polar VPN · INV-014</span>
+              <span className="text-[11px] font-medium text-ink">Basalt VPN · INV-014</span>
             </span>
             <Chip tone="amber">12 days overdue</Chip>
           </div>

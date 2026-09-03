@@ -68,6 +68,37 @@ describe("pre-rendered marketing pages", () => {
     expect(text.split(" ").length).toBeGreaterThan(500);
   });
 
+  // SPO-402: the product mocks are fabricated deal data on a public page, so a
+  // recognisable sponsor in them reads as "these brands do deals through
+  // Sponsee" — and one of them was cast as 12 days overdue. Nothing structural
+  // stops a future edit from reaching for a real name again, so pin the ones we
+  // have already had to remove. Scoped to the pre-rendered marketing entries;
+  // naming a brand in editorial copy is a different question from putting one
+  // in a mock pipeline.
+  const REMOVED_BRANDS = [
+    // Round 1 — the names the ticket was filed against.
+    /NordVPN/i,
+    /HelloFresh/i,
+    /G\s*FUEL/i,
+    /Logitech/i,
+    /SneakEnergy/i,
+    /DubbyEnergy/i,
+    /Raid:\s*Call/i,
+    // Round 2 — replacements that turned out to be real brands in the same
+    // category as the slot they filled (QA F1/F2/F3 on PR #139).
+    /Astrofall/i,
+    /Polar\s+VPN/i,
+    /Volt\s+Fuel/i,
+  ];
+
+  it.each(Object.keys(PAGES))("%s names no real brand in the product mocks", (file) => {
+    const markup = renderToString(PAGES[file]);
+
+    for (const brand of REMOVED_BRANDS) {
+      expect(markup).not.toMatch(brand);
+    }
+  });
+
   it("privacy page describes the product, not only the waitlist", () => {
     // SPO-375: the waitlist-era page said nothing about pipeline data, chase
     // mail, or subprocessors. A crawler (and a creator reading before they
