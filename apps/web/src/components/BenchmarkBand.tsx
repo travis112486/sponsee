@@ -27,7 +27,7 @@ export function bandPlacement(
 ): BandPlacement {
   if (valueCents >= agency) return { label: "Agency+", color: "bg-pine", belowFloor: false };
   if (valueCents >= mid) return { label: "Mid–agency", color: "bg-blue-500", belowFloor: false };
-  if (valueCents >= floor) return { label: "Floor–mid", color: "bg-amber-400", belowFloor: false };
+  if (valueCents >= floor) return { label: "Floor–mid", color: "bg-amber", belowFloor: false };
   return { label: "Below floor", color: "bg-brick", belowFloor: true };
 }
 
