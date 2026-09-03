@@ -14,9 +14,12 @@
   clients that strip HTML — this HTML is presentation, never the only copy.
 -->
 <body style="margin:0; padding:0; background-color:#F7F5F1;">
-  <!-- Preheader: shows in inbox preview, hidden in the open email -->
+  <!-- Preheader: shows in inbox preview, hidden in the open email.
+       The trailing &#847;&zwnj;&nbsp; run pads the preview so inbox clients
+       don't append the first visible body text after the preheader. -->
   <div style="display:none; max-height:0; overflow:hidden; mso-hide:all;">
-    Invoice {{invoiceNumberFormatted}} — {{amountFormatted}} {{currency}}, {{dueDateLine}}. Payment details inside.
+    Invoice {{invoiceNumberFormatted}} — {{amountFormatted}} {{currency}}, {{#if isPaid}}paid {{paidDate}}.{{/if}}{{#if isUnpaid}}{{dueDatePhrase}}. Payment details inside.{{/if}}
+    &#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;
   </div>
 
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F7F5F1;">
@@ -59,7 +62,7 @@
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
                         <td style="font-family:Helvetica, Arial, sans-serif; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:#8A8178; padding-bottom:6px;">
-                          Amount due
+                          {{#if isPaid}}Amount paid{{/if}}{{#if isUnpaid}}Amount due{{/if}}
                         </td>
                       </tr>
                       <tr>
@@ -69,7 +72,7 @@
                       </tr>
                       <tr>
                         <td style="font-family:Helvetica, Arial, sans-serif; font-size:13px; line-height:20px; color:#8A8178; padding-top:6px;">
-                          {{termsLabel}} &middot; {{dueDateLine}}
+                          {{#if isPaid}}Paid {{paidDate}}{{/if}}{{#if isUnpaid}}{{termsLabel}} &middot; {{dueDateLine}}{{/if}}
                         </td>
                       </tr>
                     </table>
@@ -98,14 +101,41 @@
                         <td width="110" valign="top" style="font-family:Helvetica, Arial, sans-serif; font-size:12px; line-height:20px; color:#8A8178; padding:6px 12px 6px 0; border-bottom:1px solid #E8E3DB;">Issued</td>
                         <td valign="top" style="font-family:Helvetica, Arial, sans-serif; font-size:14px; line-height:20px; color:#1B1815; padding:6px 0; border-bottom:1px solid #E8E3DB;">{{issuedDate}}</td>
                       </tr>
+                      {{#if isUnpaid}}
                       <tr>
                         <td width="110" valign="top" style="font-family:Helvetica, Arial, sans-serif; font-size:12px; line-height:20px; color:#8A8178; padding:6px 12px 6px 0;">Due</td>
                         <td valign="top" style="font-family:Helvetica, Arial, sans-serif; font-size:14px; line-height:20px; color:#1B1815; padding:6px 0;">{{dueDateValue}}</td>
                       </tr>
+                      {{/if}}
+                      {{#if isPaid}}
+                      <tr>
+                        <td width="110" valign="top" style="font-family:Helvetica, Arial, sans-serif; font-size:12px; line-height:20px; color:#8A8178; padding:6px 12px 6px 0; border-bottom:1px solid #E8E3DB;">Due</td>
+                        <td valign="top" style="font-family:Helvetica, Arial, sans-serif; font-size:14px; line-height:20px; color:#1B1815; padding:6px 0; border-bottom:1px solid #E8E3DB;">{{dueDateValue}}</td>
+                      </tr>
+                      <tr>
+                        <td width="110" valign="top" style="font-family:Helvetica, Arial, sans-serif; font-size:12px; line-height:20px; color:#8A8178; padding:6px 12px 6px 0;">Paid</td>
+                        <td valign="top" style="font-family:Helvetica, Arial, sans-serif; font-size:14px; line-height:20px; color:#1B1815; padding:6px 0;">{{paidDate}}</td>
+                      </tr>
+                      {{/if}}
                     </table>
                   </td>
                 </tr>
 
+                {{#if isPaid}}
+                <!-- Paid: no pay instructions on a settled invoice -->
+                <tr>
+                  <td style="padding-top:28px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="background-color:#FBFAF7; border:1px solid #E8E3DB; border-radius:8px; padding:16px 20px; font-family:Helvetica, Arial, sans-serif; font-size:13px; line-height:20px; color:#1B1815;">
+                          <strong style="color:#0E7A5F;">This invoice has been paid.</strong> Paid {{paidDate}}. No further action is needed.
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                {{/if}}
+                {{#if isUnpaid}}
                 <!-- How to pay -->
                 <tr>
                   <td style="padding-top:28px;">
@@ -146,6 +176,7 @@
                     To arrange payment, reply to this email and {{creatorDisplayName}} will send payment details.
                   </td>
                 </tr>
+                {{/if}}
                 {{/if}}
 
                 <!-- Hosted link button -->

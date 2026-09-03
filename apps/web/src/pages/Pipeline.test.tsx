@@ -178,8 +178,10 @@ describe("Pipeline deal card content (SPO-195)", () => {
     expect(within(card).getByText("AC")).toBeInTheDocument();
     // Deal-type badge (scoped to the card; the filter bar also shows "Flat").
     expect(within(card).getByText("Flat")).toBeInTheDocument();
-    // Value note next to the value.
-    expect(within(card).getByText("per stream")).toBeInTheDocument();
+    // Value note renders twice (SPO-376): inline next to the value (sub-lg and
+    // ≥1440) and as its own line through the lg–1439 narrow-column band, where
+    // it used to be hidden entirely. Both presentations must exist.
+    expect(within(card).getAllByText("per stream")).toHaveLength(2);
     // Platform dots: role="img" with Twitch / YouTube labels.
     expect(within(card).getByRole("img", { name: "Twitch" })).toBeInTheDocument();
     expect(within(card).getByRole("img", { name: "YouTube" })).toBeInTheDocument();

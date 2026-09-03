@@ -1,0 +1,1 @@
+Invoice {{invoiceNumberFormatted}} from {{creatorDisplayName}} — {{amountFormatted}} {{currency}}, {{#if isPaid}}paid {{paidDate}}{{/if}}{{#if isUnpaid}}{{dueDatePhrase}}{{/if}}

@@ -659,6 +659,7 @@ const activityIcon = {
   chase_sent: Send,
   note: StickyNote,
   platform_sync: RefreshCw,
+  invoice_sent: Send,
 } as const satisfies Record<ActivityKind, LucideIcon>;
 
 function ActivityCard({
