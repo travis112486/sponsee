@@ -21,7 +21,8 @@
  * prose table in the SPO-155 runbook — unre-runnable, and blind to the next
  * regression in the presigner. That is exactly the class of bug SPO-351 was
  * about: `WHEN_REQUIRED` checksum config (see client.ts) is invisible to MinIO
- * and only R2/S3 reject the mismatch. See SPO-354.
+ * — and, per SPO-422, to R2 too, so nothing at the wire on any provider we run
+ * catches its removal. See SPO-354.
  *
  * TWO NEGATIVE CONTROLS the original run did not include are checks 8 and 9.
  * QA verified both by hand during SPO-167; they are cheap to keep and they are
@@ -245,7 +246,13 @@ async function verifyScope(fixture: ScopeFixture, ids: { creatorId: string; deal
     //    S3 and R2 both validate that mismatch and reject the PUT with 400"
     //    does not hold for R2 under the SDK version pinned today — nothing at
     //    the wire catches a reintroduction, on R2 or on MinIO. Asserting on
-    //    the URL's shape is the only thing that does.
+    //    the URL's shape is what catches it instead — the same assertion this
+    //    check re-runs live is also `storage.test.ts`'s "presigns a PUT with
+    //    no checksum query parameters" test (SPO-351), which is offline SigV4
+    //    logic needing no server, so it already runs unconditionally in the
+    //    `test` CI job on every PR. This script's contribution on top of that
+    //    is re-proving it against production R2 credentials, not providing
+    //    the only coverage — see SPO-432.
     const checksumParams = [...putParams.keys()].filter((k) => /checksum/i.test(k));
     record(
       1,
