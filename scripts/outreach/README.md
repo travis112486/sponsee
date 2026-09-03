@@ -41,6 +41,51 @@ ledger (replies, stops, manual pulls)  ──apply──▶  Resend contact.unsu
                                               Broadcast skips them. Always.
 ```
 
+## Where the roster and ledger live
+
+**Not in this repo, and not in any repo.** `travis112486/sponsee` is public.
+
+The roster names real creators with their business email addresses and X
+handles. The ledger is sharper still: from the first touch onward it records
+`unsubscribed` / `complained` / `stop_requested` / `replied` against those same
+named people, which is an opt-out record of an identifiable person. Committing
+either publishes it to every clone and to GitHub code search — and because
+`refs/pull/*` is permanent, a later history rewrite cannot take it back. So
+`outreach/*.json` and `outreach/*.jsonl` are gitignored (SPO-415 / SPO-417).
+
+Keep the real files outside the working tree and pass them explicitly:
+
+```
+~/.config/sponsee/outreach/wave1-roster.json
+~/.config/sponsee/outreach/wave1-ledger.jsonl
+```
+
+`--roster` and `--ledger` are required arguments with no default, so there is no
+path that silently falls back to an in-repo copy. Any location works; the one
+above is the convention this runbook assumes.
+
+**The tracked fixtures are the schema of record**, and every person in them is
+invented:
+
+| Fixture | What it documents |
+| --- | --- |
+| `outreach/wave1-roster.example.json` | Roster row shape — `id`, `name`, `firstName`, `email`, `xHandle` |
+| `outreach/wave1-ledger.example.jsonl` | Ledger line shape — `at`, `reason`, `email` / `xHandle`, `note` |
+
+Point `--roster` / `--ledger` at those two to exercise the gate without touching
+real contact data. A fixture is a rehearsal, never a send-day input.
+
+The roster's authoritative contents are the Wave 1 send list on SPO-408, not a
+file in this tree.
+
+**The same rule governs this document** (SPO-418). Every identity in every
+example below — the T1 census included — comes from those fixtures, and no real
+name, address, handle or roster id may be pasted back in. A real address here is
+a disclosure, not a typo: the census is the whole target list in the most
+greppable form there is, and pasting a live run into this file republishes it
+just as surely as committing the roster would. Quote counts and decisions
+freely; identities stay in the roster and on the ticket that decided them.
+
 ## Send-day runbook
 
 Run this immediately before **every** touch — T1, T2 and T3, on both channels.
@@ -71,9 +116,10 @@ export RESEND_API_KEY=$(infisical secrets get RESEND_API_KEY \
   --projectId $INFISICAL_PROJECT_ID --env prod --plain --silent)
 
 # 1. Dry run — read-only. Shows the plan and anything unresolved.
+#    Both paths point OUTSIDE the repo — see "Where the roster and ledger live".
 node scripts/outreach/wave1-preflight.mjs \
-  --roster outreach/wave1-roster.json \
-  --ledger outreach/wave1-ledger.jsonl \
+  --roster ~/.config/sponsee/outreach/wave1-roster.json \
+  --ledger ~/.config/sponsee/outreach/wave1-ledger.jsonl \
   --audience wave-1-outreach \
   --touch T2 --channel email
 
@@ -148,9 +194,10 @@ every name we hold" — but SPO-292 decided that four contacts keep the
 identity-withholding VTuber personas, so there is no name to push and the flag
 would block on rows nobody intends to fix. That decision covers all four of them
 for good — it is not scoped to Wave 1 and should not be narrowed just because one
-of them is not currently in Wave 1's cohort. The four are named on SPO-292 and in
-the roster; this file does not repeat them — see
-[identities live off this file](#identities-live-off-this-file).
+of them is not currently in Wave 1's cohort. Which four is in the roster, which
+is not in this repo — see
+[where the roster and ledger live](#where-the-roster-and-ledger-live). Naming
+them here would republish the roster a line at a time.
 
 Wave 1's cohort is narrower than SPO-292's four, though: the `us_only`
 jurisdiction cut (SPO-271/SPO-389) holds one of the four out of Wave 1 as a
@@ -160,45 +207,47 @@ printed by default. Cross that list against SPO-292's four rows and derive
 personalized as (email SEND rows) − (fallback rows among them), rather than
 hardcoding a figure that moves every time the roster or the jurisdiction cut
 does. A green Wave 1A preflight should name exactly the SPO-292 rows that are on
-the current roster and no others. As of the roster in this repo that is three of
-the four — the fourth is out of cohort, not gone from the decision — 3 of the 11
+the current roster and no others. As of the current roster that is three of the
+four — the fourth is out of cohort, not gone from the decision — 3 of the 11
 email SEND rows, so 8 of 11 render a personalized greeting.
 
-Here is the shape of a T1/email run. The counts, decisions and column layout are
-as observed; **every identity below is masked** — see
-[identities live off this file](#identities-live-off-this-file):
+Below is the shape of that T1/email run. The counts, decisions and column layout
+are Wave 1's; **the identities are not** — they are the invented rows of
+`outreach/wave1-roster.example.json`, which carries the same 16 rows, 11/5 channel
+split and 3 nameless SEND rows precisely so this block can be shown without
+naming anyone. The real census is never pasted here:
 
 ```
 Wave 1 preflight — T1 / email
-roster: outreach/wave1-roster.json (16 rows)
-ledger: outreach/wave1-ledger.jsonl (0 entries)
+roster: ~/.config/sponsee/outreach/wave1-roster.json (16 rows)
+ledger: ~/.config/sponsee/outreach/wave1-ledger.jsonl (0 entries)
 endpoint: https://api.resend.com
 ────────────────────────────────────────────────────────────────────────────
-  SEND     Creator 01                   creator-01@example.com  [creator-01]
-  SEND     Creator 02                   creator-02@example.com  [creator-02]
-  SEND     Creator 03                   creator-03@example.com  [creator-03]
-  SEND     Creator 04                   creator-04@example.com  [creator-04]
-  SEND     Creator 05                   creator-05@example.com  [creator-05]
-  SEND     Creator 06                   creator-06@example.com  [creator-06]
-  SEND     Creator 07                   creator-07@example.com  [creator-07]
-  SEND     Creator 08                   creator-08@example.com  [creator-08]
-  SEND     Creator 09                   creator-09@example.com  [creator-09]
-  SEND     Creator 10                   creator-10@example.com  [creator-10]
-  SEND     Creator 11                   creator-11@example.com  [creator-11]
-  SKIP     Creator 12                   no-address  [creator-12]
-  SKIP     Creator 13                   no-address  [creator-13]
-  SKIP     Creator 14                   no-address  [creator-14]
-  SKIP     Creator 15                   no-address  [creator-15]
-  SKIP     Creator 16                   no-address  [creator-16]
+  SEND     PixelForge                   bookings@pixelforge.example  [pixelforge]
+  SEND     Nova Quokka                  sponsorships@novaquokka.example  [novaquokka]
+  SEND     TundraByte                   hello@tundrabyte.example  [tundrabyte]
+  SEND     Lumen Lark                   partnerships@lumenlark.example  [lumenlark]
+  SEND     Brass Badger                 deals@brassbadger.example  [brassbadger]
+  SEND     KettleCrash                  biz@kettlecrash.example  [kettlecrash]
+  SEND     Orchid Octane                contact@orchidoctane.example  [orchidoctane]
+  SEND     VellumVex                    sponsor@vellumvex.example  [vellumvex]
+  SEND     Harbor Hex                   press@harborhex.example  [harborhex]
+  SEND     Saffron Sigil                brand@saffronsigil.example  [saffronsigil]
+  SEND     CinderGlove                  team@cinderglove.example  [cinderglove]
+  SKIP     Gravel Gospel                no-address  [gravelgospel]
+  SKIP     Mint Marauder                no-address  [mintmarauder]
+  SKIP     QuillQuasar                  no-address  [quillquasar]
+  SKIP     Driftwood Dynamo             no-address  [driftwooddynamo]
+  SKIP     Copper Comet                 no-address  [coppercomet]
 ────────────────────────────────────────────────────────────────────────────
 send 11   suppress 0   skip 5   block 0
 
 email: 0 of 11 SEND row(s) not covered by the audience read
 
 No first_name on the contact (3) — these render v5's "Hey there —" fallback:
-  creator-03@example.com  no confirmed name on either side — needs an SPO-269 lookup  [creator-03]
-  creator-04@example.com  no confirmed name on either side — needs an SPO-269 lookup  [creator-04]
-  creator-05@example.com  no confirmed name on either side — needs an SPO-269 lookup  [creator-05]
+  hello@tundrabyte.example  no confirmed name on either side — needs an SPO-269 lookup  [tundrabyte]
+  partnerships@lumenlark.example  no confirmed name on either side — needs an SPO-269 lookup  [lumenlark]
+  contact@orchidoctane.example  no confirmed name on either side — needs an SPO-269 lookup  [orchidoctane]
   (warning only — pass --require-first-names to make this block)
 
 Clear to send T1 on email to 11 recipient(s).
@@ -231,33 +280,10 @@ precisely because we never confirmed a name for them.
 
 ## File formats
 
-### Identities live off this file
-
-`outreach/wave1-roster.json` is the roster and `outreach/wave1-ledger.jsonl` is
-the suppression ledger. SPO-267 and SPO-280, which resolved contact channels and
-populated the audience, are both closed — these are the live artifacts the
-preflight reads on send day, not a preview of where they will land.
-
-**Neither belongs in version control.** They carry real creators' names and
-business addresses, and the ledger accumulates named people's recorded opt-outs;
-**this repository is public**. SPO-415 decided both are gitignored working files
-that live on the send operator's machine only, and SPO-417 is what removes them
-from the index — so if `git ls-files outreach/` still lists them, that removal has
-not landed yet and nothing that publishes them may merge.
-
-The tracked artifact is `outreach/wave1-roster.example.json`: the same schema, row
-count and channel mix as the real roster, with every identity masked. Copy it to
-`outreach/wave1-roster.json` and fill it in. `--roster` and `--ledger` take those
-real local paths, which is what every command in this file passes. There is no
-example ledger — an empty file is the correct T1 starting state, and the format is
-specified below.
-
-The same rule governs this document. **Every identity in every example here — the
-census above included — is masked, and no real name, address, handle or roster id
-may be pasted back in.** A real address in this file is a disclosure, not a typo:
-the census is the whole target list in the most greppable form there is. Quote
-counts and decisions freely; identities belong in the roster and on the ticket
-that decided them.
+SPO-267 and SPO-280, which resolved contact channels and populated the audience,
+are both closed — the roster and ledger described here are the live artifacts the
+preflight reads on send day, not a preview of where they will land. Where they
+live, and why not here, is [above](#where-the-roster-and-ledger-live).
 
 `--roster` — JSON array (or `{"roster": [...]}`). `id` must be stable and unique,
 and no two rows may share an email — nor an `xHandle`. Either collision is one
@@ -273,8 +299,8 @@ not collide with each other.
 [
   { "id": "ada", "name": "Ada Stream", "firstName": "Ada",
     "email": "ada@example.com", "xHandle": "@adastream" },
-  { "id": "kip", "name": "KipStreams", "firstName": null,
-    "email": null, "xHandle": "@kipstreams" }
+  { "id": "nova", "name": "Nova Quokka", "firstName": "Nova",
+    "email": null, "xHandle": "@novaquokka" }
 ]
 ```
 
@@ -299,7 +325,7 @@ than a silently dropped opt-out:
 ```jsonl
 # Wave 1 suppression ledger
 {"at":"2026-09-23T09:00:00Z","reason":"replied","email":"ada@example.com","note":"replied to T1"}
-{"at":"2026-09-24T14:20:00Z","reason":"stop_requested","xHandle":"@kipstreams","note":"DM1 reply: stop"}
+{"at":"2026-09-24T14:20:00Z","reason":"stop_requested","xHandle":"@novaquokka","note":"DM1 reply: stop"}
 ```
 
 Reasons: `replied`, `stop_requested`, `unsubscribed`, `bounced`, `complained`,
@@ -331,8 +357,8 @@ Two things close it:
 
   ```
   Wave 1 preflight — T2 / email
-  roster: outreach/wave1-roster.json (16 rows)
-  ledger: outreach/wave1-ledger.jsonl (3 entries)
+  roster: ~/.config/sponsee/outreach/wave1-roster.json (16 rows)
+  ledger: ~/.config/sponsee/outreach/wave1-ledger.jsonl (3 entries)
   ```
 
   Read those two lines before the SEND/SUPPRESS list. Requiring the file to
