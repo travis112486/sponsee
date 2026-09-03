@@ -272,7 +272,7 @@ than a silently dropped opt-out:
 ```jsonl
 # Wave 1 suppression ledger
 {"at":"2026-09-23T09:00:00Z","reason":"replied","email":"ada@example.com","note":"replied to T1"}
-{"at":"2026-09-24T14:20:00Z","reason":"stop_requested","xHandle":"@dokibird","note":"DM1 reply: stop"}
+{"at":"2026-09-24T14:20:00Z","reason":"stop_requested","xHandle":"@kipstreams","note":"DM1 reply: stop"}
 ```
 
 Reasons: `replied`, `stop_requested`, `unsubscribed`, `bounced`, `complained`,
@@ -304,7 +304,7 @@ Two things close it:
 
   ```
   Wave 1 preflight — T2 / email
-  roster: outreach/wave1-roster.json (26 rows)
+  roster: outreach/wave1-roster.json (16 rows)
   ledger: outreach/wave1-ledger.jsonl (3 entries)
   ```
 
@@ -321,8 +321,8 @@ Two things close it:
   not say this; the gate enforces it anyway.
 - **`block` is not `suppress`.** A block means the opt-out would be broken for
   that recipient, which is worse than not mailing them. It fails the whole touch.
-- **`skip: no-address`** is expected while SPO-267 is still resolving contact
-  channels. It does not fail the touch.
+- **`skip: no-address`** marks the X-DM cohort by design — rows that carry an
+  `xHandle` and no `email`, not an SPO-267 backlog. It does not fail the touch.
 - Emails and handles are matched case-insensitively, with a leading `@` stripped.
   An opt-out that misses because the ledger recorded `Ada@Example.com` is exactly
   the failure this gate exists to prevent.
