@@ -1,7 +1,11 @@
 import { db } from "./index.js";
+import { assertNotProductionDatabase } from "./production-guard.js";
 import * as schema from "./schema/index.js";
 
 async function seed() {
+  // SPO-382: this script writes fixture rows. Prod is not a fixture target.
+  assertNotProductionDatabase(process.env.DATABASE_URL, "db:seed");
+
   console.log("Seeding Sponsee local database...");
 
   // Create a creator

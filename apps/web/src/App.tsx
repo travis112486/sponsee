@@ -11,6 +11,7 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const Calculator = lazy(() => import("./pages/Calculator"));
 const LoginPage = lazy(() => import("./pages/auth/LoginPage"));
+const InvoicePublicPage = lazy(() => import("./pages/InvoicePublicPage"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 function PageSpinner() {
@@ -26,6 +27,14 @@ export default function App() {
     <Routes>
       {/* Public routes — no auth required */}
       <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/i/:token"
+        element={
+          <Suspense fallback={<PageSpinner />}>
+            <InvoicePublicPage />
+          </Suspense>
+        }
+      />
 
       {/* Protected routes — wrapped in Layout + RequireAuth */}
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
