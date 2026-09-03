@@ -86,6 +86,11 @@ const BTN_PRIMARY =
 const BTN_SECONDARY =
   "inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-hairline bg-surface px-6 text-[15px] font-medium text-ink transition-all duration-150 hover:border-ink-3/40 active:scale-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper";
 
+// Inline text links are ~20px tall; Apple HIG / WCAG 2.5.8 want 44px on touch.
+// Pad the hit area on mobile, cancel the layout shift with matching negative
+// margins, and drop back to text height from md up where a pointer is fine.
+const TAP_TARGET = "py-3 -my-3 md:py-0 md:my-0";
+
 function CheckItem({ children }: { children: React.ReactNode }) {
   return (
     <li className="flex items-start gap-3 text-ink-2">
@@ -189,7 +194,7 @@ const FAQS = [
     a: "Built for live creators on Twitch, YouTube Live, TikTok Live, and Kick. Deals from any platform can go in the pipeline.",
   },
   {
-    q: "I have [X] viewers — is this for me?",
+    q: "How big do I need to be?",
     a: "Sponsee is built for streamers roughly between 100 and 5,000 concurrent viewers who are already doing brand deals. Under that? The free rate calculator is still yours.",
   },
   {
@@ -213,7 +218,29 @@ export default function App() {
   }, []);
 
   const scrollToWaitlist = () => {
-    document.getElementById("waitlist")?.scrollIntoView({ behavior: "smooth" });
+    const target = document.getElementById("waitlist");
+    if (!target) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ behavior: reduced ? "auto" : "smooth" });
+    // Hand focus to the form once the scroll settles, so keyboard and AT users
+    // land on the email field instead of staying on the trigger button. The
+    // form swaps to a status card after submit, so #email can be absent.
+    const email = document.getElementById("email");
+    if (!email) return;
+    let done = false;
+    const focusEmail = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("scrollend", focusEmail);
+      email.focus({ preventScroll: true });
+    };
+    if (!reduced && "onscrollend" in window) {
+      window.addEventListener("scrollend", focusEmail, { once: true });
+      // scrollend never fires when the section is already in view.
+      window.setTimeout(focusEmail, 1000);
+    } else {
+      window.setTimeout(focusEmail, reduced ? 0 : 700);
+    }
   };
 
   return (
@@ -274,7 +301,7 @@ export default function App() {
             <Eyebrow>The sponsorship CRM for streamers</Eyebrow>
             <h1 className="mb-6 font-serif text-[42px] leading-[1.05] tracking-[-0.015em] text-ink md:text-[68px]">
               Run your sponsorships{" "}
-              <em className="not-italic text-pine">like an agency.</em> Keep 100%.
+              <em className="not-italic text-pine">like an agency.</em> Keep&nbsp;100%.
             </h1>
             <p className="mx-auto mb-9 max-w-[640px] text-lg leading-relaxed text-ink-2">
               Every brand deal in one pipeline. Every deal priced against real CPVH benchmarks.
@@ -392,7 +419,7 @@ export default function App() {
                   pricing guide until the real calculator ships. */}
               <a
                 href="/blog/deliverable-pricing"
-                className="inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+                className={`${TAP_TARGET} inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper`}
               >
                 Read the deliverable pricing guide
                 <ArrowRight className="h-3.5 w-3.5" />
@@ -432,7 +459,7 @@ export default function App() {
             <div className="mt-4">
               <a
                 href="/blog/sponsor-paying-late"
-                className="inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+                className={`${TAP_TARGET} inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper`}
               >
                 Read the chase guide
                 <ArrowRight className="h-3.5 w-3.5" />
@@ -547,7 +574,7 @@ export default function App() {
         <div className="mt-8 text-center">
           <a
             href="/blog/"
-            className="inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2"
+            className={`${TAP_TARGET} inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2`}
           >
             See all guides
             <ArrowRight className="h-3.5 w-3.5" />
@@ -689,10 +716,20 @@ export default function App() {
               <p className="text-sm text-ink-3">The sponsorship CRM for streamers.</p>
             </div>
             <div className="flex flex-wrap gap-6 text-sm text-ink-2">
-              <a href="/blog/" className="rounded-md outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2">Blog</a>
-              <a href="/privacy.html" className="rounded-md outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2">Privacy</a>
-              <a href="/terms.html" className="rounded-md outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2">Terms</a>
-              <a href="mailto:hello@sponsee.app" className="rounded-md outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2">Contact</a>
+              {[
+                { href: "/blog/", label: "Blog" },
+                { href: "/privacy.html", label: "Privacy" },
+                { href: "/terms.html", label: "Terms" },
+                { href: "mailto:hello@sponsee.app", label: "Contact" },
+              ].map((l) => (
+                <a
+                  key={l.href}
+                  href={l.href}
+                  className={`${TAP_TARGET} inline-flex items-center rounded-md outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2`}
+                >
+                  {l.label}
+                </a>
+              ))}
             </div>
           </div>
           <div className="mt-8 border-t border-hairline pt-6 text-[13px] text-ink-3">
