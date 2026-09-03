@@ -376,3 +376,55 @@ describe("invoice.send — guards", () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 });
+
+describe("invoice.latestDeliveries (SPO-365)", () => {
+  it("returns the latest attempt only, not every send", async () => {
+    const invoice = await insertInvoice({});
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    await caller.send({ id: invoice.id });
+    await caller.send({ id: invoice.id });
+
+    const rows = await caller.latestDeliveries();
+    const forInvoice = rows.filter((r) => r.invoiceId === invoice.id);
+    expect(forInvoice).toHaveLength(1);
+    expect(forInvoice[0].attempt).toBe(2);
+  });
+
+  it("is tenant-scoped: a cross-creator invoice's deliveries never appear", async () => {
+    const [other] = await db.insert(schema.creators).values({ displayName: "Other" }).returning();
+    const [otherBrand] = await db
+      .insert(schema.brands)
+      .values({ creatorId: other.id, name: "Other Brand" })
+      .returning();
+    const [otherContact] = await db
+      .insert(schema.contacts)
+      .values({ brandId: otherBrand.id, name: "Other Contact", email: "other-contact@example.com" })
+      .returning();
+    const [otherDeal] = await db
+      .insert(schema.deals)
+      .values({ creatorId: other.id, brandId: otherBrand.id, title: "Other deal", type: "flat" })
+      .returning();
+    await db.insert(schema.user).values({ id: `user-${other.id}`, name: "Other Owner", email: "other-owner@example.com" });
+    await db.insert(schema.memberships).values({ userId: `user-${other.id}`, creatorId: other.id, role: "owner" });
+    const [otherInvoice] = await db
+      .insert(schema.invoices)
+      .values({ creatorId: other.id, dealId: otherDeal.id, contactId: otherContact.id, number: 1, amountCents: 1000, status: "open" })
+      .returning();
+
+    const otherCaller = invoiceRouter.createCaller(mockCtx(other.id));
+    await otherCaller.send({ id: otherInvoice.id });
+
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+    const rows = await caller.latestDeliveries();
+    expect(rows.find((r) => r.invoiceId === otherInvoice.id)).toBeUndefined();
+  });
+
+  it("returns nothing for an invoice that was never sent", async () => {
+    const invoice = await insertInvoice({});
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    const rows = await caller.latestDeliveries();
+    expect(rows.find((r) => r.invoiceId === invoice.id)).toBeUndefined();
+  });
+});

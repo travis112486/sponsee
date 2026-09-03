@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@sponsee/api/routers";
 import { trpc } from "@/trpc";
 import { cn } from "@/lib/utils";
 import { serverErrorMessage } from "@/lib/trpc-error";
@@ -18,6 +20,30 @@ import {
   Edit3,
 } from "lucide-react";
 import QueryError from "@/components/QueryError";
+import StatusChip from "@/components/shared/StatusChip";
+
+type LatestDelivery = inferRouterOutputs<AppRouter>["invoice"]["latestDeliveries"][number];
+
+type DeliveryDisplayState = "sent" | "delivered" | "opened" | "bounced" | "failed";
+
+function deliveryDisplayState(delivery: LatestDelivery): DeliveryDisplayState {
+  if (delivery.status === "bounced") return "bounced";
+  if (delivery.status === "failed") return "failed";
+  if (delivery.openedAt) return "opened";
+  if (delivery.deliveredAt || delivery.status === "delivered") return "delivered";
+  return "sent";
+}
+
+const deliveryChipConfig: Record<
+  DeliveryDisplayState,
+  { label: string; tone: "amber" | "accent" | "pine" | "danger" }
+> = {
+  sent: { label: "Sent", tone: "amber" },
+  delivered: { label: "Delivered", tone: "accent" },
+  opened: { label: "Opened", tone: "pine" },
+  bounced: { label: "Bounced", tone: "danger" },
+  failed: { label: "Send failed", tone: "danger" },
+};
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -45,12 +71,27 @@ const statusConfig: Record<
 export default function Payments() {
   const utils = trpc.useUtils();
   const { data: invoices, isLoading, isError, refetch } = trpc.invoice.list.useQuery();
+  const { data: deliveries, isError: deliveriesError } = trpc.invoice.latestDeliveries.useQuery();
   const { data: awaitingReview } = trpc.chase.awaitingReview.useQuery();
+  const deliveryByInvoice = useMemo(() => {
+    const map = new Map<string, LatestDelivery>();
+    for (const d of deliveries ?? []) map.set(d.invoiceId, d);
+    return map;
+  }, [deliveries]);
   const markPaid = trpc.invoice.markPaid.useMutation({
     onSuccess: () => {
       utils.invoice.list.invalidate();
       toast("Invoice marked as paid");
     },
+  });
+  const sendInvoice = trpc.invoice.send.useMutation({
+    onSuccess: () => {
+      utils.invoice.list.invalidate();
+      utils.invoice.latestDeliveries.invalidate();
+      toast("Invoice sent");
+    },
+    onError: (err) =>
+      toast.error(serverErrorMessage(err, "Couldn't send this invoice. Please try again.")),
   });
   const approveChase = trpc.chase.approve.useMutation({
     onSuccess: () => {
@@ -249,6 +290,12 @@ export default function Payments() {
 
       {/* Invoice list */}
       <div className="rounded-xl border border-hairline bg-surface">
+        {deliveriesError && (
+          <div className="flex items-center gap-1.5 border-b border-hairline bg-brick-tint/40 px-4 py-2 text-[11px] font-medium text-brick">
+            <AlertTriangle className="h-3 w-3 shrink-0" />
+            Couldn't load delivery status. Send/resend still works — refresh to see chips.
+          </div>
+        )}
         <div className="grid grid-cols-12 gap-3 border-b border-hairline px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-ink-3">
           <div className="col-span-3">Invoice</div>
           <div className="col-span-2">Amount</div>
@@ -265,6 +312,11 @@ export default function Payments() {
             const daysOverdue = isOverdue && dueDate ? daysDiff(dueDate, now) : 0;
             const status = statusConfig[inv.status] ?? statusConfig.draft;
             const StatusIcon = status.icon;
+            const delivery = deliveryByInvoice.get(inv.id);
+            const deliveryState = delivery ? deliveryDisplayState(delivery) : null;
+            const deliveryChip = deliveryState ? deliveryChipConfig[deliveryState] : null;
+            const isDelivered = deliveryState === "delivered" || deliveryState === "opened";
+            const canSend = inv.status === "draft" || inv.status === "open";
 
             return (
               <div
@@ -306,7 +358,7 @@ export default function Payments() {
                       <span className="text-[12px] text-ink-3">—</span>
                     )}
                   </div>
-                  <div className="col-span-2">
+                  <div className="col-span-2 flex flex-col items-start gap-1">
                     <span
                       className={cn(
                         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
@@ -316,8 +368,23 @@ export default function Payments() {
                       <StatusIcon className="h-3 w-3" />
                       {status.label}
                     </span>
+                    {deliveryChip && (
+                      <StatusChip tone={deliveryChip.tone} label={deliveryChip.label} />
+                    )}
+                    {deliveryState === "bounced" && delivery && (
+                      <p className="flex items-center gap-1 text-[11px] font-medium text-brick">
+                        <AlertTriangle className="h-3 w-3 shrink-0" />
+                        Undelivered to {delivery.toEmail} — confirm the address and resend.
+                      </p>
+                    )}
+                    {deliveryState === "failed" && (
+                      <p className="flex items-center gap-1 text-[11px] font-medium text-brick">
+                        <AlertTriangle className="h-3 w-3 shrink-0" />
+                        The send failed before it reached the brand — resend to try again.
+                      </p>
+                    )}
                   </div>
-                  <div className="col-span-3 flex items-center gap-2">
+                  <div className="col-span-3 flex flex-wrap items-center gap-2">
                     {inv.status === "open" && (
                       <button
                         onClick={() =>
@@ -327,6 +394,22 @@ export default function Payments() {
                       >
                         <CheckCircle2 className="h-3 w-3" />
                         Mark paid
+                      </button>
+                    )}
+                    {canSend && (
+                      <button
+                        onClick={() => {
+                          const confirmMessage = delivery
+                            ? `Resend this invoice to ${delivery.toEmail}? This puts another email in their inbox.`
+                            : "Send this invoice? This puts an email in the brand's inbox.";
+                          if (!confirm(confirmMessage)) return;
+                          sendInvoice.mutate({ id: inv.id });
+                        }}
+                        disabled={sendInvoice.isPending}
+                        className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white transition-colors hover:bg-pine-hover disabled:opacity-50"
+                      >
+                        <Send className="h-3 w-3" />
+                        {delivery ? "Resend" : "Send invoice"}
                       </button>
                     )}
                     <button
@@ -348,7 +431,7 @@ export default function Payments() {
 
                 {/* Expanded chase info */}
                 {expandedId === inv.id && inv.status === "open" && (
-                  <InvoiceChasePanel invoiceId={inv.id} />
+                  <InvoiceChasePanel invoiceId={inv.id} isDelivered={isDelivered} />
                 )}
               </div>
             );
@@ -382,7 +465,13 @@ function StatCard({
   );
 }
 
-function InvoiceChasePanel({ invoiceId }: { invoiceId: string }) {
+function InvoiceChasePanel({
+  invoiceId,
+  isDelivered,
+}: {
+  invoiceId: string;
+  isDelivered: boolean;
+}) {
   const { data: state } = trpc.chase.state.useQuery({ invoiceId });
   const { data: events } = trpc.chase.events.useQuery({ invoiceId });
   const pause = trpc.chase.pause.useMutation({
@@ -421,7 +510,9 @@ function InvoiceChasePanel({ invoiceId }: { invoiceId: string }) {
         {state?.mode === "armed" && (
           <button
             onClick={() => pause.mutate({ invoiceId, reason: "Manual pause" })}
-            className="flex h-6 items-center gap-1 rounded border border-hairline px-1.5 text-[11px] text-ink-3 hover:bg-surface"
+            disabled={!isDelivered}
+            aria-disabled={!isDelivered}
+            className="flex h-6 items-center gap-1 rounded border border-hairline px-1.5 text-[11px] text-ink-3 hover:bg-surface disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
           >
             <Pause className="h-3 w-3" />
             Pause
@@ -430,13 +521,24 @@ function InvoiceChasePanel({ invoiceId }: { invoiceId: string }) {
         {state?.mode === "paused" && (
           <button
             onClick={() => resume.mutate({ invoiceId })}
-            className="flex h-6 items-center gap-1 rounded border border-hairline px-1.5 text-[11px] text-pine hover:bg-pine-tint"
+            disabled={!isDelivered}
+            aria-disabled={!isDelivered}
+            className="flex h-6 items-center gap-1 rounded border border-hairline px-1.5 text-[11px] text-pine hover:bg-pine-tint disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
           >
             <Play className="h-3 w-3" />
             Resume
           </button>
         )}
       </div>
+
+      {state && !isDelivered && (state.mode === "armed" || state.mode === "paused") && (
+        <p className="mt-2 flex items-center gap-1 text-[11px] font-medium text-amber">
+          <AlertTriangle className="h-3 w-3 shrink-0" />
+          {state.pausedReason === "hard_bounce"
+            ? "Chase controls are locked — this invoice's email bounced, so reminders would go nowhere."
+            : "Chase controls are locked until this invoice is confirmed delivered — chasing a brand that never got the invoice makes things worse."}
+        </p>
+      )}
 
       {events && events.length > 0 ? (
         <div className="mt-3 space-y-1.5">
