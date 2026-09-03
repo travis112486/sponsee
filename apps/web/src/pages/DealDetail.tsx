@@ -251,6 +251,13 @@ export default function DealDetail() {
       setBrandDomainError("Enter a website like redbull.com");
       return;
     }
+    // The server caps `brand.update`'s domain at 255 chars; catch it here so a
+    // long-but-well-formed domain reads the inline copy instead of a raw Zod
+    // message from the mutation toast.
+    if (normalized !== null && normalized.length > 255) {
+      setBrandDomainError("Website must be 255 characters or fewer");
+      return;
+    }
     updateBrand.mutate({
       brandId: deal.brand.id,
       domain: raw.trim() ? normalized : null,
@@ -399,6 +406,8 @@ export default function DealDetail() {
                       }}
                       placeholder="brand.com"
                       autoFocus
+                      aria-invalid={brandDomainError ? true : undefined}
+                      aria-describedby={brandDomainError ? "brand-domain-error" : undefined}
                       className="w-44 rounded border border-hairline px-2 py-0.5 text-[12px] text-ink outline-none focus:border-pine"
                     />
                     <button
@@ -424,7 +433,7 @@ export default function DealDetail() {
                     <span className="text-[12px] text-ink-3"> · {deal.brand.domain}</span>
                     <button
                       onClick={startBrandDomainEdit}
-                      className="text-ink-3 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+                      className="text-ink-3 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
                       aria-label="Edit website"
                     >
                       <Pencil className="h-3 w-3" />
@@ -441,7 +450,9 @@ export default function DealDetail() {
             </div>
 
             {editingField === "brandDomain" && brandDomainError && (
-              <p className="mt-1 text-[12px] text-brick">{brandDomainError}</p>
+              <p id="brand-domain-error" role="alert" className="mt-1 text-[12px] text-brick">
+                {brandDomainError}
+              </p>
             )}
 
             {editingField === "title" ? (

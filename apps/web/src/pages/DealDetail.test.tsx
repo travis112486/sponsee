@@ -208,6 +208,40 @@ describe("DealDetail brand website (SPO-372)", () => {
     expect(updateBrand).not.toHaveBeenCalled();
   });
 
+  it("announces the inline error via role=alert and associates it with the input", () => {
+    dealFixture = makeDeal({ brand: { id: "b1", name: "Acme", domain: null } });
+    renderDealDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add website" }));
+    const input = screen.getByPlaceholderText("brand.com");
+
+    // No error yet: the description is gated so it is only referenced while shown.
+    expect(input).not.toHaveAttribute("aria-describedby");
+    expect(input).not.toHaveAttribute("aria-invalid");
+
+    fireEvent.change(input, { target: { value: "Red Bull" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save website" }));
+
+    const error = screen.getByRole("alert");
+    expect(error).toHaveTextContent("Enter a website like redbull.com");
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(input).toHaveAttribute("aria-describedby", error.id);
+  });
+
+  it("shows inline copy and issues no mutation for a >255-char domain-shaped input", () => {
+    dealFixture = makeDeal({ brand: { id: "b1", name: "Acme", domain: null } });
+    renderDealDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add website" }));
+    fireEvent.change(screen.getByPlaceholderText("brand.com"), {
+      target: { value: `${"a".repeat(300)}.com` },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save website" }));
+
+    expect(screen.getByText("Website must be 255 characters or fewer")).toBeInTheDocument();
+    expect(updateBrand).not.toHaveBeenCalled();
+  });
+
   it("enters the edit via the pencil and pre-fills the current domain", () => {
     dealFixture = makeDeal({ brand: { id: "b1", name: "Acme", domain: "redbull.com" } });
     renderDealDetail();
@@ -228,7 +262,7 @@ describe("DealDetail brand website (SPO-372)", () => {
     expect(updateBrand).toHaveBeenCalledWith({ brandId: "b1", domain: null });
   });
 
-  it("pins the pencil's hover + keyboard-focus reveal classes", () => {
+  it("pins the pencil's hover + keyboard-focus + touch reveal classes", () => {
     dealFixture = makeDeal({ brand: { id: "b1", name: "Acme", domain: "redbull.com" } });
     renderDealDetail();
 
@@ -236,6 +270,9 @@ describe("DealDetail brand website (SPO-372)", () => {
     expect(pencil).toHaveClass("opacity-0");
     expect(pencil).toHaveClass("group-hover:opacity-100");
     expect(pencil).toHaveClass("focus-visible:opacity-100");
+    // Touch-only pointers never fire hover/focus-visible, so the pencil is
+    // also revealed when the primary pointer can't hover (F3).
+    expect(pencil).toHaveClass("[@media(hover:none)]:opacity-100");
   });
 
   it("drops the inline error when another field is edited", () => {
