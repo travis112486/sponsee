@@ -429,7 +429,12 @@ export default function Payments() {
                           if (!confirm(confirmMessage)) return;
                           sendInvoice.mutate({ id: inv.id });
                         }}
-                        disabled={sendInvoice.isPending}
+                        /* Scoped to the row being sent. `isPending` alone
+                           greys every Send button on the page, which reads as
+                           "sending is down" rather than "this one is in
+                           flight" — and sends to different invoices do not
+                           contend with each other. */
+                        disabled={sendInvoice.isPending && sendInvoice.variables?.id === inv.id}
                         className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white transition-colors hover:bg-pine-hover disabled:opacity-50"
                       >
                         <Send className="h-3 w-3" />
@@ -521,6 +526,10 @@ function InvoiceChasePanel({
     },
   });
   const utils = trpc.useUtils();
+  // Links the lock sentence to the control it disables, so a screen reader
+  // announces the reason with the button instead of leaving the user to find
+  // a sentence elsewhere in the panel.
+  const lockId = `chase-lock-${invoiceId}`;
 
   return (
     <div className="mx-4 mb-4 rounded-lg border border-hairline bg-surface-subtle p-4">
@@ -557,6 +566,7 @@ function InvoiceChasePanel({
             onClick={() => resume.mutate({ invoiceId })}
             disabled={chaseLock !== null}
             aria-disabled={chaseLock !== null}
+            aria-describedby={chaseLock ? lockId : undefined}
             className="flex h-6 items-center gap-1 rounded border border-hairline px-1.5 text-[11px] text-pine hover:bg-pine-tint disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
           >
             <Play className="h-3 w-3" />
@@ -575,7 +585,7 @@ function InvoiceChasePanel({
           the creator most needs told about, and a static line beats a
           hover-only reveal (WCAG 2.4.7). */}
       {chaseLock && (
-        <p className="mt-2 flex items-start gap-1 text-[11px] font-medium text-amber">
+        <p id={lockId} className="mt-2 flex items-start gap-1 text-[11px] font-medium text-amber">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
           {chaseLock}
         </p>

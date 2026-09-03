@@ -50,6 +50,10 @@ const sendMutate = vi.fn();
 const pauseMutate = vi.fn();
 const resumeMutate = vi.fn();
 
+/** In-flight state of invoice.send, so the per-row disable can be pinned. */
+let sendPending = false;
+let sendVariables: { id: string } | undefined;
+
 let invoicesData: unknown[] = [];
 let deliveriesData: unknown[] = [];
 let deliveriesIsError = false;
@@ -86,7 +90,7 @@ vi.mock("@/trpc", () => ({
       send: {
         useMutation: (opts: { onError?: (err: unknown) => void; onSuccess?: () => void }) => {
           sendOptions = opts;
-          return { mutate: sendMutate, isPending: false };
+          return { mutate: sendMutate, isPending: sendPending, variables: sendVariables };
         },
       },
     },
@@ -138,6 +142,8 @@ afterEach(() => {
   invoicesData = [];
   deliveriesData = [];
   deliveriesIsError = false;
+  sendPending = false;
+  sendVariables = undefined;
   awaitingReviewData = [awaitingReviewItem];
   chaseStateByInvoice = {};
   chaseEventsByInvoice = {};
@@ -250,6 +256,40 @@ describe("Payments send/resend", () => {
 
     expect(toast.error).toHaveBeenCalledWith("Couldn't send this invoice. Please try again.");
   });
+
+  // SPO-363 refuses on two distinct missing addresses and the fix differs for
+  // each — the contact's email lives on the deal, the owner's in workspace
+  // settings. Only the contact case was pinned; a regression that collapsed
+  // both into one message would have passed.
+  it("surfaces the owner-email refusal, which points at a different fix than the contact one", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [];
+    render(<Payments />);
+
+    sendOptions.onError?.({
+      message: "This workspace has no owner email on file; add one before sending invoices.",
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "This workspace has no owner email on file; add one before sending invoices."
+    );
+    expect(toast.error).not.toHaveBeenCalledWith("Couldn't send this invoice. Please try again.");
+  });
+
+  it("greys only the row being sent, not every Send button on the page", () => {
+    invoicesData = [openInvoice, { ...openInvoice, id: "inv-2", number: 15 }];
+    deliveriesData = [];
+    sendPending = true;
+    sendVariables = { id: "inv-1" };
+
+    render(<Payments />);
+
+    const buttons = screen.getAllByRole("button", { name: /send invoice/i });
+    expect(buttons).toHaveLength(2);
+    // A page-wide grey-out reads as "sending is broken" rather than "this one
+    // is in flight", and sends to different invoices never contend.
+    expect(buttons.filter((b) => (b as HTMLButtonElement).disabled)).toHaveLength(1);
+  });
 });
 
 describe("Payments delivery status chip", () => {
@@ -309,6 +349,25 @@ describe("Payments chase gating on delivery", () => {
 
     fireEvent.click(resumeButton);
     expect(resumeMutate).not.toHaveBeenCalled();
+  });
+
+  // Static text satisfies WCAG 2.4.7, but a screen-reader user who lands on
+  // the disabled Resume hears only "Resume, dimmed" unless the sentence is
+  // wired to the control it explains.
+  it("announces the lock reason with the Resume button, not just somewhere in the panel", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [];
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
+
+    render(<Payments />);
+    fireEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    const resumeButton = screen.getByRole("button", { name: /resume/i });
+    const describedBy = resumeButton.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)).toHaveTextContent(
+      /has not been sent to the brand yet/i
+    );
   });
 
   it("disables Resume while the send is still queued", () => {
