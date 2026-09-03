@@ -221,7 +221,9 @@ export default function App() {
     const target = document.getElementById("waitlist");
     if (!target) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    target.scrollIntoView({ behavior: reduced ? "auto" : "smooth" });
+    // "instant", not "auto": "auto" defers to the page's CSS scroll-behavior
+    // (smooth, index.css), which would animate anyway and strand focus mid-scroll.
+    target.scrollIntoView({ behavior: reduced ? "instant" : "smooth" });
     // Hand focus to the form once the scroll settles, so keyboard and AT users
     // land on the email field instead of staying on the trigger button. The
     // form swaps to a status card after submit, so #email can be absent.
