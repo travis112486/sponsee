@@ -59,6 +59,8 @@ typography:
     figure-serif: "20px"
     display: "22px"
     figure: "26px"
+    greeting: "28px"
+    greeting-lg: "34px"
     hero: "48px"
 rounded:
   xs: "4px"
@@ -164,7 +166,7 @@ This stack is a committed brand decision (PRD §1.4, founder-approved), not a de
 - **Body** (400–500, 13–14px): all operational text, table cells, buttons (500).
 - **Label** (600, 11px, +0.08em, UPPERCASE): eyebrows above figures, column headers, nav group labels, chip text (no uppercase on chips).
 
-The full pixel ramp in use (frontmatter `typography.scale`): 10 (micro chips), 11 (labels), 12 (dense tables), 13 (body), 14 (large body), 15 (panel/modal titles), 18 (emphasized figures and inputs), 19/20/22 (serif headline, serif figure, display), 26 (KPI figures and the auth hero), 48 (hero figures — the 404 and calculator result). A literal `text-[Npx]` off this ramp is drift; add a step here deliberately or use the nearest one.
+The full pixel ramp in use (frontmatter `typography.scale`): 10 (micro chips), 11 (labels), 12 (dense tables), 13 (body), 14 (large body), 15 (panel/modal titles), 18 (emphasized figures and inputs), 19/20/22 (serif headline, serif figure, display), 26 (KPI figures and the auth hero), 28/34 (the dashboard greeting — one responsive serif display, 28 at base and 34 from `sm:` up; no other use), 48 (hero figures — the 404 and calculator result). A literal `text-[Npx]` off this ramp is drift; add a step here deliberately or use the nearest one.
 
 ### Named Rules
 **The Serif-Is-Display Rule.** Instrument Serif appears only in page titles and hero figures. Serif body text or serif UI controls are defects.
