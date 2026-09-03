@@ -207,4 +207,49 @@ describe("DealDetail brand website (SPO-372)", () => {
     expect(screen.getByText("Enter a website like redbull.com")).toBeInTheDocument();
     expect(updateBrand).not.toHaveBeenCalled();
   });
+
+  it("enters the edit via the pencil and pre-fills the current domain", () => {
+    dealFixture = makeDeal({ brand: { id: "b1", name: "Acme", domain: "redbull.com" } });
+    renderDealDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit website" }));
+
+    expect(screen.getByPlaceholderText("brand.com")).toHaveValue("redbull.com");
+  });
+
+  it("clears the domain back to a monogram when the input is emptied", () => {
+    dealFixture = makeDeal({ brand: { id: "b1", name: "Acme", domain: "redbull.com" } });
+    renderDealDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit website" }));
+    fireEvent.change(screen.getByPlaceholderText("brand.com"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save website" }));
+
+    expect(updateBrand).toHaveBeenCalledWith({ brandId: "b1", domain: null });
+  });
+
+  it("pins the pencil's hover + keyboard-focus reveal classes", () => {
+    dealFixture = makeDeal({ brand: { id: "b1", name: "Acme", domain: "redbull.com" } });
+    renderDealDetail();
+
+    const pencil = screen.getByRole("button", { name: "Edit website" });
+    expect(pencil).toHaveClass("opacity-0");
+    expect(pencil).toHaveClass("group-hover:opacity-100");
+    expect(pencil).toHaveClass("focus-visible:opacity-100");
+  });
+
+  it("drops the inline error when another field is edited", () => {
+    dealFixture = makeDeal({ brand: { id: "b1", name: "Acme", domain: null } });
+    renderDealDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add website" }));
+    fireEvent.change(screen.getByPlaceholderText("brand.com"), {
+      target: { value: "Red Bull" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save website" }));
+    expect(screen.getByText("Enter a website like redbull.com")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("heading", { name: "Q4 Campaign" }));
+    expect(screen.queryByText("Enter a website like redbull.com")).toBeNull();
+  });
 });

@@ -692,6 +692,20 @@ describe("brand router tenant isolation", () => {
       expect(row.domain).toBe("redbull.com");
     });
 
+    it("bumps updatedAt when the domain changes", async () => {
+      const old = new Date("2020-01-01T00:00:00Z");
+      await db
+        .update(schema.brands)
+        .set({ updatedAt: old })
+        .where(eq(schema.brands.id, brandAId));
+
+      const caller = brandRouter.createCaller(mockCtx(creatorAId));
+      const result = await caller.update({ brandId: brandAId, domain: "redbull.com" });
+
+      expect(result?.updatedAt).toBeDefined();
+      expect(new Date(result!.updatedAt!).getTime()).toBeGreaterThan(old.getTime());
+    });
+
     it("clears the domain when passed null", async () => {
       await db
         .update(schema.brands)

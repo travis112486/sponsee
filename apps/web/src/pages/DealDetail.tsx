@@ -208,6 +208,7 @@ export default function DealDetail() {
   function startEdit(field: string, value: string) {
     setEditingField(field);
     setEditValue(value);
+    setBrandDomainError(null);
   }
 
   function saveEdit(field: string) {
@@ -439,7 +440,7 @@ export default function DealDetail() {
                 ))}
             </div>
 
-            {brandDomainError && (
+            {editingField === "brandDomain" && brandDomainError && (
               <p className="mt-1 text-[12px] text-brick">{brandDomainError}</p>
             )}
 

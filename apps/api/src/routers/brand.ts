@@ -82,7 +82,7 @@ export const brandRouter = createTRPCRouter({
 
       const [updated] = await ctx.db
         .update(brands)
-        .set({ domain: input.domain })
+        .set({ domain: input.domain, updatedAt: new Date() })
         .where(and(eq(brands.id, input.brandId), eq(brands.creatorId, ctx.creatorId)))
         .returning();
       return updated;
