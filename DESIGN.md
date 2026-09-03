@@ -12,7 +12,7 @@ colors:
   ink-2: "#57504A"
   ink-3: "#757069"
   hairline: "#E8E3DB"
-  amber: "#B87208"
+  amber: "#945E06"
   amber-tint: "#FAF0DC"
   brick: "#B3402A"
   brick-tint: "#F9E7E1"
@@ -131,7 +131,7 @@ A warm-paper neutral ramp with one working accent and two reserved signal colors
 - **Pine** (#0E7A5F): the only interactive color — primary buttons, links, focus rings, active nav, selected states, "paid" status. Hover deepens to **Pine Hover** (#0B664F); **Pine Tint** (#E4F1EB) backs positive chips and selected/hover fills.
 
 ### Secondary
-- **Amber** (#B87208): attention without alarm — "negotiating," "in progress," due-soon. Always paired with **Amber Tint** (#FAF0DC) as chip background.
+- **Amber** (#945E06): attention without alarm — "negotiating," "in progress," due-soon. Always paired with **Amber Tint** (#FAF0DC) as chip background. Darkened from #B87208 (3.41:1, sub-AA) in SPO-404; the current value holds 4.81:1 on the tint and 4.99:1 on paper.
 - **Brick** (#B3402A): danger and overdue — missed deliverables, late invoices, destructive actions. Chip background **Brick Tint** (#F9E7E1).
 
 ### Neutral
