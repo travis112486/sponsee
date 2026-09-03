@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useRef } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, type ReactNode } from "react";
 import {
   Check,
   CreditCard,
@@ -109,7 +109,7 @@ function AccordionItem({
   onClick,
 }: {
   question: string;
-  answer: string;
+  answer: ReactNode;
   open: boolean;
   onClick: () => void;
 }) {
@@ -136,6 +136,7 @@ function AccordionItem({
       </button>
       <div
         ref={contentRef}
+        inert={!open}
         className="overflow-hidden transition-all duration-300 ease-house"
         style={{ maxHeight: open ? (contentHeight || 200) : 0 }}
       >
@@ -195,7 +196,19 @@ const FAQS = [
   },
   {
     q: "How big do I need to be?",
-    a: "Sponsee is built for streamers roughly between 100 and 5,000 concurrent viewers who are already doing brand deals. Under that? The free rate calculator is still yours.",
+    a: (
+      <>
+        Sponsee is built for streamers roughly between 100 and 5,000 concurrent viewers who are
+        already doing brand deals. Under that? Start with the{" "}
+        <a
+          href="/blog/deliverable-pricing"
+          className="rounded-sm font-medium text-pine underline decoration-pine/30 underline-offset-2 outline-none transition-colors duration-150 hover:text-pine-hover hover:decoration-pine-hover/50 focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+        >
+          free deliverable pricing guide
+        </a>{" "}
+        — and the free rate calculator is coming soon.
+      </>
+    ),
   },
   {
     q: "Does Sponsee send emails as me?",
