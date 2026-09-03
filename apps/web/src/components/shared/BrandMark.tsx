@@ -31,16 +31,17 @@ export function brandInitials(brand: string): string {
 export { normalizeBrandDomain };
 
 /**
- * unavatar.io aggregates favicon/logo sources and, with `fallback=false`,
- * answers 404 with an EMPTY body when it finds nothing — which is what lets
- * the <img> onError path (→ monogram) actually fire. The obvious alternatives
- * fail here: Google's favicon endpoints and DuckDuckGo's ip3 both ship their
- * placeholder as the 404 *body*, and browsers render a 404 image body without
- * raising onError, so unknown brands would show a grey globe instead of our
- * monogram (verified against redbull.com / bangenergy.com / voltaic.energy).
+ * SPO-374/377: the browser never talks to unavatar.io directly. This hits our
+ * own `/api/brand-icon` proxy — same-origin via the `/api/*` Vercel rewrite,
+ * so a relative URL, not the Render host — which does the favicon-first-then-
+ * unavatar lookup server-side and, on every miss, answers 404 with an EMPTY
+ * body. That empty body is what lets the <img> onError path (→ monogram)
+ * actually fire, the same contract that ruled out Google's and DuckDuckGo's
+ * favicon endpoints, which ship their placeholder as the 404 *body* and never
+ * raise onError.
  */
 function brandIconUrl(domain: string): string {
-  return `https://unavatar.io/${encodeURIComponent(domain)}?fallback=false`;
+  return `/api/brand-icon?domain=${encodeURIComponent(domain)}`;
 }
 
 /**
