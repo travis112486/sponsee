@@ -96,7 +96,11 @@ describe("BrandMark", () => {
   });
 });
 
-describe("normalizeBrandDomain", () => {
+// The rule itself is pinned by packages/shared/src/brand-domain.test.ts — as of
+// SPO-395 that is the only implementation. These cases stay as the smoke test
+// that `@/components/shared/BrandMark` still re-exports a working function, so
+// the New-deal brand form's import site can't break silently.
+describe("normalizeBrandDomain (re-exported from @sponsee/shared)", () => {
   it("strips protocol, www and path down to the bare domain", () => {
     expect(normalizeBrandDomain("https://www.redbull.com/energydrink")).toBe("redbull.com");
     expect(normalizeBrandDomain("HTTP://Bang-Energy.com?utm=x")).toBe("bang-energy.com");
