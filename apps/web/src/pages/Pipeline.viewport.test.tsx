@@ -9,7 +9,7 @@
  * Chromium and asserts MEASURED geometry, not DOM counts.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup, screen } from "@testing-library/react";
+import { render, cleanup, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import { page } from "vitest/browser";
 import type { ReactNode } from "react";
@@ -113,9 +113,9 @@ vi.mock("@/lib/use-creator-identity", () => ({
 
 afterEach(() => cleanup());
 
-async function renderApp() {
+async function renderApp(path = "/pipeline") {
   render(
-    <MemoryRouter initialEntries={["/pipeline"]}>
+    <MemoryRouter initialEntries={[path]}>
       <MotionProvider>
         <Routes>
           <Route element={<Layout />}>
@@ -262,5 +262,59 @@ describe("Pipeline responsive geometry (real browser)", () => {
       expect(visible.length, `visible value notes at ${width}`).toBe(deals.length);
       cleanup();
     }
+  });
+
+  it("keeps the New-deal modal actionable at 900px height in New-brand mode (SPO-396)", async () => {
+    // The width sweeps above run at a fixed tall height, so height overflow is
+    // invisible to them — this is the 1440x900 (default MacBook logical
+    // resolution) case that pins SPO-396. `?new=1` is the same URL contract
+    // CommandPalette uses to open the modal.
+    await page.viewport(1440, 900);
+    await renderApp("/pipeline?new=1");
+    const vh = window.innerHeight;
+    expect(vh, "viewport height took effect").toBe(900);
+
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog, "New-deal dialog rendered").not.toBeNull();
+
+    // Enter the taller variant: SPO-369's Website/Category/Contact fields are
+    // what push the panel past 900px.
+    fireEvent.click(screen.getByRole("button", { name: "New brand" }));
+
+    // Non-vacuity guard: this viewport must actually be too short for the
+    // New-brand form. If a future redesign shrinks the form below ~850px the
+    // scroll assertions below stop covering anything — move the height down
+    // rather than deleting the case.
+    const form = dialog!.querySelector("form");
+    expect(form, "modal form rendered").not.toBeNull();
+    expect(
+      form!.scrollHeight,
+      "New-brand form content taller than its scrollport at 900px"
+    ).toBeGreaterThan(form!.clientHeight);
+
+    // The panel itself must fit on-screen (it used to center at 1118px tall
+    // and clip ~110px at BOTH ends).
+    const panel = dialog!.getBoundingClientRect();
+    expect(panel.top, "panel top on-screen").toBeGreaterThanOrEqual(0);
+    expect(panel.bottom, "panel bottom on-screen").toBeLessThanOrEqual(vh);
+
+    // Create deal / Cancel are mouse-reachable: scrolling the form brings them
+    // fully into the viewport. Pre-fix this was a no-op (no scrollable
+    // ancestor) and Create deal's rect sat at top=963 vs a 900px viewport.
+    const createBtn = screen.getByRole("button", { name: "Create deal" });
+    const cancelBtn = screen.getByRole("button", { name: "Cancel" });
+    createBtn.scrollIntoView({ block: "nearest" });
+    for (const [label, btn] of [["Create deal", createBtn], ["Cancel", cancelBtn]] as const) {
+      const r = btn.getBoundingClientRect();
+      expect(r.height, `${label} has real size`).toBeGreaterThan(0);
+      expect(r.top, `${label} top on-screen after scroll`).toBeGreaterThanOrEqual(0);
+      expect(r.bottom, `${label} bottom on-screen after scroll`).toBeLessThanOrEqual(vh);
+    }
+
+    // The header (title + Close) is pinned outside the scroll region: still
+    // fully visible even with the form scrolled to its far end.
+    const titleRect = document.getElementById("new-deal-title")!.getBoundingClientRect();
+    expect(titleRect.top, "modal header stays on-screen").toBeGreaterThanOrEqual(0);
+    expect(titleRect.height, "modal header has real size").toBeGreaterThan(0);
   });
 });
