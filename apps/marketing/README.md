@@ -5,8 +5,14 @@ and the terms/privacy pages.
 
 ## Deploying
 
-**Merging to `main` does not deploy this app.** The Vercel `marketing` project has no GitHub
-connection, so production only moves when someone pushes it by hand:
+**Merging to `main` publishes this app.** The Vercel `marketing` project has been Git-linked to
+`travis112486/sponsee` (production branch `main`) since **SPO-215**, which connected it sometime
+between 2026-09-02T18:15Z and 2026-09-03T07:23Z (the last confirmed manual `vercel --prod` and the
+first confirmed Git-triggered deployment, respectively — see SPO-438 for the full evidence). There
+is no founder gate and no separate deploy step: a merged PR is live on sponsee.app within seconds.
+
+There is no more manual step for a routine change. If you ever need to redeploy without a new
+commit (e.g. rolling back), that still goes through the dashboard or:
 
 ```sh
 cd apps/marketing
@@ -14,11 +20,10 @@ vercel link --project marketing --yes --scope travis112486s-projects   # first t
 vercel --prod --scope travis112486s-projects
 ```
 
-Connecting the project to GitHub so this stops being manual is tracked in **SPO-215**.
-
-Because nothing deploys automatically, a broken `vercel.json` does not show up as a red build —
-it shows up the next time a person tries to ship, possibly weeks later. `vercel-config.test.ts`
-guards the file in CI for that reason.
+A broken `vercel.json` now shows up as a **red/canceled production deployment on the very next
+merge**, not a silent outage discovered weeks later — but `vercel-config.test.ts` is still the
+better guard, since it fails the PR's CI run and catches the schema error before it ever merges,
+rather than after.
 
 ## Redirects
 
