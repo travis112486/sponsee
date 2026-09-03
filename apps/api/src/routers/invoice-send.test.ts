@@ -193,6 +193,62 @@ describe("invoice.send — happy path", () => {
     expect(state.mode).toBe("paused");
   });
 
+  // SPO-365 — the Payments lock line promises reminders stop when the last
+  // send failed. Chase arms only after a send that succeeded, so the only way
+  // to reach an armed chase behind a failed delivery is a resend that throws.
+  it("pauses an armed chase when a resend fails at the provider", async () => {
+    const invoice = await insertInvoice({});
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    await caller.send({ id: invoice.id });
+
+    // Control: the first send left the chase armed, so a later `paused` can
+    // only have come from the failure below.
+    const [armed] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(armed.mode).toBe("armed");
+
+    sendMock.mockRejectedValueOnce(new Error("provider refused"));
+    await expect(caller.send({ id: invoice.id })).rejects.toBeTruthy();
+
+    const [state] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(state.mode).toBe("paused");
+    expect(state.pausedReason).toBe("invoice_send_failed");
+
+    // The failure is still recorded on the attempt that failed, not the first.
+    const rows = await db
+      .select()
+      .from(schema.invoiceDeliveries)
+      .where(eq(schema.invoiceDeliveries.invoiceId, invoice.id));
+    expect(rows.find((r) => r.attempt === 1)?.status).toBe("sent");
+    expect(rows.find((r) => r.attempt === 2)?.status).toBe("failed");
+  });
+
+  it("leaves a manual pause reason intact when a resend fails", async () => {
+    const invoice = await insertInvoice({});
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    await caller.send({ id: invoice.id });
+    await db
+      .update(schema.invoiceChaseState)
+      .set({ mode: "paused", pausedReason: "Brand asked us to hold" })
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+
+    sendMock.mockRejectedValueOnce(new Error("provider refused"));
+    await expect(caller.send({ id: invoice.id })).rejects.toBeTruthy();
+
+    const [state] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(state.pausedReason).toBe("Brand asked us to hold");
+  });
+
   it("populates rails_snapshot at send, frozen against a later settings edit", async () => {
     const invoice = await insertInvoice({});
     const caller = invoiceRouter.createCaller(mockCtx(creatorId));

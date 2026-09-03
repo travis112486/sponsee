@@ -174,12 +174,23 @@ function Greeting({
 
 /* ─────────────────────────── Section: overdue alert ────────────────────── */
 
+// paused_reason carries two kinds of value: prose the creator typed into the
+// pause control, and a token the system wrote. The prose reads fine inline; a
+// token does not ("Chasing is paused — invoice_hard_bounce."). Translate the
+// tokens and pass anything else through untouched.
+const PAUSE_REASON_COPY: Record<string, string> = {
+  hard_bounce: "a reminder to this address bounced",
+  invoice_hard_bounce: "the invoice email bounced, so this address is not reachable",
+  invoice_send_failed: "the last send to this address failed",
+};
+
 function describeChase(chase: NonNullable<Overview["overdue"]["mostUrgent"]>["chase"], now: Date) {
   if (!chase) return "No chase sequence has started on this invoice yet.";
   if (chase.mode === "paused") {
-    return chase.pausedReason
-      ? `Chasing is paused — ${chase.pausedReason}.`
-      : "Chasing is paused.";
+    const reason = chase.pausedReason
+      ? PAUSE_REASON_COPY[chase.pausedReason] ?? chase.pausedReason
+      : null;
+    return reason ? `Chasing is paused — ${reason}.` : "Chasing is paused.";
   }
   if (chase.mode === "completed") return "The chase sequence has run out of steps.";
   if (chase.nextActionAt) {

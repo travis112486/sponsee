@@ -431,6 +431,23 @@ export const invoiceRouter = createTRPCRouter({
           .update(invoiceDeliveries)
           .set({ status: "failed", updatedAt: new Date() })
           .where(eq(invoiceDeliveries.id, delivery.id));
+
+        // Only reachable on a resend: the chase arms below, after a send that
+        // succeeded. So a failure here can leave an armed chase on an invoice
+        // whose latest send never left — same asymmetry as the bounce webhook,
+        // and the Payments lock line makes the same promise for both. Stopping
+        // is the safe direction; the creator re-arms with Resume once a resend
+        // gets through. Scoped to armed so a completed or manually paused
+        // sequence is left as the creator left it.
+        await ctx.db
+          .update(invoiceChaseState)
+          .set({ mode: "paused", pausedReason: "invoice_send_failed", updatedAt: new Date() })
+          .where(
+            and(
+              eq(invoiceChaseState.invoiceId, invoice.id),
+              eq(invoiceChaseState.mode, "armed")
+            )
+          );
         throw error;
       }
 

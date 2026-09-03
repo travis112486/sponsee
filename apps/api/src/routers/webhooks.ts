@@ -1,6 +1,6 @@
 import { db } from "@sponsee/db";
 import { chaseEvents, invoiceChaseState, activityEvents, invoiceDeliveries } from "@sponsee/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createEmailProvider } from "../email/index.js";
 import type { Context } from "hono";
 
@@ -91,6 +91,26 @@ export async function handleEmailWebhook(c: Context) {
             .update(invoiceDeliveries)
             .set({ status: "bounced", bouncedAt: now, updatedAt: now })
             .where(eq(invoiceDeliveries.id, delivery.id));
+
+          // The invoice never reached the brand, so reminders chasing it would
+          // go to the same dead address. Mirrors the chase-bounce pause below:
+          // without this, chase-tick keeps selecting on mode = "armed" and
+          // queues reminders for an invoice nobody received — the exact bug
+          // SPO-358 exists to fix, and the Payments panel would be claiming
+          // "chase is locked" while a step sat in Awaiting review (SPO-365).
+          //
+          // Scoped to armed on purpose: a completed sequence must not be
+          // reopened as paused, and an existing manual pause keeps the
+          // creator's own reason. Both already stop reminders.
+          await db
+            .update(invoiceChaseState)
+            .set({ mode: "paused", pausedReason: "invoice_hard_bounce", updatedAt: now })
+            .where(
+              and(
+                eq(invoiceChaseState.invoiceId, delivery.invoiceId),
+                eq(invoiceChaseState.mode, "armed")
+              )
+            );
 
           // Loud: a bounced invoice is the same failure as no delivery. The
           // activity event mirrors the chase-bounce shape so the timeline

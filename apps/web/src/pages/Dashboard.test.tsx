@@ -581,6 +581,25 @@ describe("overdue alert", () => {
     expect(alert).toHaveTextContent("$2,400");
   });
 
+  // SPO-365 pauses the chase from the invoice-delivery bounce path, so
+  // paused_reason now carries system tokens as well as creator prose. The
+  // prose case above must keep passing through untouched; the tokens must not
+  // reach a creator as "Chasing is paused — invoice_hard_bounce."
+  it.each([
+    ["invoice_hard_bounce", "Chasing is paused — the invoice email bounced"],
+    ["invoice_send_failed", "Chasing is paused — the last send to this address failed."],
+    ["hard_bounce", "Chasing is paused — a reminder to this address bounced."],
+  ])("renders %s as sentence copy, not the raw token", (token, expected) => {
+    const data = overview();
+    (data.overdue.mostUrgent!.chase as { pausedReason: string }).pausedReason = token;
+    mockOverview(data);
+    renderDashboard();
+
+    const alert = screen.getByRole("region", { name: "Overdue invoice" });
+    expect(alert).toHaveTextContent(expected);
+    expect(alert).not.toHaveTextContent(token);
+  });
+
   it("offers two real destinations and invents no send path", () => {
     renderDashboard();
     const alert = screen.getByRole("region", { name: "Overdue invoice" });
