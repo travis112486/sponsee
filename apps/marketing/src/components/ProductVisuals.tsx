@@ -56,7 +56,7 @@ function Chip({
   };
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold leading-4 ${tones[tone]}`}
+      className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold leading-4 ${tones[tone]}`}
     >
       {children}
     </span>
@@ -98,19 +98,24 @@ function DealCard({
   platform,
   meta,
   metaTone = "neutral",
+  compact = false,
 }: {
   brand: string;
   amount: string;
   platform: keyof typeof platformDot;
   meta?: string;
   metaTone?: "accent" | "amber" | "danger" | "neutral";
+  /** Dot + value only — for boards whose columns are too narrow for any name. */
+  compact?: boolean;
 }) {
   return (
     <div className="rounded-lg border border-hairline bg-surface p-2.5 shadow-warm">
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${platformDot[platform]}`} />
-          <span className="truncate text-[11px] font-medium text-ink">{brand}</span>
+          {!compact && (
+            <span className="truncate text-[11px] font-medium text-ink">{brand}</span>
+          )}
         </span>
         <span className="tnum shrink-0 text-[11px] font-semibold text-ink">{amount}</span>
       </div>
@@ -207,30 +212,40 @@ export function HeroDashboard() {
   );
 }
 
-/** Pillar 1 — the six-stage pipeline board. */
+/**
+ * Pillar 1 — the six-stage pipeline board.
+ *
+ * Six columns leave ~60px of card width, too narrow for any brand name, so
+ * cards here are deliberately dot + value only (SPO-403) — never a name
+ * crushed to one letter. Stage labels get the full column width on their own
+ * line, with count · total beneath ("every column shows count and total
+ * value"). "Contract" stands in for "Contract Sent" to fit.
+ */
 export function PipelineBoard() {
   const cols = [
-    { stage: "Inbound", count: "2", deals: [{ brand: "SneakEnergy", amount: "$800", platform: "kick" as const }] },
-    { stage: "Negotiating", count: "2", deals: [{ brand: "NordVPN", amount: "$2,400", platform: "twitch" as const, meta: "6d in stage", metaTone: "amber" as const }] },
-    { stage: "Contract Sent", count: "1", deals: [{ brand: "Logitech G", amount: "$1,900", platform: "youtube" as const }] },
-    { stage: "Live", count: "2", deals: [{ brand: "G FUEL", amount: "$1,450", platform: "twitch" as const, meta: "live", metaTone: "accent" as const }] },
-    { stage: "Delivered", count: "1", deals: [{ brand: "HelloFresh", amount: "$850", platform: "youtube" as const }] },
-    { stage: "Paid", count: "3", deals: [{ brand: "DubbyEnergy", amount: "$1,200", platform: "tiktok" as const, meta: "paid", metaTone: "accent" as const }] },
+    { stage: "Inbound", count: "2", total: "$1,450", deals: [{ brand: "SneakEnergy", amount: "$800", platform: "kick" as const }] },
+    { stage: "Negotiating", count: "2", total: "$3,200", deals: [{ brand: "NordVPN", amount: "$2,400", platform: "twitch" as const, meta: "6d", metaTone: "amber" as const }] },
+    { stage: "Contract", count: "1", total: "$1,900", deals: [{ brand: "Logitech G", amount: "$1,900", platform: "youtube" as const }] },
+    { stage: "Live", count: "2", total: "$2,650", deals: [{ brand: "G FUEL", amount: "$1,450", platform: "twitch" as const, meta: "live", metaTone: "accent" as const }] },
+    { stage: "Delivered", count: "1", total: "$850", deals: [{ brand: "HelloFresh", amount: "$850", platform: "youtube" as const }] },
+    { stage: "Paid", count: "3", total: "$4,820", deals: [{ brand: "DubbyEnergy", amount: "$1,200", platform: "tiktok" as const, meta: "paid", metaTone: "accent" as const }] },
   ];
   return (
     <BrowserFrame label="app.sponsee.app/pipeline">
       <div className="grid grid-cols-3 gap-2 md:grid-cols-6">
         {cols.map((col) => (
           <div key={col.stage} className="rounded-lg border border-hairline bg-surface-subtle p-2">
-            <div className="flex items-baseline justify-between gap-1 px-0.5">
-              <span className="truncate text-[9px] font-semibold uppercase tracking-[0.08em] text-ink-3">
+            <div className="px-0.5">
+              <div className="truncate text-[9px] font-semibold uppercase tracking-[0.04em] text-ink-3">
                 {col.stage}
-              </span>
-              <span className="tnum text-[9px] text-ink-3">{col.count}</span>
+              </div>
+              <div className="tnum mt-0.5 whitespace-nowrap text-[9px] text-ink-3">
+                {col.count} · {col.total}
+              </div>
             </div>
             <div className="mt-1.5 space-y-1.5">
               {col.deals.map((d) => (
-                <DealCard key={d.brand} {...d} />
+                <DealCard key={d.brand} {...d} compact />
               ))}
             </div>
           </div>
