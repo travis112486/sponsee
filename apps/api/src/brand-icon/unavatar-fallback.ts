@@ -11,6 +11,8 @@
 // history in BrandMark.tsx (SPO-369) for why the "obvious" alternatives
 // (Google, DuckDuckGo favicon endpoints) don't have this property.
 
+import { isAllowedIconContentType } from "./icon-content-type.js";
+
 export interface UnavatarResult {
   outcome: "hit" | "miss";
   contentType?: string;
@@ -50,7 +52,10 @@ export async function fetchUnavatarFallback(domain: string, opts: UnavatarOption
     if (res.status !== 200) return MISS;
 
     const contentType = res.headers.get("content-type");
-    if (contentType && !contentType.toLowerCase().startsWith("image/")) return MISS;
+    // Raster-only, image/svg+xml included — see icon-content-type.ts. unavatar
+    // proxies arbitrary origins, so this is exactly as attacker-influenced as
+    // the direct favicon.ico fetch.
+    if (!isAllowedIconContentType(contentType)) return MISS;
 
     const body = await readBounded(res, opts.maxBytes);
     if (body === null || body.length === 0) return MISS;

@@ -12,6 +12,7 @@ import { request as httpsRequest } from "node:https";
 import { request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
 import { resolvePublicAddress, type ResolvedAddress, type LookupFn } from "./ssrf-guard.js";
+import { isAllowedIconContentType } from "./icon-content-type.js";
 
 export interface OriginFaviconResult {
   outcome: "hit" | "miss";
@@ -81,9 +82,10 @@ async function handleResponse(res: IncomingMessage, maxBytes: number): Promise<O
 
   const contentType = res.headers["content-type"];
   // A misconfigured server answering 200 with an HTML error page is the same
-  // trap as the documented zero-byte 200 (raycon.com): a present, non-image
-  // Content-Type is treated as a miss rather than cached as if it were an icon.
-  if (contentType && !contentType.toLowerCase().startsWith("image/")) {
+  // trap as the documented zero-byte 200 (raycon.com): a present, non-raster
+  // Content-Type is treated as a miss rather than cached as if it were an
+  // icon. This also excludes image/svg+xml — see icon-content-type.ts.
+  if (!isAllowedIconContentType(contentType)) {
     res.resume();
     return MISS;
   }

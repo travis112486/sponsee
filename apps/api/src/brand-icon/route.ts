@@ -12,6 +12,17 @@
 // EMPTY body. Returning an image body on a non-2xx status — the trap BrandMark
 // documents against Google's and DuckDuckGo's favicon endpoints — would stop
 // the <img> onError handler from firing and break the monogram fallback.
+//
+// PR #123 review F4: this endpoint is unauthenticated, so anyone through the
+// front door can probe ?domain=X and tell a warm cache from a cold one —
+// i.e. learn that *some* creator has brand X in their pipeline. Decided
+// acceptable for now: it's an aggregate oracle (not per-creator), the
+// attacker has to guess domains, and it's strictly weaker than the status quo
+// this replaces (every creator's browser disclosing their domain list to
+// unavatar directly, per view). A session gate would close it and would also
+// shut the open-image-proxy surface, but makes <img> depend on same-origin
+// cookies for a plain icon fetch. Revisit if this needs to get cheap anyway
+// as part of other auth-surface work, not on its own.
 
 import { Hono, type Context } from "hono";
 import { normalizeBrandDomain } from "@sponsee/shared";
@@ -36,8 +47,18 @@ export const BRAND_ICON_WINDOW_MS = 60 * 1000;
 
 export const brandIconLimiter = new SlidingWindowLimiter(BRAND_ICON_MAX_PER_WINDOW, BRAND_ICON_WINDOW_MS);
 
-const HIT_CACHE_CONTROL = "public, max-age=2592000, immutable"; // 28 days, matches cache.ts HIT_TTL_MS
+const HIT_CACHE_CONTROL = "public, max-age=2419200, immutable"; // 28 days, matches cache.ts HIT_TTL_MS
 const MISS_CACHE_CONTROL = "public, max-age=86400"; // 24 hours, matches cache.ts MISS_TTL_MS
+
+// F1: the bytes served on a 200 are attacker-influenced (see
+// icon-content-type.ts). `nosniff` stops a browser from sniffing a raster
+// Content-Type into HTML/SVG if the allowlist above it is ever wrong or
+// bypassed; the CSP is cheap belt-and-braces on top of that for the same
+// same-origin-via-the-/api/*-rewrite reason F1 was blocking.
+const ICON_RESPONSE_SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "Content-Security-Policy": "default-src 'none'; sandbox",
+};
 
 const app = new Hono();
 
@@ -71,6 +92,7 @@ app.get("/", async (c) => {
     return c.body(iconBody(cached.body!), 200, {
       "Content-Type": cached.contentType!,
       "Cache-Control": HIT_CACHE_CONTROL,
+      ...ICON_RESPONSE_SECURITY_HEADERS,
     });
   }
 
@@ -89,28 +111,38 @@ app.get("/", async (c) => {
     return c.body(iconBody(originResult.body!), 200, {
       "Content-Type": originResult.contentType!,
       "Cache-Control": HIT_CACHE_CONTROL,
+      ...ICON_RESPONSE_SECURITY_HEADERS,
     });
   }
 
-  if (unavatarDailyCounter.tryConsume()) {
-    const fallbackResult = await fetchUnavatarFallback(domain, {
-      timeoutMs: UNAVATAR_TIMEOUT_MS,
-      maxBytes: MAX_ICON_BYTES,
-      apiKey: process.env.UNAVATAR_API_KEY,
-    });
+  // F2: the daily soft cap is our own valve, not a real lookup outcome for
+  // this domain. If we skip unavatar because of it, the domain was never
+  // actually looked up — caching that as a miss (DB, 24h) would write off
+  // every domain past the cap for a full day even after the quota resets on
+  // the next UTC day or redeploy. Only a genuine attempt (quota available,
+  // unavatar answered) is allowed to produce a cached miss.
+  if (!unavatarDailyCounter.tryConsume()) {
+    return emptyMiss(c, 404, { "Cache-Control": "no-store" });
+  }
 
-    if (fallbackResult.outcome === "hit") {
-      await putCachedIcon(domain, {
-        outcome: "hit",
-        contentType: fallbackResult.contentType!,
-        body: fallbackResult.body!,
-        source: "unavatar",
-      });
-      return c.body(iconBody(fallbackResult.body!), 200, {
-        "Content-Type": fallbackResult.contentType!,
-        "Cache-Control": HIT_CACHE_CONTROL,
-      });
-    }
+  const fallbackResult = await fetchUnavatarFallback(domain, {
+    timeoutMs: UNAVATAR_TIMEOUT_MS,
+    maxBytes: MAX_ICON_BYTES,
+    apiKey: process.env.UNAVATAR_API_KEY,
+  });
+
+  if (fallbackResult.outcome === "hit") {
+    await putCachedIcon(domain, {
+      outcome: "hit",
+      contentType: fallbackResult.contentType!,
+      body: fallbackResult.body!,
+      source: "unavatar",
+    });
+    return c.body(iconBody(fallbackResult.body!), 200, {
+      "Content-Type": fallbackResult.contentType!,
+      "Cache-Control": HIT_CACHE_CONTROL,
+      ...ICON_RESPONSE_SECURITY_HEADERS,
+    });
   }
 
   await putCachedIcon(domain, { outcome: "miss" });

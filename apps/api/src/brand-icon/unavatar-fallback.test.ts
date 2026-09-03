@@ -11,7 +11,7 @@ function stubFetch(response: Response) {
   return fn;
 }
 
-function imageResponse(bytes: number[], contentType = "image/svg+xml") {
+function imageResponse(bytes: number[], contentType = "image/png") {
   return new Response(new Uint8Array(bytes), { status: 200, headers: { "Content-Type": contentType } });
 }
 
@@ -27,9 +27,15 @@ describe("fetchUnavatarFallback", () => {
     const result = await fetchUnavatarFallback("redbull.com", { timeoutMs: 1000, maxBytes: 1024 });
 
     expect(result.outcome).toBe("hit");
-    expect(result.contentType).toBe("image/svg+xml");
+    expect(result.contentType).toBe("image/png");
     expect(result.body?.equals(Buffer.from([1, 2, 3]))).toBe(true);
     expect(fn.mock.calls[0][0]).toBe("https://unavatar.io/redbull.com?fallback=false");
+  });
+
+  it("treats a 200 image/svg+xml response as a miss (stored-XSS guard, PR #123 F1)", async () => {
+    stubFetch(imageResponse([1, 2, 3], "image/svg+xml"));
+    const result = await fetchUnavatarFallback("evil-brand.example", { timeoutMs: 1000, maxBytes: 1024 });
+    expect(result.outcome).toBe("miss");
   });
 
   it("treats a 404 (unknown domain, empty body) as a miss", async () => {

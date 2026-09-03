@@ -56,17 +56,21 @@ describe("GET /api/brand-icon", () => {
     expect(fetchOriginFavicon).not.toHaveBeenCalled();
   });
 
-  it("serves a favicon-origin hit as 200 with a long Cache-Control, and caches it", async () => {
+  it("serves a favicon-origin hit as 200 with a long Cache-Control and hardened headers, and caches it", async () => {
     vi.mocked(fetchOriginFavicon).mockResolvedValue({
       outcome: "hit",
-      contentType: "image/svg+xml",
+      contentType: "image/png",
       body: Buffer.from([1, 2, 3]),
     });
 
     const res = await get("redbull.com");
     expect(res.status).toBe(200);
-    expect(res.headers.get("Content-Type")).toBe("image/svg+xml");
-    expect(res.headers.get("Cache-Control")).toContain("max-age=2592000");
+    expect(res.headers.get("Content-Type")).toBe("image/png");
+    // 28 days — matches cache.ts HIT_TTL_MS (PR #123 F3: the old value was 30
+    // days and its comment falsely claimed a match).
+    expect(res.headers.get("Cache-Control")).toContain("max-age=2419200");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(res.headers.get("Content-Security-Policy")).toBe("default-src 'none'; sandbox");
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
 
     const row = await db.query.brandIconCache.findFirst();
@@ -115,12 +119,18 @@ describe("GET /api/brand-icon", () => {
     expect(fetchOriginFavicon).toHaveBeenCalledTimes(1); // not called again
   });
 
-  it("skips the unavatar call once the daily soft cap is exhausted, and still 404s cleanly", async () => {
+  it("skips the unavatar call once the daily soft cap is exhausted, and still 404s cleanly without poisoning the cache (PR #123 F2)", async () => {
     for (let i = 0; i < 20; i++) unavatarDailyCounter.tryConsume();
 
     const res = await get("overquota.example");
     expect(res.status).toBe(404);
     expect(fetch).not.toHaveBeenCalled();
+    // Not a genuine lookup outcome for this domain — neither the DB cache nor
+    // downstream caches should hold onto it.
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+
+    const row = await db.query.brandIconCache.findFirst();
+    expect(row).toBeUndefined();
   });
 
   it("rate-limits a single IP past the per-minute cap with 429 and Retry-After", async () => {

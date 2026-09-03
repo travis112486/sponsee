@@ -72,6 +72,15 @@ describe("fetchFromPinnedAddress", () => {
     expect(result.outcome).toBe("miss");
   });
 
+  it("treats a 200 image/svg+xml response as a miss (stored-XSS guard, PR #123 F1)", async () => {
+    handler = (_req, res) => {
+      res.writeHead(200, { "Content-Type": "image/svg+xml" });
+      res.end("<svg onload=\"alert(document.cookie)\"></svg>");
+    };
+    const result = await fetchLocal();
+    expect(result.outcome).toBe("miss");
+  });
+
   it("treats a redirect as a miss rather than following it", async () => {
     handler = (_req, res) => {
       res.writeHead(302, { Location: "http://169.254.169.254/favicon.ico" });
