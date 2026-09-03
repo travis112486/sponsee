@@ -14,17 +14,17 @@ import {
 } from "./wave1-suppression.js";
 
 // Three rows standing in for the Wave 1 shape: a fully-contactable creator, one
-// with a channel name but no confirmed first name (the "Hey Craft Computing"
+// with a channel name but no confirmed first name (the "Hey TundraByte"
 // case v5 was written to kill), and one reachable on X only.
 const ROSTER: RosterRow[] = [
   { id: "ada", name: "Ada Stream", firstName: "Ada", email: "ada@example.com", xHandle: "@adastream" },
-  { id: "craft", name: "Craft Computing", firstName: null, email: "craft@example.com", xHandle: "craftcomputing" },
-  { id: "doki", name: "Dokibird", firstName: "Doki", email: null, xHandle: "@dokibird" },
+  { id: "tundrabyte", name: "TundraByte", firstName: null, email: "tundrabyte@example.com", xHandle: "tundrabyte" },
+  { id: "gravelgospel", name: "Gravel Gospel", firstName: "Otis", email: null, xHandle: "@gravelgospel" },
 ];
 
 const SUBSCRIBED: ResendContactState[] = [
   { email: "ada@example.com", unsubscribed: false, firstName: "Ada" },
-  { email: "craft@example.com", unsubscribed: false, firstName: null },
+  { email: "tundrabyte@example.com", unsubscribed: false, firstName: null },
 ];
 
 function decisionFor(plan: ReturnType<typeof planTouch>, rosterId: string) {
@@ -82,7 +82,7 @@ describe("planTouch — email", () => {
     // says "send", and only the live contact read knows otherwise.
     const afterUnsubscribe: ResendContactState[] = [
       { email: "ada@example.com", unsubscribed: true, firstName: "Ada" },
-      { email: "craft@example.com", unsubscribed: false, firstName: null },
+      { email: "tundrabyte@example.com", unsubscribed: false, firstName: null },
     ];
     const plan = planTouch({
       touch: "T2",
@@ -96,7 +96,7 @@ describe("planTouch — email", () => {
       reason: "unsubscribed",
       source: "resend",
     });
-    expect(decisionFor(plan, "craft")).toEqual({ action: "send", recipient: "craft@example.com" });
+    expect(decisionFor(plan, "tundrabyte")).toEqual({ action: "send", recipient: "tundrabyte@example.com" });
   });
 
   it("honors a reply the provider cannot see", () => {
@@ -124,13 +124,13 @@ describe("planTouch — email", () => {
       ledger: [],
       contacts: [SUBSCRIBED[0]],
     });
-    expect(decisionFor(plan, "craft")).toEqual({ action: "block", reason: "not-in-audience" });
+    expect(decisionFor(plan, "tundrabyte")).toEqual({ action: "block", reason: "not-in-audience" });
     expect(plan.clearToSend).toBe(false);
   });
 
   it("skips a row with no email without blocking the touch", () => {
     const plan = planTouch({ touch: "T1", channel: "email", roster: ROSTER, ledger: [], contacts: SUBSCRIBED });
-    expect(decisionFor(plan, "doki")).toEqual({ action: "skip", reason: "no-address" });
+    expect(decisionFor(plan, "gravelgospel")).toEqual({ action: "skip", reason: "no-address" });
     expect(plan.clearToSend).toBe(true);
   });
 
@@ -156,10 +156,10 @@ describe("planTouch — dm", () => {
       touch: "T2",
       channel: "dm",
       roster: ROSTER,
-      ledger: [{ at: "2026-09-23T09:00:00Z", reason: "stop_requested", xHandle: "dokibird" }],
+      ledger: [{ at: "2026-09-23T09:00:00Z", reason: "stop_requested", xHandle: "gravelgospel" }],
       contacts: SUBSCRIBED,
     });
-    expect(decisionFor(plan, "doki")).toEqual({
+    expect(decisionFor(plan, "gravelgospel")).toEqual({
       action: "suppress",
       reason: "stop_requested",
       source: "ledger",
@@ -188,7 +188,7 @@ describe("planTouch — dm", () => {
     // roster's handles. An empty audience must not stop a DM touch.
     const plan = planTouch({ touch: "T1", channel: "dm", roster: ROSTER, ledger: [], contacts: [] });
     expect(decisionFor(plan, "ada")).toEqual({ action: "send", recipient: "@adastream" });
-    expect(decisionFor(plan, "craft")).toEqual({ action: "send", recipient: "@craftcomputing" });
+    expect(decisionFor(plan, "tundrabyte")).toEqual({ action: "send", recipient: "@tundrabyte" });
     expect(plan.clearToSend).toBe(true);
   });
 
@@ -218,7 +218,7 @@ describe("validateLedgerEntry", () => {
 
   it("rejects an entry with no reason", () => {
     expect(() =>
-      validateLedgerEntry({ at: "2026-09-23T09:00:00Z", xHandle: "@dokibird" }, "ledger.jsonl:1"),
+      validateLedgerEntry({ at: "2026-09-23T09:00:00Z", xHandle: "@gravelgospel" }, "ledger.jsonl:1"),
     ).toThrow(/ledger\.jsonl:1: "reason" must be one of/);
   });
 
@@ -332,18 +332,18 @@ describe("planTouch — uncoveredByAudience (the vacuous dm read)", () => {
       ledger: [],
       contacts: SUBSCRIBED,
     });
-    // Doki is DM-only. Ada and Craft are both contacts, so the read spoke for them.
-    expect(decisionFor(plan, "doki")).toEqual({ action: "send", recipient: "@dokibird" });
+    // Gravel Gospel is DM-only. Ada and TundraByte are both contacts, so the read spoke for them.
+    expect(decisionFor(plan, "gravelgospel")).toEqual({ action: "send", recipient: "@gravelgospel" });
     expect(plan.uncoveredByAudience).toEqual([
-      { rosterId: "doki", name: "Dokibird", reason: "no-email" },
+      { rosterId: "gravelgospel", name: "Gravel Gospel", reason: "no-email" },
     ]);
     // Report only — this is exactly the row that must stay contactable.
     expect(plan.clearToSend).toBe(true);
   });
 
   it("distinguishes a row whose email the audience lost from one that never had an email", () => {
-    // The case that bites later: Craft has an address, and the contact carrying
-    // her unsubscribe state is gone. On email that blocks; on dm she sends.
+    // The case that bites later: TundraByte has an address, and the contact
+    // carrying their unsubscribe state is gone. On email that blocks; on dm they send.
     const plan = planTouch({
       touch: "T1",
       channel: "dm",
@@ -352,18 +352,18 @@ describe("planTouch — uncoveredByAudience (the vacuous dm read)", () => {
       contacts: [SUBSCRIBED[0]],
     });
     expect(plan.uncoveredByAudience).toEqual([
-      { rosterId: "craft", name: "Craft Computing", reason: "not-in-audience" },
-      { rosterId: "doki", name: "Dokibird", reason: "no-email" },
+      { rosterId: "tundrabyte", name: "TundraByte", reason: "not-in-audience" },
+      { rosterId: "gravelgospel", name: "Gravel Gospel", reason: "no-email" },
     ]);
     expect(plan.clearToSend).toBe(true);
   });
 
   it("counts only send rows — a suppressed row has no send for the read to miss", () => {
     const ledger: LedgerEntry[] = [
-      { at: "2026-09-01T00:00:00Z", reason: "stop_requested", xHandle: "@dokibird" },
+      { at: "2026-09-01T00:00:00Z", reason: "stop_requested", xHandle: "@gravelgospel" },
     ];
     const plan = planTouch({ touch: "T1", channel: "dm", roster: ROSTER, ledger, contacts: SUBSCRIBED });
-    expect(decisionFor(plan, "doki")).toMatchObject({ action: "suppress" });
+    expect(decisionFor(plan, "gravelgospel")).toMatchObject({ action: "suppress" });
     expect(plan.uncoveredByAudience).toEqual([]);
   });
 
@@ -387,7 +387,7 @@ describe("planTouch — uncoveredByAudience (the vacuous dm read)", () => {
     const plan = planTouch({ touch: "T1", channel: "dm", roster, ledger: [], contacts: SUBSCRIBED });
     expect(decisionFor(plan, "nohandle")).toEqual({ action: "skip", reason: "no-address" });
     expect(plan.uncoveredByAudience).toEqual([
-      { rosterId: "doki", name: "Dokibird", reason: "no-email" },
+      { rosterId: "gravelgospel", name: "Gravel Gospel", reason: "no-email" },
     ]);
   });
 });
@@ -396,7 +396,7 @@ describe("planContactSync", () => {
   it("lists roster rows Resend has never seen", () => {
     const plan = planContactSync(ROSTER, [], [SUBSCRIBED[0]]);
     expect(plan.toCreate).toEqual([
-      { email: "craft@example.com", firstName: null, rosterId: "craft", unsubscribed: false },
+      { email: "tundrabyte@example.com", firstName: null, rosterId: "tundrabyte", unsubscribed: false },
     ]);
   });
 
@@ -448,22 +448,22 @@ describe("planContactSync", () => {
     // someone the ledger pulled.
     const plan = planContactSync(
       ROSTER,
-      [{ at: "2026-09-20T09:00:00Z", reason: "manual", email: "craft@example.com" }],
+      [{ at: "2026-09-20T09:00:00Z", reason: "manual", email: "tundrabyte@example.com" }],
       [SUBSCRIBED[0]],
     );
     expect(plan.toUnsubscribe).toEqual([]);
     expect(plan.toCreate).toEqual([
-      { email: "craft@example.com", firstName: null, rosterId: "craft", unsubscribed: true },
+      { email: "tundrabyte@example.com", firstName: null, rosterId: "tundrabyte", unsubscribed: true },
     ]);
   });
 
   it("picks up a handle-side stop for a row that is not yet a contact", () => {
     const plan = planContactSync(
       ROSTER,
-      [{ at: "2026-09-20T09:00:00Z", reason: "stop_requested", xHandle: "@craftcomputing" }],
+      [{ at: "2026-09-20T09:00:00Z", reason: "stop_requested", xHandle: "@tundrabyte" }],
       [SUBSCRIBED[0]],
     );
-    expect(plan.toCreate[0]).toMatchObject({ rosterId: "craft", unsubscribed: true });
+    expect(plan.toCreate[0]).toMatchObject({ rosterId: "tundrabyte", unsubscribed: true });
   });
 });
 
@@ -486,7 +486,7 @@ describe("contactSyncBlockers", () => {
   it("blocks on a suppressed row that is not in the audience, which toUnsubscribe cannot see", () => {
     const plan = planContactSync(
       ROSTER,
-      [{ at: "2026-09-20T09:00:00Z", reason: "manual", email: "craft@example.com" }],
+      [{ at: "2026-09-20T09:00:00Z", reason: "manual", email: "tundrabyte@example.com" }],
       [SUBSCRIBED[0]],
     );
     expect(plan.toUnsubscribe).toHaveLength(0); // the count the old gate used
@@ -616,18 +616,18 @@ describe("contactSyncBlockers --require-first-names (SPO-288)", () => {
   });
 
   it("carries the fixture the flag was added for: a contact with no name on either side", () => {
-    // ROSTER's `craft` row is the "Hey Craft Computing" case v5 was written to
+    // ROSTER's `tundrabyte` row is the "Hey TundraByte" case v5 was written to
     // kill: a channel name, no confirmed first name, and a contact that has
     // never been given one. Wired through the real fixture rather than a
     // hand-built row so the shape the live audience actually holds is covered.
     const plan = planContactSync(ROSTER, [], SUBSCRIBED);
     expect(plan.firstNameDrift).toEqual([]);
     expect(plan.missingFirstName).toEqual([
-      { email: "craft@example.com", roster: null, rosterId: "craft" },
+      { email: "tundrabyte@example.com", roster: null, rosterId: "tundrabyte" },
     ]);
     expect(contactSyncBlockers(plan)).toEqual([]);
     expect(contactSyncBlockers(plan, ON)).toEqual([
-      expect.stringContaining("craft@example.com: the Resend contact has no first_name"),
+      expect.stringContaining("tundrabyte@example.com: the Resend contact has no first_name"),
     ]);
   });
 });
