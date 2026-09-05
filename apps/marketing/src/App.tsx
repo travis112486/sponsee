@@ -233,28 +233,39 @@ export default function App() {
   const scrollToWaitlist = () => {
     const target = document.getElementById("waitlist");
     if (!target) return;
+    const email = document.getElementById("email");
+    if (!email) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const alreadyAligned = Math.abs(target.getBoundingClientRect().top) <= 1;
     // "instant", not "auto": "auto" defers to the page's CSS scroll-behavior
     // (smooth, index.css), which would animate anyway and strand focus mid-scroll.
     target.scrollIntoView({ behavior: reduced ? "instant" : "smooth" });
     // Hand focus to the form once the scroll settles, so keyboard and AT users
     // land on the email field instead of staying on the trigger button. The
     // form swaps to a status card after submit, so #email can be absent.
-    const email = document.getElementById("email");
-    if (!email) return;
     let done = false;
+    let fallbackTimer: number | undefined;
     const focusEmail = () => {
       if (done) return;
       done = true;
       window.removeEventListener("scrollend", focusEmail);
+      window.removeEventListener("scroll", restartFallback);
+      if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
       email.focus({ preventScroll: true });
     };
-    if (!reduced && "onscrollend" in window) {
+    const restartFallback = () => {
+      if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
+      fallbackTimer = window.setTimeout(focusEmail, 150);
+    };
+    if (reduced || alreadyAligned) {
+      fallbackTimer = window.setTimeout(focusEmail, 0);
+    } else if (Reflect.has(window, "onscrollend")) {
       window.addEventListener("scrollend", focusEmail, { once: true });
-      // scrollend never fires when the section is already in view.
-      window.setTimeout(focusEmail, 1000);
     } else {
-      window.setTimeout(focusEmail, reduced ? 0 : 700);
+      // Older browsers without scrollend use a debounced scroll listener, so
+      // focus cannot race ahead of a long native smooth scroll.
+      window.addEventListener("scroll", restartFallback, { passive: true });
+      restartFallback();
     }
   };
 
