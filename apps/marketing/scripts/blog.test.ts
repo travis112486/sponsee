@@ -270,6 +270,16 @@ describe("renderPostPage", () => {
     expect(html).not.toContain("fonts.gstatic.com");
   });
 
+  // SPO-421: the static pages gained these in SPO-316 while the blog shell
+  // drifted. og:image is the positive control for the block being in the head.
+  it("describes the og card image: alt, dimensions, and site name", () => {
+    expect(html).toContain('<meta property="og:image" content="https://sponsee.app/og-image.png" />');
+    expect(html).toContain('<meta property="og:image:width" content="1200" />');
+    expect(html).toContain('<meta property="og:image:height" content="630" />');
+    expect(html).toContain('<meta property="og:image:alt" content="Sponsee — Run your sponsorships like an agency. Keep 100%. The sponsorship CRM for streamers on Twitch, YouTube, TikTok, and Kick." />');
+    expect(html).toContain('<meta property="og:site_name" content="Sponsee" />');
+  });
+
   it("emits Article and FAQPage structured data", () => {
     const jsonLd = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(html);
     const parsed = JSON.parse(jsonLd![1]);

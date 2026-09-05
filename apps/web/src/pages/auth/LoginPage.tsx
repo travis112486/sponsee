@@ -40,7 +40,7 @@ export default function LoginPage() {
           <div className="mb-4 flex justify-center">
             <img src="/logo.svg" alt="Sponsee" className="h-10 w-10" />
           </div>
-          <h1 className="font-serif text-[27px] leading-tight tracking-[-0.01em] text-ink">
+          <h1 className="font-serif text-[26px] leading-tight tracking-[-0.01em] text-ink">
             Sign in to Sponsee
           </h1>
           <p className="mt-1.5 text-[13px] text-ink-3">

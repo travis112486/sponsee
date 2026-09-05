@@ -181,8 +181,8 @@ export default function PrivacyPage() {
                 />
                 <Subprocessor
                   who="unavatar.io"
-                  sees="Brand domains you save, and the IP that requests the logo"
-                  why='Fetches a logo for the pipeline. See "Brand logos" below.'
+                  sees="Brand domains you save, on a cache miss from our servers"
+                  why="Fallback logo fetch from our servers on cache miss."
                 />
                 <Subprocessor
                   who="Google"
@@ -202,35 +202,27 @@ export default function PrivacyPage() {
             name that vendor on this page when it is locked.
           </p>
           <p className={p}>
-            Staging also runs on <strong>Fly.io</strong>. It is not the production app.
-          </p>
-          <p className={p}>
-            Your browser talks to us (and, today, to unavatar and Google Analytics) directly.
-            We do not run a marketplace, so other creators do not see your pipeline.
+            Your browser talks to us and to Google Analytics directly. Brand logos load from
+            us, not from unavatar. We do not run a marketplace, so other creators do not see
+            your pipeline.
           </p>
 
           <h2 className={h2}>6. Brand logos</h2>
           <p className={p}>
-            When you save a brand domain, the pipeline may load a logo from{" "}
+            When you save a brand domain, our servers try the brand&apos;s own favicon first, then{" "}
             <a href="https://unavatar.io" className={mail}>
               unavatar.io
             </a>{" "}
-            using that domain.
+            if that fails, and we cache the result. Your browser loads the logo from{" "}
+            <strong>us</strong>, not from unavatar.
           </p>
           <p className={p}>
-            <strong>What they see today:</strong> the domain, and the IP address of the
-            browser making the request (yours). We send <code>referrerPolicy=&quot;no-referrer&quot;</code>,
-            so they do not get the Sponsee URL. They do not get your name, your email, or the
-            rest of your deals.
+            <strong>What unavatar may still see:</strong> the domain, on a cache miss, from our
+            servers. Not your IP, not your name, not your email, and not the rest of your
+            pipeline.
           </p>
           <p className={p}>
-            <strong>What they do not see:</strong> a full export of your pipeline. They see
-            each domain whose logo we ask for.
-          </p>
-          <p className={p}>
-            If logo loading fails, we show a monogram instead. We are moving this fetch behind
-            our own servers so the request comes from us, not from your IP; unavatar may still
-            see the domain on a cache miss. We will update this section when that ships.
+            If logo loading fails, we show a monogram instead.
           </p>
 
           <h2 className={h2}>7. How long we keep it</h2>
