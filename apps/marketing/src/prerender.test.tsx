@@ -90,6 +90,19 @@ describe("pre-rendered marketing pages", () => {
     expect(renderToString(PAGES["index.html"])).not.toContain("opacity-0");
   });
 
+  it("keeps the unavatar attribution link followable in the homepage markup", () => {
+    // SPO-373: unavatar.io's free tier (the app's brand-logo source, SPO-371)
+    // requires a crawlable attribution link — it must survive into the
+    // pre-rendered HTML and carry no rel="nofollow", or we lose free-tier
+    // access. Drop this test only when moving to a paid unavatar plan.
+    const markup = renderToString(PAGES["index.html"]);
+    const anchor = markup.match(/<a[^>]*href="https:\/\/unavatar\.io"[^>]*>/);
+
+    expect(anchor).not.toBeNull();
+    expect(anchor![0]).not.toContain("nofollow");
+    expect(markup).toContain("Avatars provided by Unavatar");
+  });
+
   it.each(Object.keys(PAGES))("%s hydrates the pre-rendered markup cleanly", async (file) => {
     // React 19 reports a mismatch by recovering from it, not by throwing or by
     // logging through console.error — onRecoverableError is the only channel

@@ -698,6 +698,20 @@ export default function App() {
           <div className="mt-8 border-t border-hairline pt-6 text-[13px] text-ink-3">
             <p>Sponsee is not affiliated with Twitch, YouTube, TikTok, or Kick.</p>
             <p className="mt-1">© 2026 Sponsee.</p>
+            {/* unavatar.io free-tier ToS requires this attribution while the app
+                pulls brand logos from their free tier (SPO-371). It must stay
+                followable (no rel="nofollow") and in the pre-rendered HTML.
+                Remove only once we are on a paid unavatar plan. */}
+            <p className="mt-1">
+              <a
+                href="https://unavatar.io"
+                target="_blank"
+                rel="noopener"
+                className="rounded-md outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2"
+              >
+                Avatars provided by Unavatar
+              </a>
+            </p>
           </div>
         </div>
       </footer>
