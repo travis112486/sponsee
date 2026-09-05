@@ -183,10 +183,22 @@ export const contractRouter = createTRPCRouter({
       // be deleted here or it orphans in the bucket (see delete.ts); its
       // registry row is tombstoned first (SPO-348) so the orphan sweep can
       // still reclaim the object if this delete throws.
+      //
+      // Invariant (SPO-399): tombstone first, then best-effort delete. The
+      // contract row above has already committed, so a throw here must never
+      // surface as a failed save — log and move on; the orphan sweep is the
+      // backstop that reclaims the object.
       if (existing?.storageKey && existing.storageKey !== contract.storageKey) {
         await tombstoneCreatorFile(ctx.db, existing.storageKey);
-        await deleteObject(existing.storageKey);
-        await removeCreatorFile(ctx.db, existing.storageKey);
+        try {
+          await deleteObject(existing.storageKey);
+          await removeCreatorFile(ctx.db, existing.storageKey);
+        } catch (err) {
+          console.warn(
+            `[contract.upsert] Failed to delete object ${existing.storageKey}; orphan sweep will reclaim it:`,
+            (err as Error).message,
+          );
+        }
       }
 
       const action: "attached" | "updated" = existedBefore ? "updated" : "attached";
@@ -280,10 +292,21 @@ export const contractRouter = createTRPCRouter({
 
       await ctx.db.delete(contracts).where(eq(contracts.id, existing.id));
 
+      // Invariant (SPO-399): tombstone first, then best-effort delete. The
+      // row delete above has already committed, so a throw here must never
+      // surface as a failed save — log and move on; the orphan sweep is the
+      // backstop that reclaims the object.
       if (existing.storageKey) {
         await tombstoneCreatorFile(ctx.db, existing.storageKey);
-        await deleteObject(existing.storageKey);
-        await removeCreatorFile(ctx.db, existing.storageKey);
+        try {
+          await deleteObject(existing.storageKey);
+          await removeCreatorFile(ctx.db, existing.storageKey);
+        } catch (err) {
+          console.warn(
+            `[contract.remove] Failed to delete object ${existing.storageKey}; orphan sweep will reclaim it:`,
+            (err as Error).message,
+          );
+        }
       }
 
       await ctx.db.insert(activityEvents).values({
