@@ -7,6 +7,7 @@ import App from "./App";
 describe("waitlist CTA focus handoff", () => {
   let container: HTMLDivElement;
   let root: Root;
+  let scrollIntoView: (arg?: boolean | ScrollIntoViewOptions) => void;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -18,7 +19,8 @@ describe("waitlist CTA focus handoff", () => {
       configurable: true,
       value: null,
     });
-    Element.prototype.scrollIntoView = vi.fn();
+    scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -51,7 +53,7 @@ describe("waitlist CTA focus handoff", () => {
     });
     cta.focus();
 
-    cta.click();
+    await act(async () => cta.click());
     act(() => vi.advanceTimersByTime(1_000));
 
     expect(document.activeElement).toBe(cta);
@@ -59,5 +61,17 @@ describe("waitlist CTA focus handoff", () => {
     window.dispatchEvent(new Event("scrollend"));
 
     expect(document.activeElement).toBe(document.getElementById("email"));
+  });
+
+  it("still scrolls to the post-submit waitlist status when the email field is gone", async () => {
+    await act(async () => root.render(<App />));
+    const cta = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Join the waitlist"
+    )!;
+    document.getElementById("email")!.remove();
+
+    cta.click();
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth" });
   });
 });
