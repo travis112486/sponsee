@@ -7,18 +7,25 @@ and the terms/privacy pages.
 
 **Merging to `main` publishes this app.** The Vercel `marketing` project has been Git-linked to
 `travis112486/sponsee` (production branch `main`) since **SPO-215**, which connected it sometime
-between 2026-09-02T18:15Z and 2026-09-03T07:23Z (the last confirmed manual `vercel --prod` and the
-first confirmed Git-triggered deployment, respectively — see SPO-438 for the full evidence). There
-is no founder gate and no separate deploy step: a merged PR is live on sponsee.app within seconds.
+after the last confirmed manual deploy at 2026-09-02T18:15Z and by SPO-215's recorded end-to-end
+Git deployment verification at 2026-09-03T02:05Z (see SPO-438 for the full evidence).
 
-There is no more manual step for a routine change. If you ever need to redeploy without a new
-commit (e.g. rolling back), that still goes through the dashboard or:
+Vercel currently has no technical production-deployment gate or separate deploy step: a merged PR
+that touches `apps/marketing` is live on sponsee.app within seconds. A merge is therefore an
+external production publish and requires explicit board approval **before merge** under Sponsee's
+standing approval policy, unless the board changes that policy. After an approved merge, there is
+no additional manual deployment step.
+
+To redeploy the current checkout without a new commit, use the dashboard or:
 
 ```sh
 cd apps/marketing
 vercel link --project marketing --yes --scope travis112486s-projects   # first time only
 vercel --prod --scope travis112486s-projects
 ```
+
+That command deploys the current checkout; it is not a rollback by itself. To roll back, use
+Vercel's rollback action or first check out a known-good revision and then deploy it.
 
 A broken `vercel.json` now shows up as a **red/canceled production deployment on the very next
 merge**, not a silent outage discovered weeks later — but `vercel-config.test.ts` is still the

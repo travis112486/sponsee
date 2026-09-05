@@ -13,8 +13,9 @@ import { describe, expect, it } from "vitest";
 // SPO-215 later Git-linked this project, so a bad key now fails loudly as a
 // canceled production deployment on the next merge instead of silently. But
 // nothing in CI reads vercel.json, so without this test a stray key still
-// reaches `main` — and now auto-deploys straight to sponsee.app instead of
-// waiting for someone to notice on the next manual push (SPO-438).
+// reaches `main` — and an approved merge now auto-deploys straight to
+// sponsee.app instead of waiting for someone to notice on the next manual push
+// (SPO-438).
 
 const CONFIG_PATH = fileURLToPath(new URL("./vercel.json", import.meta.url));
 
