@@ -49,7 +49,9 @@ async function cleanTables() {
   `);
 }
 
-async function seedTenant() {
+async function seedTenant(opts: { withOwnerEmail?: boolean; snapshotReplyToEmail?: string | null } = {}) {
+  const withOwnerEmail = opts.withOwnerEmail ?? true;
+
   const [creator] = await db
     .insert(schema.creators)
     .values({
@@ -60,8 +62,10 @@ async function seedTenant() {
     })
     .returning();
 
-  await db.insert(schema.user).values({ id: `user-${creator.id}`, name: "Owner", email: OWNER_EMAIL });
-  await db.insert(schema.memberships).values({ userId: `user-${creator.id}`, creatorId: creator.id, role: "owner" });
+  if (withOwnerEmail) {
+    await db.insert(schema.user).values({ id: `user-${creator.id}`, name: "Owner", email: OWNER_EMAIL });
+    await db.insert(schema.memberships).values({ userId: `user-${creator.id}`, creatorId: creator.id, role: "owner" });
+  }
 
   const [brand] = await db.insert(schema.brands).values({ creatorId: creator.id, name: BRAND_NAME }).returning();
   await db.insert(schema.contacts).values({ brandId: brand.id, name: "AP Team", email: CONTACT_EMAIL });
@@ -70,6 +74,18 @@ async function seedTenant() {
     .insert(schema.deals)
     .values({ creatorId: creator.id, brandId: brand.id, title: DEAL_TITLE, type: "flat", stage: "live", valueCents: 500000 })
     .returning();
+
+  // `snapshotReplyToEmail` undefined means the key is absent entirely — the
+  // pre-SPO-428 snapshot shape that the fallback rule must handle.
+  const railsSnapshot: Record<string, unknown> = {
+    displayName: "Nightshade Media",
+    paypalLink: "paypal.me/nightshade",
+    wiseText: "Wise: nightshade@wise.example",
+    bankText: "Acme Bank / 000-1234",
+  };
+  if (opts.snapshotReplyToEmail !== undefined) {
+    railsSnapshot.replyToEmail = opts.snapshotReplyToEmail;
+  }
 
   const [invoice] = await db
     .insert(schema.invoices)
@@ -85,12 +101,7 @@ async function seedTenant() {
       issuedAt: new Date("2026-09-02T00:00:00Z"),
       dueAt: new Date("2026-10-02T00:00:00Z"),
       status: "open",
-      railsSnapshot: {
-        displayName: "Nightshade Media",
-        paypalLink: "paypal.me/nightshade",
-        wiseText: "Wise: nightshade@wise.example",
-        bankText: "Acme Bank / 000-1234",
-      },
+      railsSnapshot,
     })
     .returning();
 
@@ -144,15 +155,21 @@ describe("invoice.publicView — response shape (security boundary)", () => {
         "dueAt",
         "railsSnapshot",
         "creatorDisplayName",
+        "creatorEmail",
         "paid",
       ].sort()
     );
 
-    // The whole serialized JSON must not carry the creator's owner email, the
-    // brand contact email, the brand name, the deal title, or any id linking
-    // back to the tenant's other records.
+    // The serialized JSON must not carry the brand contact email, the brand
+    // name, the deal title, or any id linking back to the tenant's other
+    // records. The creator's OWNER_EMAIL now appears as `creatorEmail` — that
+    // is the SPO-366/385 contact line (rails_snapshot.replyToEmail ??
+    // current account email), the same address the invoice email's Reply-To
+    // already handed the brand. It is a deliberate design change, not a leak:
+    // the token-gated viewer already holds that address from the email they
+    // received.
     const serialized = JSON.stringify(result);
-    expect(serialized).not.toContain(OWNER_EMAIL);
+    expect(serialized).toContain(OWNER_EMAIL);
     expect(serialized).not.toContain(CONTACT_EMAIL);
     expect(serialized).not.toContain(BRAND_NAME);
     expect(serialized).not.toContain(DEAL_TITLE);
@@ -178,6 +195,7 @@ describe("invoice.publicView — response shape (security boundary)", () => {
       paypalLink: "paypal.me/nightshade",
       wiseText: "Wise: nightshade@wise.example",
       bankText: "Acme Bank / 000-1234",
+      replyToEmail: null,
     });
     expect(result.paid).toBe(false);
   });
@@ -196,6 +214,42 @@ describe("invoice.publicView — response shape (security boundary)", () => {
     // paidAt is deliberately NOT returned — the response shape is the allowed
     // list, and "paid date" is not on it.
     expect(Object.keys(result)).not.toContain("paidAt");
+  });
+});
+
+describe("invoice.publicView — creator contact line (SPO-428)", () => {
+  it("renders the fallback account email when a pre-existing snapshot lacks replyToEmail", async () => {
+    // The seed snapshot carries no replyToEmail key — the exact shape every
+    // snapshot frozen before this field shipped has. The fallback must resolve
+    // the creator's current account email, and this test fails if the
+    // `?? resolveCreatorReplyToEmail(...)` fallback is removed.
+    const { delivery } = await seedTenant();
+    const caller = invoiceRouter.createCaller(mockCtx());
+
+    const result = await caller.publicView({ token: delivery.publicToken });
+
+    expect(result.railsSnapshot.replyToEmail).toBeNull();
+    expect(result.creatorEmail).toBe(OWNER_EMAIL);
+  });
+
+  it("prefers the snapshot's replyToEmail over the live account email", async () => {
+    const { delivery } = await seedTenant({ snapshotReplyToEmail: "kaya@nightshade.example" });
+    const caller = invoiceRouter.createCaller(mockCtx());
+
+    const result = await caller.publicView({ token: delivery.publicToken });
+
+    expect(result.railsSnapshot.replyToEmail).toBe("kaya@nightshade.example");
+    expect(result.creatorEmail).toBe("kaya@nightshade.example");
+  });
+
+  it("drops the contact line (null) when neither the snapshot nor the account email resolves", async () => {
+    const { delivery } = await seedTenant({ withOwnerEmail: false });
+    const caller = invoiceRouter.createCaller(mockCtx());
+
+    const result = await caller.publicView({ token: delivery.publicToken });
+
+    expect(result.railsSnapshot.replyToEmail).toBeNull();
+    expect(result.creatorEmail).toBeNull();
   });
 });
 

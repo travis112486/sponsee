@@ -8,6 +8,7 @@ type Rails = {
   paypalLink: string | null;
   wiseText: string | null;
   bankText: string | null;
+  replyToEmail: string | null;
 };
 
 function formatAmount(amountCents: number, currency: string): string {
@@ -106,6 +107,9 @@ export default function InvoicePublicPage() {
           <div>
             <h1 className="from-name serif">{invoice.creatorDisplayName ?? "Sponsee"}</h1>
             <div className="from-sub">Invoice for sponsorship services</div>
+            {invoice.creatorEmail ? (
+              <div className="from-sub">{invoice.creatorEmail}</div>
+            ) : null}
           </div>
           <div className="doc-id">
             <div className="doc-label">Invoice</div>

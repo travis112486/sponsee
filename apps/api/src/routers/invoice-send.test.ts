@@ -158,6 +158,8 @@ describe("invoice.send — happy path", () => {
     expect(payload.text).toContain("$5,000");
     expect(payload.text).toContain("Due date:");
     expect(payload.text).toContain("2026");
+    // SPO-428: the printed contact line carries the creator's reply-to address.
+    expect(payload.text).toContain("FROM\n  Creator A\n  owner@example.com");
   });
 
   it("arms chase on send (was unarmed after create)", async () => {
@@ -204,13 +206,14 @@ describe("invoice.send — happy path", () => {
       displayName: "Creator A",
       paypalLink: "paypal.me/creatora",
       wiseText: "Wise: creator@wise.example",
+      replyToEmail: "owner@example.com",
     });
 
     // Creator changes their PayPal link after the invoice already shipped.
     await db.update(schema.creators).set({ paypalLink: "paypal.me/newlink" }).where(eq(schema.creators.id, creatorId));
 
     const [stillFrozen] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, invoice.id));
-    expect(stillFrozen.railsSnapshot).toMatchObject({ paypalLink: "paypal.me/creatora" });
+    expect(stillFrozen.railsSnapshot).toMatchObject({ paypalLink: "paypal.me/creatora", replyToEmail: "owner@example.com" });
   });
 
   it("transitions a draft invoice to open on first send", async () => {

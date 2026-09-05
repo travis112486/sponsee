@@ -42,6 +42,7 @@ type RailsSnapshot = {
   paypalLink: string | null;
   wiseText: string | null;
   bankText: string | null;
+  replyToEmail: string | null;
 };
 
 /**
@@ -95,17 +96,24 @@ function formatCents(cents: number, currency: string): string {
  * guaranteed to render — many strip HTML and images — so it must carry the
  * full invoice, not a "view it online" stub. The Product Designer refines
  * the HTML companion separately (SPO-358 item 5).
+ *
+ * `creatorEmail` is resolved by the caller (SPO-385 rule: the snapshot's
+ * `replyToEmail`, else the creator's current account email). When it is null
+ * the FROM block's contact line drops entirely — never an empty line or a
+ * whitespace-only line — matching `invoice-email.txt`'s `{{#if creatorEmail}}`.
  */
-function buildInvoiceText(args: {
+export function buildInvoiceText(args: {
   invoice: typeof invoices.$inferSelect;
   invoiceLabel: string;
   rails: RailsSnapshot;
+  creatorEmail: string | null;
 }): string {
-  const { invoice, invoiceLabel, rails } = args;
+  const { invoice, invoiceLabel, rails, creatorEmail } = args;
   const amount = formatCents(invoice.amountCents, invoice.currency);
   const dueDate = invoice.dueAt
     ? new Date(invoice.dueAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
     : "on receipt";
+  const isPaid = invoice.status === "paid";
 
   const railLines = [
     rails.paypalLink ? `PayPal: ${rails.paypalLink}` : null,
@@ -114,16 +122,18 @@ function buildInvoiceText(args: {
   ].filter((line): line is string => line !== null);
 
   return [
-    `Invoice ${invoiceLabel}`,
+    `INVOICE ${invoiceLabel}${isPaid ? " — PAID" : ""}`,
     invoice.title || null,
     "",
-    `Amount due: ${amount}`,
+    `Amount ${isPaid ? "paid" : "due"}: ${amount}`,
     `Due date: ${dueDate}`,
     "",
     "Payment details:",
     ...(railLines.length > 0 ? railLines : ["Contact the sender for payment instructions."]),
     "",
-    `From: ${rails.displayName || "your creator partner"}`,
+    "FROM",
+    `  ${rails.displayName || "your creator partner"}`,
+    creatorEmail ? `  ${creatorEmail}` : null,
   ]
     .filter((line): line is string => line !== null)
     .join("\n");
@@ -197,6 +207,9 @@ export const invoiceRouter = createTRPCRouter({
           dueAt: invoices.dueAt,
           railsSnapshot: invoices.railsSnapshot,
           status: invoices.status,
+          // Read for the creatorEmail fallback only — never returned. The
+          // response is a hand-picked security boundary (see below).
+          creatorId: invoices.creatorId,
         })
         .from(invoiceDeliveries)
         .innerJoin(invoices, eq(invoiceDeliveries.invoiceId, invoices.id))
@@ -208,6 +221,13 @@ export const invoiceRouter = createTRPCRouter({
       }
 
       const rails = (row.railsSnapshot ?? {}) as Partial<RailsSnapshot>;
+
+      // SPO-385 resolution rule: `rails_snapshot.replyToEmail ?? creator's
+      // current account email`. Snapshots frozen before this field shipped
+      // lack the key, so the fallback is the normal case at first, not the
+      // edge. If neither resolves, the contact line drops (the page wraps it
+      // in an `if`); `creatorEmail` is null, never "".
+      const creatorEmail = rails.replyToEmail ?? (await resolveCreatorReplyToEmail(row.creatorId));
 
       return {
         invoiceNumber: row.number,
@@ -223,8 +243,10 @@ export const invoiceRouter = createTRPCRouter({
           paypalLink: rails.paypalLink ?? null,
           wiseText: rails.wiseText ?? null,
           bankText: rails.bankText ?? null,
+          replyToEmail: rails.replyToEmail ?? null,
         },
         creatorDisplayName: rails.displayName ?? null,
+        creatorEmail,
         paid: row.status === "paid",
       };
     }),
@@ -341,6 +363,7 @@ export const invoiceRouter = createTRPCRouter({
         paypalLink: creator?.paypalLink ?? null,
         wiseText: creator?.wiseText ?? null,
         bankText: creator?.bankText ?? null,
+        replyToEmail,
       };
 
       const [{ maxAttempt }] = await ctx.db
@@ -353,7 +376,10 @@ export const invoiceRouter = createTRPCRouter({
 
       const invoiceLabel = `INV-${String(invoice.number).padStart(4, "0")}`;
       const subject = `Invoice ${invoiceLabel} from ${rails.displayName || "your creator partner"}`;
-      const text = buildInvoiceText({ invoice, invoiceLabel, rails });
+      // At send the snapshot's replyToEmail is the freshly resolved account
+      // email, so the resolution rule reduces to `replyToEmail` here. The
+      // fallback branch matters on read/resend of snapshots frozen earlier.
+      const text = buildInvoiceText({ invoice, invoiceLabel, rails, creatorEmail: replyToEmail });
 
       // Claim the attempt before calling the provider. The unique index on
       // (invoice_id, attempt) — and on idempotency_key — means a concurrent

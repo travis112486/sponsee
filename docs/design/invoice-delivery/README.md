@@ -5,6 +5,30 @@ hosted invoice page (`/i/:token`). Context: `plan` document on SPO-358.
 Engineering swaps these in for the plain functional template; the templates in
 this directory are the source of truth for markup, styling, and copy.
 
+## Implementation status (SPO-428)
+
+The contact line and the paid marker are now consumed by the shipping code —
+the parts of this design that let AP reach the creator and file a settled
+invoice. Everything else below is still the plain functional template and is
+swapped in separately, not by SPO-428.
+
+- `rails_snapshot` now carries `replyToEmail` (typed, frozen at send, and
+  projected by `invoice.publicView`).
+- `creatorEmail` resolves at render as `rails_snapshot.replyToEmail ??
+  creator's current account email`. When neither resolves the contact line
+  drops entirely — an absent element/line, never an empty one — in both the
+  text part's FROM block and the hosted page's `.from-sub` line.
+- The text part marks its title block `INVOICE … — PAID` on a paid invoice;
+  the hosted page keeps its pine PAID chip. No HTML email is emitted yet, so
+  "no header marker on the HTML part" is vacuous for now.
+
+Still on the plain functional template (intentional divergence from
+`invoice-email.txt` / `invoice-page.html`): the text part's billed-to block,
+hosted-link line, hard-wrap and exact amount/date formatting, and the hosted
+page's bill-to block and paid-date row. Those are a larger swap-in that also
+expands `invoice.publicView`'s response shape, so they are deliberately out of
+SPO-428's scope.
+
 ## Files
 
 | file | what it is |
