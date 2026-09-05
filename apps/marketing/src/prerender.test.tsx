@@ -84,6 +84,21 @@ describe("pre-rendered marketing pages", () => {
     );
   });
 
+  it("privacy page describes the server-side logo proxy, not a browser fetch to unavatar", () => {
+    // SPO-401: BrandMark loads /api/brand-icon same-origin (SPO-377 live).
+    // The pre-rendered policy must not still disclose creator IP or name Fly.io.
+    const text = textOf(renderToString(PAGES["privacy.html"]));
+
+    // textOf turns tags into spaces, so "from **us**," flattens to "from us ,".
+    expect(text).toContain("Your browser loads the logo from us , not from unavatar");
+    expect(text).toContain("Fallback logo fetch from our servers on cache miss");
+    expect(text).toContain("Brand domains you save, on a cache miss from our servers");
+    expect(text).toContain("Not your IP, not your name, not your email");
+    expect(text).not.toContain("the IP address of the browser making the request");
+    expect(text).not.toContain("and, today, to unavatar and Google Analytics");
+    expect(text).not.toContain("Staging also runs on Fly.io");
+  });
+
   it("keeps scroll-reveal sections visible in the pre-rendered markup", () => {
     // A section that renders at opacity-0 is copy a crawler may discount and a
     // no-JS visitor cannot read at all.
