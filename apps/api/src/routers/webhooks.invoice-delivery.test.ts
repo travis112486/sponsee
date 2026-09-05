@@ -220,15 +220,30 @@ describe("invoice delivery webhook correlation (SPO-364)", () => {
 describe("an invoice-delivery bounce stops the chase (SPO-365)", () => {
   /** Arms a chase whose step 1 is already due, so a tick must act on it. */
   async function armDueChase(creatorId: string, invoiceId: string) {
-    await db.insert(schema.chaseTemplates).values({
-      creatorId,
-      step: 1,
-      name: "Friendly reminder",
-      offsetDays: 1,
-      subject: "Payment reminder for {invoice_id}",
-      body: "Hi {brand_contact}, please pay {amount}.",
-      enabled: true,
-    });
+    // SPO-477: a chase is only genuinely armed while it has a schedulable
+    // next step. Seed steps 1 and 2 so the CONTROL's tick, after queueing
+    // step 1, still has a step 2 to schedule — otherwise the tick completes
+    // the sequence and the control can no longer assert an armed state.
+    await db.insert(schema.chaseTemplates).values([
+      {
+        creatorId,
+        step: 1,
+        name: "Friendly reminder",
+        offsetDays: 1,
+        subject: "Payment reminder for {invoice_id}",
+        body: "Hi {brand_contact}, please pay {amount}.",
+        enabled: true,
+      },
+      {
+        creatorId,
+        step: 2,
+        name: "Second notice",
+        offsetDays: 3,
+        subject: "Second notice for {invoice_id}",
+        body: "Hi {brand_contact}, this is a follow-up.",
+        enabled: true,
+      },
+    ]);
 
     await db.insert(schema.invoiceChaseState).values({
       invoiceId,

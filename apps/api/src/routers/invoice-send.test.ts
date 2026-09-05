@@ -272,6 +272,19 @@ describe("invoice.send — happy path", () => {
     const invoice = await insertInvoice({});
     const caller = invoiceRouter.createCaller(mockCtx(creatorId));
 
+    // SPO-477 makes no-schedulable-template send produce `completed`, not
+    // `armed`. Seed an enabled step 1 so the first send genuinely arms, and
+    // only the failing resend below can be the source of the later `paused`.
+    await db.insert(schema.chaseTemplates).values({
+      creatorId,
+      step: 1,
+      name: "Friendly reminder",
+      offsetDays: 1,
+      subject: "Payment reminder for {invoice_id}",
+      body: "Hi {brand_contact}, please pay {amount}.",
+      enabled: true,
+    });
+
     await caller.send({ id: invoice.id });
 
     // Control: the first send left the chase armed, so a later `paused` can
