@@ -57,6 +57,7 @@ let sendVariables: { id: string } | undefined;
 let invoicesData: unknown[] = [];
 let deliveriesData: unknown[] = [];
 let deliveriesIsLoading = false;
+let deliveriesIsFetching = false;
 let deliveriesIsError = false;
 let awaitingReviewData: unknown[] = [];
 let chaseStateByInvoice: Record<string, unknown> = {};
@@ -86,6 +87,7 @@ vi.mock("@/trpc", () => ({
         useQuery: () => ({
           data: deliveriesData,
           isLoading: deliveriesIsLoading,
+          isFetching: deliveriesIsFetching || deliveriesIsLoading,
           isError: deliveriesIsError,
         }),
       },
@@ -167,6 +169,7 @@ afterEach(() => {
   invoicesData = [];
   deliveriesData = [];
   deliveriesIsLoading = false;
+  deliveriesIsFetching = false;
   deliveriesIsError = false;
   sendPending = false;
   sendVariables = undefined;
@@ -626,6 +629,25 @@ describe("Payments chase gating on delivery", () => {
     chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
 
     render(<Payments />);
+    fireEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    expect(screen.getByRole("button", { name: /resume/i })).toBeDisabled();
+    expect(screen.getByText(/checking invoice delivery/i)).toBeVisible();
+  });
+
+  it("fails closed during a background delivery refresh with stale Delivered data", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [
+      delivery({ status: "delivered", deliveredAt: "2026-01-02T00:00:00Z" }),
+    ];
+    deliveriesIsFetching = true;
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
+
+    render(<Payments />);
+
+    expect(screen.queryByRole("button", { name: /resend/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /checking delivery/i })).toBeDisabled();
+
     fireEvent.click(screen.getByRole("button", { name: /more/i }));
 
     expect(screen.getByRole("button", { name: /resume/i })).toBeDisabled();

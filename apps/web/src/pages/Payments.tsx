@@ -116,7 +116,7 @@ export default function Payments() {
   const { data: invoices, isLoading, isError, refetch } = trpc.invoice.list.useQuery();
   const {
     data: deliveries,
-    isLoading: deliveriesLoading,
+    isFetching: deliveriesFetching,
     isError: deliveriesError,
   } = trpc.invoice.latestDeliveries.useQuery();
   const { data: awaitingReview } = trpc.chase.awaitingReview.useQuery();
@@ -364,11 +364,11 @@ export default function Payments() {
             const deliveryChip = deliveryState ? deliveryChipConfig[deliveryState] : null;
             const chaseLock = deliveriesError
               ? "Chase is locked — we couldn't verify invoice delivery. Refresh before starting reminders."
-              : deliveriesLoading
+              : deliveriesFetching
                 ? "Chase is locked while we're checking invoice delivery."
                 : chaseLockReason(deliveryState);
             const canSend = inv.status === "draft" || inv.status === "open";
-            const deliveryQueryUnknown = deliveriesLoading || deliveriesError;
+            const deliveryQueryUnknown = deliveriesFetching || deliveriesError;
 
             return (
               <div
@@ -442,7 +442,7 @@ export default function Payments() {
                         className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white opacity-50"
                       >
                         <Send className="h-3 w-3" />
-                        {deliveriesLoading ? "Checking delivery" : "Delivery unavailable"}
+                        {deliveriesFetching ? "Checking delivery" : "Delivery unavailable"}
                       </button>
                     )}
                     {canSend && !deliveryQueryUnknown && (
