@@ -213,6 +213,54 @@ async function withMailpit<T>(fn: (apiUrl: string) => Promise<T>): Promise<T> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Step 4 (b) — the tenant-safety boundary of the hosted view. `publicView` is
+// the one unauthenticated read of tenant data in the product, so its response
+// shape is a security contract, not a convenience (see the comment above the
+// procedure in invoice.ts). The allowlist is the exact field set the router
+// picks by hand; the markers are the tenant-only columns a spread of the
+// invoice / delivery / contact / brand row would leak. Both are pinned here so
+// a future column or identity value that enters the JSON fails this gate.
+
+const PUBLIC_VIEW_ALLOWLIST = [
+  "invoiceNumber",
+  "title",
+  "milestoneNote",
+  "amountCents",
+  "currency",
+  "terms",
+  "issuedAt",
+  "dueAt",
+  "railsSnapshot",
+  "creatorDisplayName",
+  "paid",
+];
+
+// OWNER_EMAIL / CONTACT_EMAIL are this file's seeded identities; the id-field
+// names and the brand display name ("Brand A") are the tenant-only markers.
+const FORBIDDEN_TENANT_MARKERS = [
+  OWNER_EMAIL,
+  CONTACT_EMAIL,
+  "creatorId",
+  "dealId",
+  "contactId",
+  "Brand A",
+];
+
+function assertPublicViewIsTenantSafe(view: unknown) {
+  if (typeof view !== "object" || view === null || Array.isArray(view)) {
+    throw new Error(`publicView returned a non-object body: ${String(view)}`);
+  }
+  const keys = Object.keys(view).sort();
+  const expected = [...PUBLIC_VIEW_ALLOWLIST].sort();
+  expect(keys).toEqual(expected);
+
+  const serialized = JSON.stringify(view);
+  for (const marker of FORBIDDEN_TENANT_MARKERS) {
+    expect(serialized).not.toContain(marker);
+  }
+}
+
 beforeAll(async () => {
   await initPgliteSchema(SCHEMA_SQL);
 });
@@ -313,6 +361,24 @@ describe("invoice delivery acceptance — one-pass creator chain (SPO-367 gate)"
           } finally {
             await browser.close();
           }
+
+          // Step 4 (b) — the same token the captured message embedded drives an
+          // unauthenticated HTTP request for the underlying JSON, through the
+          // live web origin's `/api` proxy (the exact request the SPA makes),
+          // and the response must be exactly the allowlisted field set with
+          // none of the forbidden tenant markers. This is the privacy half the
+          // rendered-page assertions alone cannot prove.
+          const input = encodeURIComponent(JSON.stringify({ json: { token: tokenFromBody } }));
+          const jsonRes = await fetch(
+            `${hosted.webOrigin}/api/trpc/invoice.publicView?input=${input}`,
+            { method: "GET" }
+          );
+          expect(jsonRes.status).toBe(200);
+          const httpBody = (await jsonRes.json()) as {
+            result?: { data?: { json?: unknown } };
+          };
+          const view = httpBody.result?.data?.json;
+          assertPublicViewIsTenantSafe(view);
 
           // Step 5 — same invoice is now armed and rails_snapshot frozen.
           const [chaseState] = await db
@@ -483,5 +549,47 @@ describe("invoice delivery acceptance — one-pass creator chain (SPO-367 gate)"
     await expect(publicCaller.publicView({ token: tampered })).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
+  });
+
+  it("publicView tenant-safety gate trips on any leaked field (sensitivity proof)", () => {
+    // A faithfully-shaped publicView payload: exactly the allowlist keys with
+    // benign values.
+    const clean: Record<string, unknown> = {
+      invoiceNumber: "INV-0001",
+      title: "Sponsorship invoice",
+      milestoneNote: null,
+      amountCents: 500000,
+      currency: "USD",
+      terms: "net_30",
+      issuedAt: "2026-09-02T00:00:00.000Z",
+      dueAt: "2026-03-01T00:00:00.000Z",
+      railsSnapshot: {
+        displayName: "Creator A",
+        paypalLink: "paypal.me/creatora",
+        wiseText: "Wise: creator@wise.example",
+        bankText: null,
+      },
+      creatorDisplayName: "Creator A",
+      paid: false,
+    };
+    expect(() => assertPublicViewIsTenantSafe(clean)).not.toThrow();
+
+    // A forbidden *key* — any tenant-only column that reaches the JSON — must
+    // fail the allowlist check (the key set is the security boundary).
+    for (const key of ["creatorId", "dealId", "contactId", "ownerEmail", "brandName"]) {
+      expect(() => assertPublicViewIsTenantSafe({ ...clean, [key]: "x" })).toThrow();
+    }
+
+    // A forbidden *value* smuggled into an allowed field must fail the marker
+    // scan even when the key set is still exactly the allowlist — this is the
+    // privacy assertion, distinct from the shape assertion above.
+    expect(() => assertPublicViewIsTenantSafe({ ...clean, title: OWNER_EMAIL })).toThrow();
+    expect(() => assertPublicViewIsTenantSafe({ ...clean, title: CONTACT_EMAIL })).toThrow();
+    expect(() =>
+      assertPublicViewIsTenantSafe({ ...clean, creatorDisplayName: "Brand A" })
+    ).toThrow();
+    expect(() =>
+      assertPublicViewIsTenantSafe({ ...clean, title: "Sponsorship for Brand A" })
+    ).toThrow();
   });
 });
