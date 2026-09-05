@@ -21,6 +21,17 @@ import {
 } from "lucide-react";
 import QueryError from "@/components/QueryError";
 import StatusChip from "@/components/shared/StatusChip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 type LatestDelivery = inferRouterOutputs<AppRouter>["invoice"]["latestDeliveries"][number];
 
@@ -421,25 +432,47 @@ export default function Payments() {
                       </button>
                     )}
                     {canSend && (
-                      <button
-                        onClick={() => {
-                          const confirmMessage = delivery
-                            ? `Resend this invoice to ${delivery.toEmail}? This puts another email in their inbox.`
-                            : "Send this invoice? This puts an email in the brand's inbox.";
-                          if (!confirm(confirmMessage)) return;
-                          sendInvoice.mutate({ id: inv.id });
-                        }}
-                        /* Scoped to the row being sent. `isPending` alone
-                           greys every Send button on the page, which reads as
-                           "sending is down" rather than "this one is in
-                           flight" — and sends to different invoices do not
-                           contend with each other. */
-                        disabled={sendInvoice.isPending && sendInvoice.variables?.id === inv.id}
-                        className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white transition-colors hover:bg-pine-hover disabled:opacity-50"
-                      >
-                        <Send className="h-3 w-3" />
-                        {delivery ? "Resend" : "Send invoice"}
-                      </button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <button
+                            /* Scoped to the row being sent. `isPending` alone
+                               greys every Send button on the page, which reads
+                               as "sending is down" rather than "this one is in
+                               flight" — and sends to different invoices do not
+                               contend with each other. */
+                            disabled={sendInvoice.isPending && sendInvoice.variables?.id === inv.id}
+                            className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white transition-colors hover:bg-pine-hover disabled:opacity-50"
+                          >
+                            <Send className="h-3 w-3" />
+                            {delivery ? "Resend" : "Send invoice"}
+                          </button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>
+                              {delivery
+                                ? `Resend this invoice to ${delivery.toEmail}?`
+                                : "Send this invoice?"}
+                            </AlertDialogTitle>
+                            <AlertDialogDescription>
+                              {delivery
+                                ? "This puts another email in their inbox."
+                                : "This puts an email in the brand's inbox."}
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel className="h-8 rounded-md border border-hairline px-3 text-[13px] font-medium text-ink-3 transition-colors hover:bg-surface-subtle">
+                              Cancel
+                            </AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() => sendInvoice.mutate({ id: inv.id })}
+                              className="h-8 rounded-md bg-pine px-3 text-[13px] font-medium text-white transition-colors hover:bg-pine-hover"
+                            >
+                              {delivery ? "Resend" : "Send"}
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     )}
                     <button
                       onClick={() =>

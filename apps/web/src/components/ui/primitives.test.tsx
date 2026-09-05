@@ -9,6 +9,14 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
+} from "./alert-dialog";
 import { Avatar, AvatarFallback } from "./avatar";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./dialog";
 import {
@@ -157,6 +165,25 @@ describe("Dialog", () => {
       </Dialog>
     );
     expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+  });
+});
+
+describe("AlertDialog", () => {
+  it("renders an alertdialog role with title, description, and confirm/cancel actions", () => {
+    render(
+      <AlertDialog open>
+        <AlertDialogContent>
+          <AlertDialogTitle>Send this invoice?</AlertDialogTitle>
+          <AlertDialogDescription>This puts an email in the brand's inbox.</AlertDialogDescription>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction>Send</AlertDialogAction>
+        </AlertDialogContent>
+      </AlertDialog>
+    );
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(screen.getByText("Send this invoice?")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
   });
 });
 
