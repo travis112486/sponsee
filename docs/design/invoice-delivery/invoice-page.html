@@ -272,7 +272,7 @@
       <div>
         <h1 class="from-name serif">{{creatorDisplayName}}</h1>
         <div class="from-sub">Invoice for sponsorship services</div>
-        <div class="from-sub">{{creatorEmail}}</div>
+        {{#if creatorEmail}}<div class="from-sub">{{creatorEmail}}</div>{{/if}}
       </div>
       <div class="doc-id">
         <div class="doc-label">Invoice</div>
