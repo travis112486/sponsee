@@ -43,7 +43,7 @@ async function seedBase() {
 
   const [brandA] = await db
     .insert(schema.brands)
-    .values({ creatorId: creatorAId, name: "Brand A" })
+    .values({ creatorId: creatorAId, name: "Brand A", domain: "branda.com" })
     .returning();
   const [brandB] = await db
     .insert(schema.brands)
@@ -392,6 +392,7 @@ describe("dashboard.overview", () => {
     ]);
     expect(result.deliverablesDue[0].dealTitle).toBe("Flat deal");
     expect(result.deliverablesDue[0].brandName).toBe("Brand A");
+    expect(result.deliverablesDue[0].brandDomain).toBe("branda.com");
   });
 
   it("keeps the due-this-week window 7 calendar days wide across a DST transition", async () => {

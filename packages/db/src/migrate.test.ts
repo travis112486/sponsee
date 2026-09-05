@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  describeTarget,
   findUnappliedMigrations,
   isEntrypoint,
   readJournal,
@@ -140,5 +141,22 @@ describe("isEntrypoint", () => {
   it("does not fire when the module is merely imported", () => {
     expect(isEntrypoint("/usr/bin/some-other-script.js", import.meta.url)).toBe(false);
     expect(isEntrypoint(undefined, import.meta.url)).toBe(false);
+  });
+});
+
+describe("describeTarget", () => {
+  // This string goes into the Render deploy log, which is retained and
+  // readable by anyone with dashboard access (SPO-382).
+  it("names the host and database but never the credentials", () => {
+    const described = describeTarget(
+      "postgresql://neondb_owner:npg_supersecret@ep-x-1.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require",
+    );
+    expect(described).toBe("ep-x-1.c-5.us-east-2.aws.neon.tech/neondb");
+    expect(described).not.toContain("npg_supersecret");
+    expect(described).not.toContain("neondb_owner");
+  });
+
+  it("degrades to a legible placeholder rather than throwing", () => {
+    expect(describeTarget("not a url")).toBe("<unparseable connection string>");
   });
 });
