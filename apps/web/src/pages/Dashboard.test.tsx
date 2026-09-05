@@ -122,6 +122,7 @@ function overview(over: Record<string, unknown> = {}) {
         dealId: "deal-1",
         dealTitle: "Q4 Campaign",
         brandName: "Voltaic Energy",
+        brandDomain: "voltaic.energy",
       },
     ],
     overdue: {
@@ -605,12 +606,17 @@ describe("overdue alert", () => {
 
 describe("deliverables due this week", () => {
   it("renders the row with platform, brand, progress and a due chip", () => {
-    renderDashboard();
+    const { container } = renderDashboard();
 
     expect(screen.getByText("Thursday ad read")).toBeInTheDocument();
     expect(screen.getByText("(1/3 done)")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Twitch" })).toBeInTheDocument();
     expect(screen.getByText("Voltaic Energy")).toBeInTheDocument();
+    // Brand mark must carry the brand's domain so a real logo renders, not the
+    // monogram (SPO-478 — the dashboard was the one BrandMark site missing it).
+    expect(
+      container.querySelector('img[src="/api/brand-icon?domain=voltaic.energy"]')
+    ).toBeInTheDocument();
     // Due Thu 17 Sep, rendered on Tue 15 Sep.
     expect(screen.getByText("Thu")).toBeInTheDocument();
   });
