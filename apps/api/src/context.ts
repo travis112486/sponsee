@@ -23,6 +23,10 @@ export async function createContext({ req }: FetchCreateContextFnOptions) {
     session,
     creatorId,
     db,
+    // Raw request headers, so public procedures can resolve the client IP for
+    // their own rate limiting (see invoice.publicView). Not part of the auth
+    // surface — never trust these for anything but abuse bounding.
+    headers: req.headers,
   };
 }
 

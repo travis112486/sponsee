@@ -136,6 +136,10 @@ const variants = {
     brandName: "Meridian Peripherals International Holdings B.V.",
   },
   paid: { paidAt: "2026-09-18T00:00:00Z" },
+  // Snapshot frozen before rails_snapshot.replyToEmail shipped, with no account
+  // email resolvable either: the contact line drops (see README) — undefined
+  // here means the key is absent entirely, the case that must render, not throw.
+  "no-email": { creatorEmail: undefined },
   minimal: {
     dealTitle: null,
     milestoneNote: null,
@@ -146,13 +150,40 @@ const variants = {
   },
 };
 
+// Guard self-test: the https:-only scheme check must reject each of these, or
+// the build aborts before writing anything — so deleting the four-line guard in
+// derive() cannot still produce a green run. Scheme match is deliberately
+// lowercase-strict: uppercase HTTPS:// is refused rather than normalized.
+const rejectedLinks = [
+  "javascript:alert(1)",
+  "data:text/html,<script>x</script>",
+  "http://paypal.me/x",
+  "HTTPS://paypal.me/x",
+];
+for (const bad of rejectedLinks) {
+  let threw = false;
+  try {
+    derive({ ...base, paypalLink: bad });
+  } catch {
+    threw = true;
+  }
+  if (!threw) {
+    console.error(`scheme guard failed to reject: ${bad}`);
+    process.exit(1);
+  }
+}
+
 const emailHtml = readFileSync(join(here, "invoice-email.html"), "utf8");
 const emailText = readFileSync(join(here, "invoice-email.txt"), "utf8");
 const pageHtml = readFileSync(join(here, "invoice-page.html"), "utf8");
 const subjectText = readFileSync(join(here, "invoice-subject.txt"), "utf8");
 
 for (const [name, overrides] of Object.entries(variants)) {
-  const vars = derive({ ...base, ...overrides });
+  const fixture = { ...base, ...overrides };
+  // An `undefined` override means "key absent from the snapshot", which is a
+  // different failure mode than null and must also render (no-email variant).
+  for (const k of Object.keys(fixture)) if (fixture[k] === undefined) delete fixture[k];
+  const vars = derive(fixture);
   writeFileSync(join(outDir, `${name}.email.html`), render(emailHtml, vars, { escapeHtml: true }));
   writeFileSync(join(outDir, `${name}.email.txt`), render(emailText, vars, { escapeHtml: false }));
   writeFileSync(join(outDir, `${name}.subject.txt`), render(subjectText, vars, { escapeHtml: false }).trim() + "\n");

@@ -41,6 +41,43 @@ ledger (replies, stops, manual pulls)  ──apply──▶  Resend contact.unsu
                                               Broadcast skips them. Always.
 ```
 
+## Where the roster and ledger live
+
+**Not in this repo, and not in any repo.** `travis112486/sponsee` is public.
+
+The roster names real creators with their business email addresses and X
+handles. The ledger is sharper still: from the first touch onward it records
+`unsubscribed` / `complained` / `stop_requested` / `replied` against those same
+named people, which is an opt-out record of an identifiable person. Committing
+either publishes it to every clone and to GitHub code search — and because
+`refs/pull/*` is permanent, a later history rewrite cannot take it back. So
+`outreach/*.json` and `outreach/*.jsonl` are gitignored (SPO-415 / SPO-417).
+
+Keep the real files outside the working tree and pass them explicitly:
+
+```
+~/.config/sponsee/outreach/wave1-roster.json
+~/.config/sponsee/outreach/wave1-ledger.jsonl
+```
+
+`--roster` and `--ledger` are required arguments with no default, so there is no
+path that silently falls back to an in-repo copy. Any location works; the one
+above is the convention this runbook assumes.
+
+**The tracked fixtures are the schema of record**, and every person in them is
+invented:
+
+| Fixture | What it documents |
+| --- | --- |
+| `outreach/wave1-roster.example.json` | Roster row shape — `id`, `name`, `firstName`, `email`, `xHandle` |
+| `outreach/wave1-ledger.example.jsonl` | Ledger line shape — `at`, `reason`, `email` / `xHandle`, `note` |
+
+Point `--roster` / `--ledger` at those two to exercise the gate without touching
+real contact data. A fixture is a rehearsal, never a send-day input.
+
+The roster's authoritative contents are the Wave 1 send list on SPO-408, not a
+file in this tree.
+
 ## Send-day runbook
 
 Run this immediately before **every** touch — T1, T2 and T3, on both channels.
@@ -71,9 +108,10 @@ export RESEND_API_KEY=$(infisical secrets get RESEND_API_KEY \
   --projectId $INFISICAL_PROJECT_ID --env prod --plain --silent)
 
 # 1. Dry run — read-only. Shows the plan and anything unresolved.
+#    Both paths point OUTSIDE the repo — see "Where the roster and ledger live".
 node scripts/outreach/wave1-preflight.mjs \
-  --roster outreach/wave1-roster.json \
-  --ledger outreach/wave1-ledger.jsonl \
+  --roster ~/.config/sponsee/outreach/wave1-roster.json \
+  --ledger ~/.config/sponsee/outreach/wave1-ledger.jsonl \
   --audience wave-1-outreach \
   --touch T2 --channel email
 
@@ -143,10 +181,13 @@ opt-out, and `block` is reserved for the latter.
 
 **Wave 1 runs the SPO-280 acceptance check with the flag off.** Building an
 audience is where the flag belongs in general — it is the check for "did we push
-every name we hold" — but SPO-292 decided that four Wave 1 contacts (Sinder,
-Snuffy, Dokibird, Shxtou) keep the `Hey there —` fallback permanently: SPO-269
-recorded them as deliberately identity-withholding VTuber personas, so there is
-no name to push and the flag would block on rows nobody intends to fix. Read the
+every name we hold" — but SPO-292 decided that four Wave 1 contacts keep the
+`Hey there —` fallback permanently: SPO-269 recorded them as deliberately
+identity-withholding VTuber personas, so there is
+no name to push and the flag would block on rows nobody intends to fix. (Which
+four is in the roster, which is not in this repo — see "Where the roster and
+ledger live". Naming them here would republish the roster a line at a time.)
+Read the
 census instead. Every fallback recipient is printed by default, so a green Wave
 1A preflight should name those four and no others — the 11-of-15 personalized
 figure on record. On a wave where every recipient *should* have a name, turn the
@@ -193,8 +234,8 @@ not collide with each other.
 [
   { "id": "ada", "name": "Ada Stream", "firstName": "Ada",
     "email": "ada@example.com", "xHandle": "@adastream" },
-  { "id": "doki", "name": "Dokibird", "firstName": "Doki",
-    "email": null, "xHandle": "@dokibird" }
+  { "id": "nova", "name": "Nova Quokka", "firstName": "Nova",
+    "email": null, "xHandle": "@novaquokka" }
 ]
 ```
 
@@ -219,7 +260,7 @@ than a silently dropped opt-out:
 ```jsonl
 # Wave 1 suppression ledger
 {"at":"2026-09-23T09:00:00Z","reason":"replied","email":"ada@example.com","note":"replied to T1"}
-{"at":"2026-09-24T14:20:00Z","reason":"stop_requested","xHandle":"@dokibird","note":"DM1 reply: stop"}
+{"at":"2026-09-24T14:20:00Z","reason":"stop_requested","xHandle":"@novaquokka","note":"DM1 reply: stop"}
 ```
 
 Reasons: `replied`, `stop_requested`, `unsubscribed`, `bounced`, `complained`,
@@ -251,8 +292,8 @@ Two things close it:
 
   ```
   Wave 1 preflight — T2 / email
-  roster: outreach/wave1-roster.json (26 rows)
-  ledger: outreach/wave1-ledger.jsonl (3 entries)
+  roster: ~/.config/sponsee/outreach/wave1-roster.json (26 rows)
+  ledger: ~/.config/sponsee/outreach/wave1-ledger.jsonl (3 entries)
   ```
 
   Read those two lines before the SEND/SUPPRESS list. Requiring the file to
