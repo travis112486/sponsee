@@ -40,7 +40,7 @@ A live-streamer media kit built around the right unit needs:
 
 ## Effective CPVH: the number that makes your kit credible
 
-If you've run past deals, compute your **effective CPVH** for each one — what you were paid, divided by (CCV × sponsored hours) — and quietly check it against the published band before it goes anywhere near a media kit. If a past deal came in well under $0.60/viewer-hour, that's not a number to advertise; it's a signal you were underpriced on that deal, worth fixing in your rate section rather than repeating in your history.[^1][^3]
+If you've run past deals, compute your **[effective CPVH](/blog/what-is-cpvh)** for each one — what you were paid, divided by (CCV × sponsored hours) — and quietly check it against the published band before it goes anywhere near a media kit. If a past deal came in well under $0.60/viewer-hour, that's not a number to advertise; it's a signal you were underpriced on that deal, worth fixing in your rate section rather than repeating in your history.[^1][^3]
 
 ## Keep it current
 

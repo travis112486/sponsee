@@ -87,9 +87,17 @@ export async function handleEmailWebhook(c: Context) {
             .where(eq(invoiceDeliveries.id, delivery.id));
           break;
         case "bounced": {
+          // Persist the provider's reason on the row, not just in the activity
+          // payload (SPO-433) — the Payments bounce line needs it to tell a
+          // retryable "mailbox full" apart from a "no such user" that makes
+          // Resend a trap. `?? null` rather than leaving it undefined: Drizzle
+          // omits undefined keys from the UPDATE, which would strand a stale
+          // reason from an earlier bounce on the same row. Blank detail is
+          // normalized to null so the UI falls back instead of rendering "".
+          const bounceDetail = event.detail?.trim() || null;
           await db
             .update(invoiceDeliveries)
-            .set({ status: "bounced", bouncedAt: now, updatedAt: now })
+            .set({ status: "bounced", bouncedAt: now, bounceDetail, updatedAt: now })
             .where(eq(invoiceDeliveries.id, delivery.id));
 
           // Loud: a bounced invoice is the same failure as no delivery. The

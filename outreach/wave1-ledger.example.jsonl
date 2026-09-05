@@ -15,4 +15,4 @@
 # An opt-out on either channel silences BOTH channels.
 {"at":"2026-09-22T14:03:00Z","reason":"replied","email":"bookings@pixelforge.example","xHandle":null,"note":"asked for the deck, moved to the pipeline"}
 {"at":"2026-09-22T18:41:00Z","reason":"unsubscribed","email":"partnerships@lumenlark.example","xHandle":null}
-{"at":"2026-09-23T09:15:00Z","reason":"stop_requested","email":null,"xHandle":"gravelgospel","note":"DM reply: not interested, do not follow up"}
+{"at":"2026-09-23T09:15:00Z","reason":"stop_requested","email":null,"xHandle":"@gravelgospel","note":"DM reply: not interested, do not follow up"}

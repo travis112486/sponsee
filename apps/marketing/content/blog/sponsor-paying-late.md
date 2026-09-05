@@ -46,7 +46,7 @@ Most late payments resolve somewhere in the 3-step sequence — invoices really 
 - The brand contact goes unreachable — email bounces, socials go quiet, the company itself is struggling.
 - You're told a version of "we'll get to it" more than twice with no new date attached.
 
-At that point your options are limited but real: small-claims court (viable for larger amounts, slow for small ones), a collections service (takes a cut, but so does chasing forever for nothing), or naming your terms clearly to future brands so the next deal doesn't repeat this one — net-15 instead of net-60, deposit up front for new-to-you brands, no deliverables before signed terms. None of this is the outcome anyone wants, but knowing when to stop chasing and start protecting future deals is part of running this like a business.
+At that point your options are limited but real: small-claims court (viable for larger amounts, slow for small ones), a collections service (takes a cut, but so does chasing forever for nothing), or naming your terms clearly to future brands so the next deal doesn't repeat this one — [net-15 instead of net-60](/blog/net-30-net-60-net-90), deposit up front for new-to-you brands, no deliverables before [signed terms](/blog/sponsorship-contract-checklist). None of this is the outcome anyone wants, but knowing when to stop chasing and start protecting future deals is part of running this like a business.
 
 ## Prevent it on the next deal
 

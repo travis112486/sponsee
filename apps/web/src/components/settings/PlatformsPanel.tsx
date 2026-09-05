@@ -75,6 +75,9 @@ export default function PlatformsPanel() {
     onError: (err) => toast.error(err.message || "Failed to sync"),
   });
 
+  // The provider's original error text, stashed before a recovery-mode
+  // completePlatformConnect fires so the mutation-level onError can replay it.
+  const recoveryErrorToast = useRef<(() => void) | null>(null);
   const completeConnect = trpc.settings.completePlatformConnect.useMutation({
     onSuccess: ({ row, outcome }, variables) => {
       const label = platformLabels[variables.platform];
@@ -89,8 +92,19 @@ export default function PlatformsPanel() {
       }
       utils.settings.getPlatforms.invalidate();
     },
-    // No default onError: the two mutate() call sites below need different
-    // failure toasts (plain failure vs. the original provider error).
+    // Mutation-level, not mutate()-level: TanStack Query drops mutate()
+    // callbacks when the component unmounts before the mutation settles, which
+    // would swallow the failure toast if the creator navigates off /settings
+    // mid-flight (SPO-142).
+    onError: (err, variables) => {
+      if (variables.recovery) {
+        // Recovery didn't find a fresh link — the connect really failed, so
+        // show the provider's original error, not a generic one.
+        recoveryErrorToast.current?.();
+      } else {
+        toast.error(serverErrorMessage(err, "Failed to finish connecting"));
+      }
+    },
   });
   const disconnect = trpc.settings.disconnectPlatform.useMutation({
     onSuccess: () => {
@@ -116,10 +130,7 @@ export default function PlatformsPanel() {
     handledConnectReturn.current = true;
 
     if (connected === "twitch" || connected === "kick") {
-      completeConnect.mutate(
-        { platform: connected },
-        { onError: (err) => toast.error(serverErrorMessage(err, "Failed to finish connecting")) }
-      );
+      completeConnect.mutate({ platform: connected });
     } else if (connectError) {
       const detail = searchParams.get("error");
       const connectErrorToast = () =>
@@ -130,8 +141,10 @@ export default function PlatformsPanel() {
         // A replayed OAuth callback (proxy retry, browser prefetch) burns the
         // one-time state and redirects here with state_mismatch even though
         // the first hit already linked the account. The server knows whether
-        // the link landed — ask it before believing the error.
-        completeConnect.mutate({ platform: connectError }, { onError: connectErrorToast });
+        // the link landed — ask it (in recovery mode, so only a fresh link
+        // counts) before believing the error.
+        recoveryErrorToast.current = connectErrorToast;
+        completeConnect.mutate({ platform: connectError, recovery: true });
       } else {
         connectErrorToast();
       }

@@ -415,6 +415,13 @@ export const invoiceDeliveries = pgTable(
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     openedAt: timestamp("opened_at", { withTimezone: true }),
     bouncedAt: timestamp("bounced_at", { withTimezone: true }),
+    // Provider-supplied reason for the bounce, verbatim (SPO-433). "why" drives
+    // opposite creator responses — "mailbox full" is worth resending to the
+    // same address later, "no such user" means the contact is wrong and Resend
+    // is a trap — so the reason has to survive on the row, not only in an
+    // activity_events payload. Nullable: old rows predate it, and a provider
+    // can bounce with no detail at all.
+    bounceDetail: text("bounce_detail"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
