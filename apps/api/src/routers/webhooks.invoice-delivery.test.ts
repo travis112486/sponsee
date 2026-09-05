@@ -3,10 +3,17 @@ import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { sql, eq } from "drizzle-orm";
 import { handleEmailWebhook } from "./webhooks.js";
+import { runChaseTick } from "../jobs/chase-tick.js";
 import { ResendProvider } from "../email/resend.js";
 import { PostmarkProvider } from "../email/postmark.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
+
+// chase-tick's rescue pass reaches for pg-boss; there is no DATABASE_URL here.
+vi.mock("../jobs/boss.js", () => ({
+  getBoss: vi.fn(() => Promise.resolve({ send: vi.fn(() => Promise.resolve()) })),
+  stopBoss: vi.fn(() => Promise.resolve()),
+}));
 
 // SPO-364 — webhook correlation must now cover invoice_deliveries, not just
 // chase_events. These tests replay stored Resend payloads through the real
@@ -305,5 +312,142 @@ describe("invoice delivery webhook correlation (SPO-364)", () => {
       mockContext({ type: "email.delivered", data: { email_id: "unknown-id", to: ["x@example.com"] } })
     );
     expect(result.data).toMatchObject({ ok: true, matched: false });
+  });
+});
+
+// SPO-365 — the Payments panel tells a creator "chase is locked" once an
+// invoice email bounces. That sentence was false: the invoice-delivery bounce
+// branch wrote the delivery row and an activity event but left
+// invoice_chase_state.mode = "armed", and chase-tick selects on exactly that
+// with no delivery gate. So a reminder for an undelivered invoice landed in
+// Awaiting review on the same page that claimed reminders had stopped.
+//
+// These run the real tick against the real (PGlite) db rather than asserting
+// the write in isolation: the claim under test is about what the chase job
+// does, so only the job can falsify it.
+describe("an invoice-delivery bounce stops the chase (SPO-365)", () => {
+  /** Arms a chase whose step 1 is already due, so a tick must act on it. */
+  async function armDueChase(creatorId: string, invoiceId: string) {
+    await db.insert(schema.chaseTemplates).values({
+      creatorId,
+      step: 1,
+      name: "Friendly reminder",
+      offsetDays: 1,
+      subject: "Payment reminder for {invoice_id}",
+      body: "Hi {brand_contact}, please pay {amount}.",
+      enabled: true,
+    });
+
+    await db.insert(schema.invoiceChaseState).values({
+      invoiceId,
+      mode: "armed",
+      nextStep: 1,
+      nextActionAt: new Date(Date.now() - 60 * 60 * 1000), // due an hour ago
+    });
+  }
+
+  async function chaseEventCount(id: string) {
+    const rows = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, id));
+    return rows.length;
+  }
+
+  it("CONTROL: without a bounce, the same armed state does queue a reminder", async () => {
+    const { creator, invoice } = await seedInvoiceDelivery("res-123");
+    await armDueChase(creator.id, invoice.id);
+
+    // No webhook replayed. If this were 0, the assertion below would pass for
+    // the wrong reason — a tick that never fires proves nothing about gating.
+    expect(await runChaseTick()).toBe(1);
+    expect(await chaseEventCount(invoice.id)).toBe(1);
+
+    const [state] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(state.mode).toBe("armed");
+  });
+
+  it("pauses the chase and queues nothing after the invoice email bounces", async () => {
+    const { creator, invoice } = await seedInvoiceDelivery("res-123");
+    await armDueChase(creator.id, invoice.id);
+
+    const result = await handleEmailWebhook(mockContext(bouncedPayload));
+    expect(result.data).toMatchObject({ ok: true, handled: true, type: "bounced" });
+
+    const [state] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(state.mode).toBe("paused");
+    expect(state.pausedReason).toBe("invoice_hard_bounce");
+
+    // Same due state, same tick as the control — now it must produce nothing.
+    expect(await runChaseTick()).toBe(0);
+    expect(await chaseEventCount(invoice.id)).toBe(0);
+  });
+
+  it("leaves a manual pause reason and a completed sequence alone", async () => {
+    const { creator, invoice } = await seedInvoiceDelivery("res-123");
+    await armDueChase(creator.id, invoice.id);
+    await db
+      .update(schema.invoiceChaseState)
+      .set({ mode: "paused", pausedReason: "Brand asked us to hold" })
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+
+    await handleEmailWebhook(mockContext(bouncedPayload));
+
+    // Already stopped, so the bounce has nothing to stop — overwriting the
+    // reason would only destroy the creator's own note.
+    const [paused] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(paused.mode).toBe("paused");
+    expect(paused.pausedReason).toBe("Brand asked us to hold");
+
+    // And a finished sequence is not reopened as paused.
+    await db
+      .update(schema.invoiceChaseState)
+      .set({ mode: "completed", pausedReason: null })
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    await db
+      .update(schema.invoiceDeliveries)
+      .set({ status: "sent", bouncedAt: null })
+      .where(eq(schema.invoiceDeliveries.providerMessageId, "res-123"));
+
+    await handleEmailWebhook(mockContext(bouncedPayload));
+
+    const [completed] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(completed.mode).toBe("completed");
+  });
+
+  it("does not touch a different invoice's armed chase", async () => {
+    const { creator, invoice } = await seedInvoiceDelivery("res-123");
+    await armDueChase(creator.id, invoice.id);
+
+    const [other] = await db
+      .insert(schema.invoices)
+      .values({ creatorId: creator.id, number: 2, amountCents: 250000, status: "open" })
+      .returning();
+    await db.insert(schema.invoiceChaseState).values({
+      invoiceId: other.id,
+      mode: "armed",
+      nextStep: 1,
+      nextActionAt: new Date(Date.now() - 60 * 60 * 1000),
+    });
+
+    await handleEmailWebhook(mockContext(bouncedPayload));
+
+    const [otherState] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, other.id));
+    expect(otherState.mode).toBe("armed");
   });
 });

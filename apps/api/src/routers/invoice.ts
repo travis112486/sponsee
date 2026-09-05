@@ -158,6 +158,37 @@ export const invoiceRouter = createTRPCRouter({
       .orderBy(desc(invoices.createdAt));
   }),
 
+  // One row per invoice — the latest send attempt only (SPO-365). The
+  // Payments list renders a delivery chip per row and needs this in one
+  // round trip, not N+1 queries per invoice. `invoice_deliveries.status`
+  // has no "opened" member (see webhooks.ts) — callers derive Opened from
+  // `openedAt` themselves.
+  latestDeliveries: creatorScopedProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select({
+        invoiceId: invoiceDeliveries.invoiceId,
+        attempt: invoiceDeliveries.attempt,
+        status: invoiceDeliveries.status,
+        toEmail: invoiceDeliveries.toEmail,
+        sentAt: invoiceDeliveries.sentAt,
+        deliveredAt: invoiceDeliveries.deliveredAt,
+        openedAt: invoiceDeliveries.openedAt,
+        bouncedAt: invoiceDeliveries.bouncedAt,
+      })
+      .from(invoiceDeliveries)
+      .innerJoin(invoices, eq(invoiceDeliveries.invoiceId, invoices.id))
+      .where(eq(invoices.creatorId, ctx.creatorId))
+      .orderBy(invoiceDeliveries.invoiceId, desc(invoiceDeliveries.attempt));
+
+    const latestByInvoice = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      if (!latestByInvoice.has(row.invoiceId)) {
+        latestByInvoice.set(row.invoiceId, row);
+      }
+    }
+    return Array.from(latestByInvoice.values());
+  }),
+
   listByDeal: creatorScopedProcedure
     .input(z.object({ dealId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
@@ -400,6 +431,23 @@ export const invoiceRouter = createTRPCRouter({
           .update(invoiceDeliveries)
           .set({ status: "failed", updatedAt: new Date() })
           .where(eq(invoiceDeliveries.id, delivery.id));
+
+        // Only reachable on a resend: the chase arms below, after a send that
+        // succeeded. So a failure here can leave an armed chase on an invoice
+        // whose latest send never left — same asymmetry as the bounce webhook,
+        // and the Payments lock line makes the same promise for both. Stopping
+        // is the safe direction; the creator re-arms with Resume once a resend
+        // gets through. Scoped to armed so a completed or manually paused
+        // sequence is left as the creator left it.
+        await ctx.db
+          .update(invoiceChaseState)
+          .set({ mode: "paused", pausedReason: "invoice_send_failed", updatedAt: new Date() })
+          .where(
+            and(
+              eq(invoiceChaseState.invoiceId, invoice.id),
+              eq(invoiceChaseState.mode, "armed")
+            )
+          );
         throw error;
       }
 

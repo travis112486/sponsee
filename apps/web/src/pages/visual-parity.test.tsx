@@ -50,7 +50,9 @@ vi.mock("@/trpc", () => ({
     },
     invoice: {
       list: { useQuery: vi.fn() },
+      latestDeliveries: { useQuery: vi.fn() },
       markPaid: { useMutation: vi.fn() },
+      send: { useMutation: vi.fn() },
       create: { useMutation: vi.fn() },
     },
     activity: {
@@ -137,6 +139,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockQuery(trpc.deals.list.useQuery, idleQuery());
   mockQuery(trpc.invoice.list.useQuery, idleQuery());
+  mockQuery(trpc.invoice.latestDeliveries.useQuery, idleQuery());
   mockQuery(trpc.activity.list.useQuery, idleQuery());
   mockQuery(trpc.chase.awaitingReview.useQuery, idleQuery());
   mockQuery(trpc.chase.state.useQuery, idleQuery());
@@ -163,6 +166,9 @@ beforeEach(() => {
     idleMutation()
   );
   (trpc.invoice.markPaid.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
+    idleMutation()
+  );
+  (trpc.invoice.send.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(
     idleMutation()
   );
   (trpc.invoice.create.useMutation as ReturnType<typeof vi.fn>).mockReturnValue(

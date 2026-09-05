@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@sponsee/api/routers";
 import { trpc } from "@/trpc";
 import { cn } from "@/lib/utils";
 import { serverErrorMessage } from "@/lib/trpc-error";
@@ -18,6 +20,73 @@ import {
   Edit3,
 } from "lucide-react";
 import QueryError from "@/components/QueryError";
+import StatusChip from "@/components/shared/StatusChip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+
+type LatestDelivery = inferRouterOutputs<AppRouter>["invoice"]["latestDeliveries"][number];
+
+type DeliveryDisplayState =
+  | "queued"
+  | "sent"
+  | "delivered"
+  | "opened"
+  | "bounced"
+  | "failed"
+  | "unknown";
+
+// Every branch here is live: `invoice.send` writes queued -> sent (or -> failed
+// on a provider throw), and SPO-364's webhook correlation writes delivered /
+// openedAt / bounced onto invoice_deliveries (see webhooks.ts).
+function deliveryDisplayState(delivery: LatestDelivery): DeliveryDisplayState {
+  if (delivery.status === "bounced") return "bounced";
+  if (delivery.status === "failed") return "failed";
+  if (delivery.openedAt) return "opened";
+  if (delivery.deliveredAt || delivery.status === "delivered") return "delivered";
+  if (delivery.status === "queued") return "queued";
+  if (delivery.status === "sent") return "sent";
+  return "unknown";
+}
+
+const deliveryChipConfig: Record<
+  DeliveryDisplayState,
+  { label: string; tone: "amber" | "accent" | "pine" | "danger" }
+> = {
+  queued: { label: "Sending", tone: "amber" },
+  sent: { label: "Sent", tone: "amber" },
+  delivered: { label: "Delivered", tone: "accent" },
+  opened: { label: "Opened", tone: "pine" },
+  bounced: { label: "Bounced", tone: "danger" },
+  failed: { label: "Send failed", tone: "danger" },
+  unknown: { label: "Unknown", tone: "amber" },
+};
+
+function chaseLockReason(
+  deliveryState: DeliveryDisplayState | null
+): string | null {
+  if (deliveryState === null)
+    return 'Chase is locked — this invoice has not been sent to the brand yet. Use "Send invoice" above first, so reminders have something to follow up on.';
+  if (deliveryState === "queued")
+    return "Chase is locked — this invoice's send has not left the queue yet. Refresh in a moment.";
+  if (deliveryState === "sent")
+    return "Chase is locked — this invoice has been sent, but delivery is not confirmed yet. Wait for Delivered or Opened before starting reminders.";
+  if (deliveryState === "bounced")
+    return "Chase is locked — this invoice's email bounced, so reminders would go nowhere until it's resent to a working address.";
+  if (deliveryState === "failed")
+    return "Chase is locked — the last send failed before it reached the brand, so reminders would go nowhere until it's resent.";
+  if (deliveryState === "unknown")
+    return "Chase is locked — this invoice's delivery status is unknown. Refresh before starting reminders.";
+  return null;
+}
 
 function formatCents(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -45,12 +114,31 @@ const statusConfig: Record<
 export default function Payments() {
   const utils = trpc.useUtils();
   const { data: invoices, isLoading, isError, refetch } = trpc.invoice.list.useQuery();
+  const {
+    data: deliveries,
+    isFetching: deliveriesFetching,
+    isError: deliveriesError,
+  } = trpc.invoice.latestDeliveries.useQuery();
   const { data: awaitingReview } = trpc.chase.awaitingReview.useQuery();
+  const deliveryByInvoice = useMemo(() => {
+    const map = new Map<string, LatestDelivery>();
+    for (const d of deliveries ?? []) map.set(d.invoiceId, d);
+    return map;
+  }, [deliveries]);
   const markPaid = trpc.invoice.markPaid.useMutation({
     onSuccess: () => {
       utils.invoice.list.invalidate();
       toast("Invoice marked as paid");
     },
+  });
+  const sendInvoice = trpc.invoice.send.useMutation({
+    onSuccess: () => {
+      utils.invoice.list.invalidate();
+      utils.invoice.latestDeliveries.invalidate();
+      toast("Invoice sent");
+    },
+    onError: (err) =>
+      toast.error(serverErrorMessage(err, "Couldn't send this invoice. Please try again.")),
   });
   const approveChase = trpc.chase.approve.useMutation({
     onSuccess: () => {
@@ -249,6 +337,12 @@ export default function Payments() {
 
       {/* Invoice list */}
       <div className="rounded-xl border border-hairline bg-surface">
+        {deliveriesError && (
+          <div className="flex items-center gap-1.5 border-b border-hairline bg-brick-tint/40 px-4 py-2 text-[11px] font-medium text-brick">
+            <AlertTriangle className="h-3 w-3 shrink-0" />
+            Couldn't load delivery status. Refresh before sending or managing chase.
+          </div>
+        )}
         <div className="grid grid-cols-12 gap-3 border-b border-hairline px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-ink-3">
           <div className="col-span-3">Invoice</div>
           <div className="col-span-2">Amount</div>
@@ -265,6 +359,16 @@ export default function Payments() {
             const daysOverdue = isOverdue && dueDate ? daysDiff(dueDate, now) : 0;
             const status = statusConfig[inv.status] ?? statusConfig.draft;
             const StatusIcon = status.icon;
+            const delivery = deliveryByInvoice.get(inv.id);
+            const deliveryState = delivery ? deliveryDisplayState(delivery) : null;
+            const deliveryChip = deliveryState ? deliveryChipConfig[deliveryState] : null;
+            const chaseLock = deliveriesError
+              ? "Chase is locked — we couldn't verify invoice delivery. Refresh before starting reminders."
+              : deliveriesFetching
+                ? "Chase is locked while we're checking invoice delivery."
+                : chaseLockReason(deliveryState);
+            const canSend = inv.status === "draft" || inv.status === "open";
+            const deliveryQueryUnknown = deliveriesFetching || deliveriesError;
 
             return (
               <div
@@ -306,7 +410,7 @@ export default function Payments() {
                       <span className="text-[12px] text-ink-3">—</span>
                     )}
                   </div>
-                  <div className="col-span-2">
+                  <div className="col-span-2 flex flex-col items-start gap-1">
                     <span
                       className={cn(
                         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
@@ -316,8 +420,11 @@ export default function Payments() {
                       <StatusIcon className="h-3 w-3" />
                       {status.label}
                     </span>
+                    {deliveryChip && (
+                      <StatusChip tone={deliveryChip.tone} label={deliveryChip.label} />
+                    )}
                   </div>
-                  <div className="col-span-3 flex items-center gap-2">
+                  <div className="col-span-3 flex flex-wrap items-center gap-2">
                     {inv.status === "open" && (
                       <button
                         onClick={() =>
@@ -328,6 +435,58 @@ export default function Payments() {
                         <CheckCircle2 className="h-3 w-3" />
                         Mark paid
                       </button>
+                    )}
+                    {canSend && deliveryQueryUnknown && (
+                      <button
+                        disabled
+                        className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white opacity-50"
+                      >
+                        <Send className="h-3 w-3" />
+                        {deliveriesFetching ? "Checking delivery" : "Delivery unavailable"}
+                      </button>
+                    )}
+                    {canSend && !deliveryQueryUnknown && (
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <button
+                            /* Scoped to the row being sent. `isPending` alone
+                               greys every Send button on the page, which reads
+                               as "sending is down" rather than "this one is in
+                               flight" — and sends to different invoices do not
+                               contend with each other. */
+                            disabled={sendInvoice.isPending && sendInvoice.variables?.id === inv.id}
+                            className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white transition-colors hover:bg-pine-hover disabled:opacity-50"
+                          >
+                            <Send className="h-3 w-3" />
+                            {delivery ? "Resend" : "Send invoice"}
+                          </button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>
+                              {delivery
+                                ? `Resend this invoice to ${delivery.toEmail}?`
+                                : "Send this invoice?"}
+                            </AlertDialogTitle>
+                            <AlertDialogDescription>
+                              {delivery
+                                ? "This puts another email in their inbox."
+                                : "This puts an email in the brand's inbox."}
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel className="h-8 rounded-md border border-hairline px-3 text-[13px] font-medium text-ink-3 transition-colors hover:bg-surface-subtle">
+                              Cancel
+                            </AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() => sendInvoice.mutate({ id: inv.id })}
+                              className="h-8 rounded-md bg-pine px-3 text-[13px] font-medium text-white transition-colors hover:bg-pine-hover"
+                            >
+                              {delivery ? "Resend" : "Send"}
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     )}
                     <button
                       onClick={() =>
@@ -346,9 +505,20 @@ export default function Payments() {
                   </div>
                 </div>
 
+                {/* Full-width so the reason sentence has room instead of
+                    wrapping hard inside the 2/12 Status column. */}
+                {(deliveryState === "bounced" || deliveryState === "failed") && (
+                  <p className="flex items-start gap-1 px-4 pb-3 text-[11px] font-medium text-brick">
+                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                    {deliveryState === "bounced" && delivery
+                      ? `Undelivered to ${delivery.toEmail} — confirm the address and resend.`
+                      : "The send failed before it reached the brand — resend to try again."}
+                  </p>
+                )}
+
                 {/* Expanded chase info */}
                 {expandedId === inv.id && inv.status === "open" && (
-                  <InvoiceChasePanel invoiceId={inv.id} />
+                  <InvoiceChasePanel invoiceId={inv.id} chaseLock={chaseLock} />
                 )}
               </div>
             );
@@ -382,7 +552,14 @@ function StatCard({
   );
 }
 
-function InvoiceChasePanel({ invoiceId }: { invoiceId: string }) {
+function InvoiceChasePanel({
+  invoiceId,
+  chaseLock,
+}: {
+  invoiceId: string;
+  /** Non-null when Resume must be gated; the string is the visible reason. */
+  chaseLock: string | null;
+}) {
   const { data: state } = trpc.chase.state.useQuery({ invoiceId });
   const { data: events } = trpc.chase.events.useQuery({ invoiceId });
   const pause = trpc.chase.pause.useMutation({
@@ -396,6 +573,10 @@ function InvoiceChasePanel({ invoiceId }: { invoiceId: string }) {
     },
   });
   const utils = trpc.useUtils();
+  // Links the lock sentence to the control it disables, so a screen reader
+  // announces the reason with the button instead of leaving the user to find
+  // a sentence elsewhere in the panel.
+  const lockId = `chase-lock-${invoiceId}`;
 
   return (
     <div className="mx-4 mb-4 rounded-lg border border-hairline bg-surface-subtle p-4">
@@ -430,13 +611,32 @@ function InvoiceChasePanel({ invoiceId }: { invoiceId: string }) {
         {state?.mode === "paused" && (
           <button
             onClick={() => resume.mutate({ invoiceId })}
-            className="flex h-6 items-center gap-1 rounded border border-hairline px-1.5 text-[11px] text-pine hover:bg-pine-tint"
+            disabled={chaseLock !== null}
+            aria-disabled={chaseLock !== null}
+            aria-describedby={chaseLock ? lockId : undefined}
+            className="flex h-6 items-center gap-1 rounded border border-hairline px-1.5 text-[11px] text-pine hover:bg-pine-tint disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
           >
             <Play className="h-3 w-3" />
             Resume
           </button>
         )}
       </div>
+
+      {/* Pause is always available — it only ever de-escalates, and this panel
+          is the product's only pause surface, so gating it could trap a
+          creator in a running chase. Resume is the one control that can arm
+          reminders nowhere would go, so it's the only thing gated here.
+
+          Rendered whenever the lock applies, not only when the chase is
+          paused: an armed chase on a never-sent invoice is exactly the state
+          the creator most needs told about, and a static line beats a
+          hover-only reveal (WCAG 2.4.7). */}
+      {chaseLock && (
+        <p id={lockId} className="mt-2 flex items-start gap-1 text-[11px] font-medium text-amber">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          {chaseLock}
+        </p>
+      )}
 
       {events && events.length > 0 ? (
         <div className="mt-3 space-y-1.5">

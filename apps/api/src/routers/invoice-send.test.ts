@@ -193,6 +193,62 @@ describe("invoice.send — happy path", () => {
     expect(state.mode).toBe("paused");
   });
 
+  // SPO-365 — the Payments lock line promises reminders stop when the last
+  // send failed. Chase arms only after a send that succeeded, so the only way
+  // to reach an armed chase behind a failed delivery is a resend that throws.
+  it("pauses an armed chase when a resend fails at the provider", async () => {
+    const invoice = await insertInvoice({});
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    await caller.send({ id: invoice.id });
+
+    // Control: the first send left the chase armed, so a later `paused` can
+    // only have come from the failure below.
+    const [armed] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(armed.mode).toBe("armed");
+
+    sendMock.mockRejectedValueOnce(new Error("provider refused"));
+    await expect(caller.send({ id: invoice.id })).rejects.toBeTruthy();
+
+    const [state] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(state.mode).toBe("paused");
+    expect(state.pausedReason).toBe("invoice_send_failed");
+
+    // The failure is still recorded on the attempt that failed, not the first.
+    const rows = await db
+      .select()
+      .from(schema.invoiceDeliveries)
+      .where(eq(schema.invoiceDeliveries.invoiceId, invoice.id));
+    expect(rows.find((r) => r.attempt === 1)?.status).toBe("sent");
+    expect(rows.find((r) => r.attempt === 2)?.status).toBe("failed");
+  });
+
+  it("leaves a manual pause reason intact when a resend fails", async () => {
+    const invoice = await insertInvoice({});
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    await caller.send({ id: invoice.id });
+    await db
+      .update(schema.invoiceChaseState)
+      .set({ mode: "paused", pausedReason: "Brand asked us to hold" })
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+
+    sendMock.mockRejectedValueOnce(new Error("provider refused"));
+    await expect(caller.send({ id: invoice.id })).rejects.toBeTruthy();
+
+    const [state] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(state.pausedReason).toBe("Brand asked us to hold");
+  });
+
   it("populates rails_snapshot at send, frozen against a later settings edit", async () => {
     const invoice = await insertInvoice({});
     const caller = invoiceRouter.createCaller(mockCtx(creatorId));
@@ -374,5 +430,57 @@ describe("invoice.send — guards", () => {
     const caller = invoiceRouter.createCaller(mockCtx(creatorId));
     await expect(caller.send({ id: otherInvoice.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("invoice.latestDeliveries (SPO-365)", () => {
+  it("returns the latest attempt only, not every send", async () => {
+    const invoice = await insertInvoice({});
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    await caller.send({ id: invoice.id });
+    await caller.send({ id: invoice.id });
+
+    const rows = await caller.latestDeliveries();
+    const forInvoice = rows.filter((r) => r.invoiceId === invoice.id);
+    expect(forInvoice).toHaveLength(1);
+    expect(forInvoice[0].attempt).toBe(2);
+  });
+
+  it("is tenant-scoped: a cross-creator invoice's deliveries never appear", async () => {
+    const [other] = await db.insert(schema.creators).values({ displayName: "Other" }).returning();
+    const [otherBrand] = await db
+      .insert(schema.brands)
+      .values({ creatorId: other.id, name: "Other Brand" })
+      .returning();
+    const [otherContact] = await db
+      .insert(schema.contacts)
+      .values({ brandId: otherBrand.id, name: "Other Contact", email: "other-contact@example.com" })
+      .returning();
+    const [otherDeal] = await db
+      .insert(schema.deals)
+      .values({ creatorId: other.id, brandId: otherBrand.id, title: "Other deal", type: "flat" })
+      .returning();
+    await db.insert(schema.user).values({ id: `user-${other.id}`, name: "Other Owner", email: "other-owner@example.com" });
+    await db.insert(schema.memberships).values({ userId: `user-${other.id}`, creatorId: other.id, role: "owner" });
+    const [otherInvoice] = await db
+      .insert(schema.invoices)
+      .values({ creatorId: other.id, dealId: otherDeal.id, contactId: otherContact.id, number: 1, amountCents: 1000, status: "open" })
+      .returning();
+
+    const otherCaller = invoiceRouter.createCaller(mockCtx(other.id));
+    await otherCaller.send({ id: otherInvoice.id });
+
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+    const rows = await caller.latestDeliveries();
+    expect(rows.find((r) => r.invoiceId === otherInvoice.id)).toBeUndefined();
+  });
+
+  it("returns nothing for an invoice that was never sent", async () => {
+    const invoice = await insertInvoice({});
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    const rows = await caller.latestDeliveries();
+    expect(rows.find((r) => r.invoiceId === invoice.id)).toBeUndefined();
   });
 });
