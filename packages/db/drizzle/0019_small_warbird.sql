@@ -1,0 +1,1 @@
+ALTER TABLE "invoice_deliveries" ADD COLUMN "bounce_detail" text;
