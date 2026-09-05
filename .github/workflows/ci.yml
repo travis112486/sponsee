@@ -97,6 +97,17 @@ jobs:
           echo "Mailpit did not become ready on :8025 within 30s" >&2
           cat "$RUNNER_TEMP/mailpit.log" >&2
           exit 1
+      # The invoice-delivery acceptance proof (SPO-367 gate, step 4) fetches the
+      # exact hosted invoice URL in a headless browser, so `test` needs the same
+      # Chromium shell `web-viewport` installs. --only-shell pulls the headless
+      # shell (~196 MB) instead of full Chromium — enough for chromium.launch().
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: npx playwright install --with-deps --only-shell chromium
       # Deliberately no DATABASE_URL: packages/db falls back to in-memory PGlite
       # when it is unset, and that is what the integration tests are written
       # against. Pointing them at a real Postgres would silently change what

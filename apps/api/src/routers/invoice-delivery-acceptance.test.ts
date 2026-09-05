@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { chromium } from "playwright";
 import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { sql, eq } from "drizzle-orm";
@@ -6,9 +7,9 @@ import { invoiceRouter, invoiceViewLimiter } from "./invoice.js";
 import { chaseRouter } from "./chase.js";
 import { handleEmailWebhook } from "./webhooks.js";
 import { MailpitProvider } from "../email/index.js";
-import app from "../app.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
+import { startHostedWeb } from "../test-utils/hosted-web.js";
 import {
   getFreePort,
   waitForMailpit,
@@ -243,181 +244,178 @@ describe("invoice delivery acceptance — one-pass creator chain (SPO-367 gate)"
         .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
       expect(stateAfterCreate).toBeUndefined();
 
-      await withMailpit(async (apiUrl) => {
-        // Steps 2 & 3 — send through the real Mailpit capture path.
-        const sendResult = await caller.send({ id: invoice.id });
-        expect(sendResult.success).toBe(true);
-        // The positive chain really did go through the (spied) real provider —
-        // the symmetric guard to step 7's zero-count assertion.
-        expect(sendSpy).toHaveBeenCalledTimes(1);
+      // Step 4 fetches the exact hosted URL the email embeds and proves the
+      // production `/i/:token` route renders the live publicView response, so
+      // the web app must be live at the WEB_URL origin before send builds that
+      // URL. Its same-origin `/api/trpc` calls proxy back into this API server.
+      const hosted = await startHostedWeb();
+      const prevWebUrl = process.env.WEB_URL;
+      process.env.WEB_URL = hosted.webOrigin;
+      try {
+        await withMailpit(async (apiUrl) => {
+          // Steps 2 & 3 — send through the real Mailpit capture path.
+          const sendResult = await caller.send({ id: invoice.id });
+          expect(sendResult.success).toBe(true);
+          // The positive chain really did go through the (spied) real provider —
+          // the symmetric guard to step 7's zero-count assertion.
+          expect(sendSpy).toHaveBeenCalledTimes(1);
 
-        const matches = await waitForMailpitMatches<MailpitSummary>(
-          apiUrl,
-          (m) => m.To?.some((t) => t.Address === CONTACT_EMAIL) ?? false
-        );
-        const summary = matches[0];
+          const matches = await waitForMailpitMatches<MailpitSummary>(
+            apiUrl,
+            (m) => m.To?.some((t) => t.Address === CONTACT_EMAIL) ?? false
+          );
+          const summary = matches[0];
 
-        // From == platform address; Reply-To == the creator owner (never the
-        // platform address).
-        expect(summary.From?.Address).toBe("invoices@sponsee.app");
-        expect(summary.ReplyTo?.[0]?.Address).toBe(OWNER_EMAIL);
+          // From == platform address; Reply-To == the creator owner (never the
+          // platform address).
+          expect(summary.From?.Address).toBe("invoices@sponsee.app");
+          expect(summary.ReplyTo?.[0]?.Address).toBe(OWNER_EMAIL);
 
-        // The plain-text part alone carries the invoice. Read Text literally;
-        // do not fall back to the HTML part.
-        const full = await getMailpitMessage(apiUrl, summary.ID);
-        const text = full.Text ?? "";
-        expect(text).toContain("Amount due: $5,000");
-        expect(text).toContain("Due date: Mar 1, 2026");
-        expect(text).toContain("PayPal: paypal.me/creatora");
-        expect(text).toContain("Wise: Wise: creator@wise.example");
-        expect(text).toContain(`/i/${sendResult.publicToken}`);
+          // The plain-text part alone carries the invoice. Read Text literally;
+          // do not fall back to the HTML part.
+          const full = await getMailpitMessage(apiUrl, summary.ID);
+          const text = full.Text ?? "";
+          expect(text).toContain("Amount due: $5,000");
+          expect(text).toContain("Due date: Mar 1, 2026");
+          expect(text).toContain("PayPal: paypal.me/creatora");
+          expect(text).toContain("Wise: Wise: creator@wise.example");
+          expect(text).toContain(`/i/${sendResult.publicToken}`);
 
-        // Step 4 — extract the FULL hosted URL from the captured body, then
-        // drive an unauthenticated HTTP request through the real app wiring
-        // (Hono + tRPC fetchRequestHandler + createContext) using the token
-        // embedded in that URL. Asserts the live allowlisted JSON — not a
-        // createCaller shortcut — so removing/breaking the /i/:token URL or the
-        // publicView HTTP endpoint fails this step.
-        const urlMatch = text.match(/https?:\/\/[^\s]+\/i\/[0-9a-f]{32}/);
-        expect(urlMatch).not.toBeNull();
-        const hostedUrl = urlMatch![0];
-        const tokenFromBody = new URL(hostedUrl).pathname.split("/").pop();
-        expect(tokenFromBody).toBe(sendResult.publicToken);
+          // Step 4 — extract the FULL hosted URL from the captured body and
+          // fetch it, unauthenticated, in a real browser. The page is served by
+          // the production web app at the WEB_URL origin, and its `/i/:token`
+          // route fetches the live publicView response (through the vite
+          // `/api` proxy into this API server) and renders it. A dead WEB_URL
+          // origin fails the navigation; a removed `/i/:token` route renders
+          // the not-found state instead of the invoice and fails the text
+          // assertions below.
+          const urlMatch = text.match(/https?:\/\/[^\s]+\/i\/[0-9a-f]{32}/);
+          expect(urlMatch).not.toBeNull();
+          const hostedUrl = urlMatch![0];
+          const tokenFromBody = new URL(hostedUrl).pathname.split("/").pop();
+          expect(tokenFromBody).toBe(sendResult.publicToken);
 
-        // tRPC httpLink encodes a single query input as
-        // `?input=${encodeURIComponent(JSON.stringify(transformer.serialize(input)))}`;
-        // with superjson and a plain `{ token }` that is `{ json: { token } }`.
-        const input = encodeURIComponent(JSON.stringify({ json: { token: tokenFromBody } }));
-        const res = await app.request(`/api/trpc/invoice.publicView?input=${input}`, {
-          method: "GET",
-          headers: { "x-forwarded-for": "203.0.113.50", Origin: "http://localhost:3000" },
-        });
-        expect(res.status).toBe(200);
-        const httpBody = (await res.json()) as {
-          result?: { data?: { json?: Record<string, unknown> } };
-        };
-        const view = httpBody.result?.data?.json;
-        expect(view).toBeDefined();
-        expect(Object.keys(view!).sort()).toEqual(
-          [
-            "invoiceNumber",
-            "title",
-            "milestoneNote",
-            "amountCents",
-            "currency",
-            "terms",
-            "issuedAt",
-            "dueAt",
-            "railsSnapshot",
-            "creatorDisplayName",
-            "paid",
-          ].sort()
-        );
-        const serialized = JSON.stringify(view);
-        expect(serialized).not.toContain(OWNER_EMAIL);
-        expect(serialized).not.toContain(CONTACT_EMAIL);
-        expect(serialized).not.toContain("creatorId");
-        expect(serialized).not.toContain("dealId");
-        expect(serialized).not.toContain("contactId");
-        expect(serialized).not.toContain("Brand A");
+          // The captured URL is the exact bytes a brand's browser opens — the
+          // live origin just stood up, not a re-typed shortcut.
+          expect(hostedUrl).toBe(`${hosted.webOrigin}/i/${sendResult.publicToken}`);
 
-        // Step 5 — same invoice is now armed and rails_snapshot frozen.
-        const [chaseState] = await db
-          .select()
-          .from(schema.invoiceChaseState)
-          .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
-        expect(chaseState.mode).toBe("armed");
-        expect(chaseState.nextStep).toBe(1);
+          const browser = await chromium.launch({ headless: true });
+          try {
+            // Fresh context: no cookies, no auth headers — the unauthenticated
+            // fetch a brand's AP team makes.
+            const page = await browser.newPage();
+            await page.goto(hostedUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+            await page.getByText("INV-0001").waitFor({ timeout: 20_000 });
+            expect(await page.getByText("Creator A").count()).toBeGreaterThan(0);
+            expect(await page.getByText("$5,000").count()).toBeGreaterThan(0);
+            expect(await page.getByText("How to pay").count()).toBeGreaterThan(0);
+            expect(await page.getByText("Invoice not found").count()).toBe(0);
+          } finally {
+            await browser.close();
+          }
 
-        const [afterSend] = await db
-          .select()
-          .from(schema.invoices)
-          .where(eq(schema.invoices.id, invoice.id));
-        expect(afterSend.railsSnapshot).toMatchObject({
-          displayName: "Creator A",
-          paypalLink: "paypal.me/creatora",
-          wiseText: "Wise: creator@wise.example",
-        });
+          // Step 5 — same invoice is now armed and rails_snapshot frozen.
+          const [chaseState] = await db
+            .select()
+            .from(schema.invoiceChaseState)
+            .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+          expect(chaseState.mode).toBe("armed");
+          expect(chaseState.nextStep).toBe(1);
 
-        // Step 6 — replay stored Resend payloads against the delivery row this
-        // same send created (never a direct-inserted one), and prove timestamps.
-        const [delivery] = await db
-          .select()
-          .from(schema.invoiceDeliveries)
-          .where(eq(schema.invoiceDeliveries.invoiceId, invoice.id));
-        expect(delivery.providerMessageId).toBeTruthy();
-        const providerMessageId = delivery.providerMessageId!;
+          const [afterSend] = await db
+            .select()
+            .from(schema.invoices)
+            .where(eq(schema.invoices.id, invoice.id));
+          expect(afterSend.railsSnapshot).toMatchObject({
+            displayName: "Creator A",
+            paypalLink: "paypal.me/creatora",
+            wiseText: "Wise: creator@wise.example",
+          });
 
-        const deliveredPayload = {
-          type: "email.delivered",
-          data: {
-            email_id: providerMessageId,
-            to: [CONTACT_EMAIL],
-            created_at: "2026-09-02T10:00:00Z",
-          },
-        };
-        const deliveredResult = await handleEmailWebhook(webhookCtx(deliveredPayload));
-        expect(deliveredResult.data).toMatchObject({ ok: true, handled: true, type: "delivered" });
+          // Step 6 — replay stored Resend payloads against the delivery row this
+          // same send created (never a direct-inserted one), and prove timestamps.
+          const [delivery] = await db
+            .select()
+            .from(schema.invoiceDeliveries)
+            .where(eq(schema.invoiceDeliveries.invoiceId, invoice.id));
+          expect(delivery.providerMessageId).toBeTruthy();
+          const providerMessageId = delivery.providerMessageId!;
 
-        const [afterDelivered] = await db
-          .select()
-          .from(schema.invoiceDeliveries)
-          .where(eq(schema.invoiceDeliveries.id, delivery.id));
-        expect(afterDelivered.status).toBe("delivered");
-        expect(afterDelivered.deliveredAt).not.toBeNull();
-        expect(afterDelivered.deliveredAt!.toISOString()).toBe("2026-09-02T10:00:00.000Z");
-        expect(afterDelivered.bouncedAt).toBeNull();
-
-        const bouncedPayload = {
-          type: "email.bounced",
-          data: {
-            email_id: providerMessageId,
-            to: [CONTACT_EMAIL],
-            created_at: "2026-09-02T11:00:00Z",
-            bounce: {
-              message: "The recipient's email address is on the suppression list.",
-              subType: "Suppressed",
-              type: "Permanent",
+          const deliveredPayload = {
+            type: "email.delivered",
+            data: {
+              email_id: providerMessageId,
+              to: [CONTACT_EMAIL],
+              created_at: "2026-09-02T10:00:00Z",
             },
-          },
-        };
-        const bouncedResult = await handleEmailWebhook(webhookCtx(bouncedPayload));
-        expect(bouncedResult.data).toMatchObject({ ok: true, handled: true, type: "bounced" });
+          };
+          const deliveredResult = await handleEmailWebhook(webhookCtx(deliveredPayload));
+          expect(deliveredResult.data).toMatchObject({ ok: true, handled: true, type: "delivered" });
 
-        const [afterBounced] = await db
-          .select()
-          .from(schema.invoiceDeliveries)
-          .where(eq(schema.invoiceDeliveries.id, delivery.id));
-        expect(afterBounced.status).toBe("bounced");
-        expect(afterBounced.bouncedAt!.toISOString()).toBe("2026-09-02T11:00:00.000Z");
+          const [afterDelivered] = await db
+            .select()
+            .from(schema.invoiceDeliveries)
+            .where(eq(schema.invoiceDeliveries.id, delivery.id));
+          expect(afterDelivered.status).toBe("delivered");
+          expect(afterDelivered.deliveredAt).not.toBeNull();
+          expect(afterDelivered.deliveredAt!.toISOString()).toBe("2026-09-02T10:00:00.000Z");
+          expect(afterDelivered.bouncedAt).toBeNull();
 
-        // The bounce stops the chase (SPO-365): armed -> paused with the loud
-        // invoice-hard-bounce reason.
-        const [pausedState] = await db
-          .select()
-          .from(schema.invoiceChaseState)
-          .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
-        expect(pausedState.mode).toBe("paused");
-        expect(pausedState.pausedReason).toBe("invoice_hard_bounce");
+          const bouncedPayload = {
+            type: "email.bounced",
+            data: {
+              email_id: providerMessageId,
+              to: [CONTACT_EMAIL],
+              created_at: "2026-09-02T11:00:00Z",
+              bounce: {
+                message: "The recipient's email address is on the suppression list.",
+                subType: "Suppressed",
+                type: "Permanent",
+              },
+            },
+          };
+          const bouncedResult = await handleEmailWebhook(webhookCtx(bouncedPayload));
+          expect(bouncedResult.data).toMatchObject({ ok: true, handled: true, type: "bounced" });
 
-        // Step 6 (UI surface) — the exact data Payments reads now shows the
-        // bounce: latestDeliveries returns a "bounced" row with a timestamp and
-        // the recipient, and chase.state returns the paused lock. The web suite
-        // pins the rendering of both (Payments.test.tsx).
-        const deliveries = await caller.latestDeliveries();
-        const forInvoice = deliveries.find((r) => r.invoiceId === invoice.id);
-        expect(forInvoice).toBeDefined();
-        expect(forInvoice!.status).toBe("bounced");
-        expect(forInvoice!.bouncedAt).not.toBeNull();
-        expect(forInvoice!.toEmail).toBe(CONTACT_EMAIL);
+          const [afterBounced] = await db
+            .select()
+            .from(schema.invoiceDeliveries)
+            .where(eq(schema.invoiceDeliveries.id, delivery.id));
+          expect(afterBounced.status).toBe("bounced");
+          expect(afterBounced.bouncedAt!.toISOString()).toBe("2026-09-02T11:00:00.000Z");
 
-        const chaseCaller = chaseRouter.createCaller(mockCtx(creator.id));
-        const surfacedState = await chaseCaller.state({ invoiceId: invoice.id });
-        expect(surfacedState.mode).toBe("paused");
-        expect(surfacedState.pausedReason).toBe("invoice_hard_bounce");
-      });
+          // The bounce stops the chase (SPO-365): armed -> paused with the loud
+          // invoice-hard-bounce reason.
+          const [pausedState] = await db
+            .select()
+            .from(schema.invoiceChaseState)
+            .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+          expect(pausedState.mode).toBe("paused");
+          expect(pausedState.pausedReason).toBe("invoice_hard_bounce");
+
+          // Step 6 (UI surface) — the exact data Payments reads now shows the
+          // bounce: latestDeliveries returns a "bounced" row with a timestamp and
+          // the recipient, and chase.state returns the paused lock. The web suite
+          // pins the rendering of both (Payments.test.tsx).
+          const deliveries = await caller.latestDeliveries();
+          const forInvoice = deliveries.find((r) => r.invoiceId === invoice.id);
+          expect(forInvoice).toBeDefined();
+          expect(forInvoice!.status).toBe("bounced");
+          expect(forInvoice!.bouncedAt).not.toBeNull();
+          expect(forInvoice!.toEmail).toBe(CONTACT_EMAIL);
+
+          const chaseCaller = chaseRouter.createCaller(mockCtx(creator.id));
+          const surfacedState = await chaseCaller.state({ invoiceId: invoice.id });
+          expect(surfacedState.mode).toBe("paused");
+          expect(surfacedState.pausedReason).toBe("invoice_hard_bounce");
+        });
+      } finally {
+        if (prevWebUrl === undefined) delete process.env.WEB_URL;
+        else process.env.WEB_URL = prevWebUrl;
+        await hosted.close();
+      }
     },
-    30_000
+    120_000
   );
 
   it("refuses a send with no owner email, with zero provider calls (negative)", async () => {
