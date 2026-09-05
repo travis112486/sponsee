@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useParams } from "react-router";
 import { trpc } from "@/trpc";
 import "./invoice-page.css";
+import { formatInvoiceDate } from "./invoice-date";
 
 type Rails = {
   displayName: string | null;
@@ -16,14 +17,6 @@ function formatAmount(amountCents: number, currency: string): string {
     currency,
     maximumFractionDigits: 0,
   }).format(amountCents / 100);
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
 }
 
 function termsLabel(terms: string): string {
@@ -117,9 +110,9 @@ export default function InvoicePublicPage() {
         <section className="meta">
           <dl className="dates tnum">
             <dt>Issued</dt>
-            <dd>{invoice.issuedAt ? formatDate(invoice.issuedAt) : "—"}</dd>
+            <dd>{invoice.issuedAt ? formatInvoiceDate(invoice.issuedAt) : "—"}</dd>
             <dt>Due</dt>
-            <dd>{invoice.dueAt ? formatDate(invoice.dueAt) : "On receipt"}</dd>
+            <dd>{invoice.dueAt ? formatInvoiceDate(invoice.dueAt) : "On receipt"}</dd>
             <dt>Terms</dt>
             <dd>{termsLabel(invoice.terms)}</dd>
           </dl>
