@@ -12,8 +12,8 @@ vi.mock("@/trpc", () => ({
     mediaKit: {
       get: { useQuery: vi.fn() },
       update: { useMutation: vi.fn() },
-      offering: { create: { useMutation: vi.fn() }, update: { useMutation: vi.fn() }, delete: { useMutation: vi.fn() } },
-      example: { create: { useMutation: vi.fn() }, update: { useMutation: vi.fn() }, delete: { useMutation: vi.fn() } },
+      offering: { create: { useMutation: vi.fn() }, update: { useMutation: vi.fn() }, reorder: { useMutation: vi.fn() }, delete: { useMutation: vi.fn() } },
+      example: { create: { useMutation: vi.fn() }, update: { useMutation: vi.fn() }, reorder: { useMutation: vi.fn() }, delete: { useMutation: vi.fn() } },
     },
     settings: { updateProfile: { useMutation: vi.fn() } },
   },
@@ -29,14 +29,14 @@ const kit = {
   headline: "Live gaming, built for brands",
   bio: "A focused gaming community.",
   accentColor: null,
-  offerings: [{ id: "offer-1", title: "Stream integration", description: "A natural live read", priceCents: 29000, currency: "USD", position: 0 }],
+  offerings: [{ id: "offer-1", title: "Stream integration", description: "A natural live read", priceCents: 29000, currency: "USD", position: 0 }, { id: "offer-2", title: "Shorts package", description: null, priceCents: 19000, currency: "USD", position: 1 }],
   examples: [{ id: "example-1", title: "Brand launch stream", url: "https://example.com/case-study", position: 0 }],
   cpvhGuidance: { floor: 6000, mid: 10500, agency: 20000, provenance: "shared-benchmark" as const },
 };
 
 beforeEach(() => {
   mock(trpc.mediaKit.get.useQuery).mockReturnValue({ data: kit, isLoading: false, isError: false, refetch: vi.fn() });
-  for (const mutation of [trpc.mediaKit.update.useMutation, trpc.mediaKit.offering.create.useMutation, trpc.mediaKit.offering.update.useMutation, trpc.mediaKit.offering.delete.useMutation, trpc.mediaKit.example.create.useMutation, trpc.mediaKit.example.update.useMutation, trpc.mediaKit.example.delete.useMutation, trpc.settings.updateProfile.useMutation]) {
+  for (const mutation of [trpc.mediaKit.update.useMutation, trpc.mediaKit.offering.create.useMutation, trpc.mediaKit.offering.update.useMutation, trpc.mediaKit.offering.reorder.useMutation, trpc.mediaKit.offering.delete.useMutation, trpc.mediaKit.example.create.useMutation, trpc.mediaKit.example.update.useMutation, trpc.mediaKit.example.reorder.useMutation, trpc.mediaKit.example.delete.useMutation, trpc.settings.updateProfile.useMutation]) {
     mock(mutation).mockReturnValue({ mutate: vi.fn(), isPending: false });
   }
 });
@@ -75,6 +75,14 @@ describe("MediaKitPage", () => {
     fireEvent.change(title, { target: { value: "Homepage integration" } });
     fireEvent.blur(title);
     expect(mutate).toHaveBeenCalledWith(expect.objectContaining({ id: "offer-1", title: "Homepage integration", position: 0 }));
+  });
+
+  it("reorders offerings through the creator-scoped mutation", () => {
+    const mutate = vi.fn();
+    mock(trpc.mediaKit.offering.reorder.useMutation).mockReturnValue({ mutate, isPending: false });
+    render(<MediaKitPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Move Stream integration down" }));
+    expect(mutate).toHaveBeenCalledWith({ ids: ["offer-2", "offer-1"] });
   });
 
   it("offers recovery when the creator kit cannot load", () => {
