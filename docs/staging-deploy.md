@@ -168,6 +168,55 @@ change to `main` is all that is required to get it onto staging Neon.
 
 `DATABASE_URL` stays as-is — the API itself should keep using the pooled endpoint.
 
+### Verified, not assumed (SPO-382)
+
+Everything above was written when SPO-74 shipped and then never re-checked, so "Render runs
+a pre-deploy command" was an assertion about a dashboard setting nobody had read back. It is
+now confirmed against the live service, and both halves are worth keeping current:
+
+**The setting exists.** `GET /v1/services/srv-da8l6kek1f9s73e0aptg` returns it under
+`serviceDetails.envSpecificDetails.preDeployCommand` — *not* the top-level
+`serviceDetails.preDeployCommand`, which is `null` for a Docker service and reads like the
+command is unset:
+
+```bash
+curl -sH "Authorization: Bearer $RENDER_API_KEY" \
+  https://api.render.com/v1/services/srv-da8l6kek1f9s73e0aptg \
+| jq -r '.serviceDetails.envSpecificDetails.preDeployCommand'
+# -> node /prod/api/node_modules/@sponsee/db/dist/migrate.js
+```
+
+**It actually ran.** Deploy `dep-dacd23k9v7es73flbam0` (commit `4ae1c2d`, PR #120, SPO-363)
+applied migration `0017` on the way in:
+
+```
+2026-09-03T01:46:16.032Z [migrate] migrations folder: /prod/api/node_modules/.pnpm/@sponsee+db@…/drizzle
+2026-09-03T01:46:16.033Z [migrate] 18 migration(s) in the journal
+2026-09-03T01:46:16.521Z [migrate] applying 1: 0017_fantastic_donald_blake
+2026-09-03T01:46:17.363Z [migrate] applied 1 migration(s)
+2026-09-03T01:46:17.460Z [migrate] ok
+```
+
+Pull those lines for any deploy with the Render logs API (`ownerId` is required, and
+`resource` is the service id):
+
+```bash
+curl -sH "Authorization: Bearer $RENDER_API_KEY" \
+  "https://api.render.com/v1/logs?ownerId=tea-da8fd14s728c73bjnle0\
+&resource=srv-da8l6kek1f9s73e0aptg&startTime=<iso>&endTime=<iso>&text=%5Bmigrate%5D"
+```
+
+Since SPO-382 the migrator also logs `[migrate] target: <host>/<database>`, so the log says
+which database it migrated rather than leaving that to be inferred.
+
+> **`created_at` in the ledger is not when the migration was applied.** drizzle writes the
+> journal's `when` field — the moment `drizzle-kit generate` created the file on a developer
+> machine. A ledger row can therefore carry a timestamp hours *before* the deploy that
+> inserted it, which looks exactly like someone having migrated prod from their laptop.
+> `0017` is the worked example: ledger `created_at` 2026-09-02T22:29:17Z, actually applied
+> 2026-09-03T01:46:16Z by the deploy above. Use the deploy logs, not the ledger, to answer
+> "how did this get here".
+
 ### Why a script instead of `drizzle-kit migrate`
 
 `drizzle-kit` is a devDependency, and `apps/api/Dockerfile` finishes with

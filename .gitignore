@@ -27,3 +27,14 @@ PAPERCLIP_SCRATCH_DIR/
 
 # Claude Code local settings (Paperclip runtime writes this per worktree)
 .claude/settings.local.json
+
+# SPO-415 / SPO-417: Wave 1 outreach data is PII and this repo is PUBLIC.
+# The roster holds named real creators with their business emails and X handles;
+# the ledger records `unsubscribed` / `complained` / `stop_requested` against
+# those same named people from the first send onward. Tracking either publishes
+# it to every clone and to GitHub code search, and `refs/pull/*` is permanent.
+# Real data lives OUTSIDE the repo and is passed via --roster / --ledger.
+# Only the fictional *.example.* fixtures are tracked, as the schema of record.
+outreach/*.json
+outreach/*.jsonl
+!outreach/*.example.*

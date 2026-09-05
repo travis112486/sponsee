@@ -1,6 +1,6 @@
 import { randomBytes } from "crypto";
 import { z } from "zod";
-import { createTRPCRouter, creatorScopedProcedure } from "../trpc.js";
+import { createTRPCRouter, creatorScopedProcedure, publicProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { eq, and, desc, sql } from "drizzle-orm";
 import type { DB } from "@sponsee/db";
@@ -17,8 +17,25 @@ import {
 import { createEmailProvider } from "../email/index.js";
 import { resolveCreatorReplyToEmail } from "../email/reply-to.js";
 import { calculateNextActionAt } from "../jobs/chase-tick.js";
+import { clientIp } from "../client-ip.js";
+import { SlidingWindowLimiter } from "../rate-limit.js";
 
 const PAID_REQUIRES_PAID_AT_CONSTRAINT = "invoices_paid_requires_paid_at";
+
+// The hosted invoice view (`invoice.publicView`, keyed on
+// `invoice_deliveries.public_token`) is the only unauthenticated read of tenant
+// data in the product. It gets its own limiter rather than the auth bucket: the
+// auth limiter is a single global bucket, so sharing it would let a brand's
+// reload of their invoice lock creators out of login. Keyed per client IP so one
+// AP team's legitimate reloads can't starve another's view, and a distinct-token
+// burst from a single source still shares one budget (the enumeration oracle the
+// limit exists to close).
+export const INVOICE_VIEW_MAX_PER_WINDOW = 30;
+export const INVOICE_VIEW_WINDOW_MS = 60 * 1000;
+export const invoiceViewLimiter = new SlidingWindowLimiter(
+  INVOICE_VIEW_MAX_PER_WINDOW,
+  INVOICE_VIEW_WINDOW_MS
+);
 
 type RailsSnapshot = {
   displayName: string | null;
@@ -149,6 +166,67 @@ export const invoiceRouter = createTRPCRouter({
         .from(invoices)
         .where(and(eq(invoices.dealId, input.dealId), eq(invoices.creatorId, ctx.creatorId)))
         .orderBy(desc(invoices.createdAt));
+    }),
+
+  // The one unauthenticated read of tenant data in the product. The response
+  // shape is a security boundary, not a convenience: pick every field by hand
+  // and never spread the invoice/delivery row, so a future column cannot leak
+  // the creator's email, contacts, deal pipeline, or other invoices.
+  publicView: publicProcedure
+    .input(z.object({ token: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const ip = clientIp(ctx.headers) ?? "unknown";
+      const decision = invoiceViewLimiter.check(ip);
+      if (!decision.allowed) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS" });
+      }
+
+      // Single resolve path on purpose (SPO-364): a wrong token, a rotated
+      // token, and a deleted invoice (whose deliveries cascade away) all miss
+      // this lookup and produce the identical 404. No token-format early return
+      // before the query — that would leak which tokens once existed.
+      const [row] = await ctx.db
+        .select({
+          number: invoices.number,
+          title: invoices.title,
+          milestoneNote: invoices.milestoneNote,
+          amountCents: invoices.amountCents,
+          currency: invoices.currency,
+          terms: invoices.terms,
+          issuedAt: invoices.issuedAt,
+          dueAt: invoices.dueAt,
+          railsSnapshot: invoices.railsSnapshot,
+          status: invoices.status,
+        })
+        .from(invoiceDeliveries)
+        .innerJoin(invoices, eq(invoiceDeliveries.invoiceId, invoices.id))
+        .where(eq(invoiceDeliveries.publicToken, input.token))
+        .limit(1);
+
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+
+      const rails = (row.railsSnapshot ?? {}) as Partial<RailsSnapshot>;
+
+      return {
+        invoiceNumber: row.number,
+        title: row.title,
+        milestoneNote: row.milestoneNote,
+        amountCents: row.amountCents,
+        currency: row.currency,
+        terms: row.terms,
+        issuedAt: row.issuedAt ? row.issuedAt.toISOString() : null,
+        dueAt: row.dueAt ? row.dueAt.toISOString() : null,
+        railsSnapshot: {
+          displayName: rails.displayName ?? null,
+          paypalLink: rails.paypalLink ?? null,
+          wiseText: rails.wiseText ?? null,
+          bankText: rails.bankText ?? null,
+        },
+        creatorDisplayName: rails.displayName ?? null,
+        paid: row.status === "paid",
+      };
     }),
 
   create: creatorScopedProcedure

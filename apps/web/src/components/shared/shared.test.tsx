@@ -106,7 +106,7 @@ describe("BrandMark", () => {
     rerender(<BrandMark brand="Voltaic Energy" domain="https://www.redbull.com/energy" />);
     const img = container.querySelector("img");
     expect(img).not.toBeNull();
-    expect(img!.getAttribute("src")).toBe("https://unavatar.io/redbull.com?fallback=false");
+    expect(img!.getAttribute("src")).toBe("/api/brand-icon?domain=redbull.com");
 
     // Editing back to the known-bad domain still shows the monogram (no flicker loop).
     rerender(<BrandMark brand="Voltaic Energy" domain="voltaic.energy" />);

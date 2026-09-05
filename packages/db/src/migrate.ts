@@ -104,6 +104,16 @@ export function resolveConnectionString(
   return url;
 }
 
+/** `host/database`, never the credentials. */
+export function describeTarget(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}${parsed.pathname}`;
+  } catch {
+    return "<unparseable connection string>";
+  }
+}
+
 function isPooledEndpoint(url: string): boolean {
   try {
     return new URL(url).hostname.includes("-pooler");
@@ -185,6 +195,11 @@ export async function runMigrations(): Promise<void> {
   const connectionString = resolveConnectionString();
 
   console.log(`[migrate] migrations folder: ${migrationsFolder}`);
+  // Which database this ran against is the one fact the log was missing, and
+  // it is the fact you need to reconstruct after the event whether a migration
+  // reached prod through this deploy or through someone's laptop (SPO-382).
+  // Host and database only — the connection string carries a password.
+  console.log(`[migrate] target: ${describeTarget(connectionString)}`);
   console.log(`[migrate] ${planned.length} migration(s) in the journal`);
 
   const client = new Client({ connectionString });
