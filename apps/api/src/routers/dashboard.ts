@@ -255,6 +255,7 @@ export const dashboardRouter = createTRPCRouter({
           dealId: deals.id,
           dealTitle: deals.title,
           brandName: brands.name,
+          brandDomain: brands.domain,
         })
         .from(deliverables)
         .innerJoin(deals, eq(deliverables.dealId, deals.id))
@@ -283,6 +284,7 @@ export const dashboardRouter = createTRPCRouter({
         dealId: r.dealId,
         dealTitle: r.dealTitle,
         brandName: r.brandName,
+        brandDomain: r.brandDomain,
       }));
 
       // ── Overdue open invoices, ordered by due date (most urgent first) ──

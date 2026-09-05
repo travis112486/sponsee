@@ -81,34 +81,34 @@
     "name": "Gravel Gospel",
     "firstName": "Otis",
     "email": null,
-    "xHandle": "gravelgospel"
+    "xHandle": "@gravelgospel"
   },
   {
     "id": "mintmarauder",
     "name": "Mint Marauder",
     "firstName": "Priya",
     "email": null,
-    "xHandle": "mintmarauder"
+    "xHandle": "@mintmarauder"
   },
   {
     "id": "quillquasar",
     "name": "QuillQuasar",
     "firstName": null,
     "email": null,
-    "xHandle": "quillquasar"
+    "xHandle": "@quillquasar"
   },
   {
     "id": "driftwooddynamo",
     "name": "Driftwood Dynamo",
     "firstName": "Esme",
     "email": null,
-    "xHandle": "driftdynamo"
+    "xHandle": "@driftdynamo"
   },
   {
     "id": "coppercomet",
     "name": "Copper Comet",
     "firstName": "Yusuf",
     "email": null,
-    "xHandle": "coppercomet"
+    "xHandle": "@coppercomet"
   }
 ]

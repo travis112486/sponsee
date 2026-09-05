@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useRef } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, type ReactNode } from "react";
 import {
   Check,
   CreditCard,
@@ -86,6 +86,11 @@ const BTN_PRIMARY =
 const BTN_SECONDARY =
   "inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-hairline bg-surface px-6 text-[15px] font-medium text-ink transition-all duration-150 hover:border-ink-3/40 active:scale-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper";
 
+// Inline text links are ~20px tall; Apple HIG / WCAG 2.5.8 want 44px on touch.
+// Pad the hit area on mobile, cancel the layout shift with matching negative
+// margins, and drop back to text height from md up where a pointer is fine.
+const TAP_TARGET = "py-3 -my-3 md:py-0 md:my-0";
+
 function CheckItem({ children }: { children: React.ReactNode }) {
   return (
     <li className="flex items-start gap-3 text-ink-2">
@@ -104,7 +109,7 @@ function AccordionItem({
   onClick,
 }: {
   question: string;
-  answer: string;
+  answer: ReactNode;
   open: boolean;
   onClick: () => void;
 }) {
@@ -131,6 +136,7 @@ function AccordionItem({
       </button>
       <div
         ref={contentRef}
+        inert={!open}
         className="overflow-hidden transition-all duration-300 ease-house"
         style={{ maxHeight: open ? (contentHeight || 200) : 0 }}
       >
@@ -169,6 +175,42 @@ const GUIDE_CARDS = [
     blurb:
       "What a live-streamer media kit should actually contain, and why concurrent viewers beat follower counts as the headline number.",
   },
+  {
+    href: "/blog/how-much-to-charge-sponsored-stream",
+    title: "How Much to Charge for a Sponsored Stream",
+    blurb:
+      "The CPVH method: average concurrent viewers × hours × the published rate band, with worked examples and the scripts for answering a lowball DM.",
+  },
+  {
+    href: "/blog/twitch-sponsorship-rates",
+    title: "Twitch Sponsorship Rates",
+    blurb:
+      "What brands actually pay, with sources — benchmark ranges by channel size, by deliverable, and by deal structure.",
+  },
+  {
+    href: "/blog/what-is-cpvh",
+    title: "What Is CPVH?",
+    blurb:
+      "Cost per viewer-hour is the metric live sponsorships are priced on. What it means, and how to work out what your last deal really paid.",
+  },
+  {
+    href: "/blog/net-30-net-60-net-90",
+    title: "Net 30, Net 60, Net 90",
+    blurb:
+      "What each payment term commits a brand to, why they push for the long ones, and what to negotiate before you sign instead of after.",
+  },
+  {
+    href: "/blog/sponsorship-contract-checklist",
+    title: "Sponsorship Contract Checklist",
+    blurb:
+      "Deliverables, usage rights, exclusivity, payment terms, kill fees, proof of delivery — what belongs in writing before a deal starts.",
+  },
+  {
+    href: "/blog/what-is-a-sponsorship-crm",
+    title: "What Is a Sponsorship CRM?",
+    blurb:
+      "What the category does, who's far enough along to need one, and why tools built for feed content miss live streaming entirely.",
+  },
 ];
 
 const FAQS = [
@@ -189,8 +231,20 @@ const FAQS = [
     a: "Built for live creators on Twitch, YouTube Live, TikTok Live, and Kick. Deals from any platform can go in the pipeline.",
   },
   {
-    q: "I have [X] viewers — is this for me?",
-    a: "Sponsee is built for streamers roughly between 100 and 5,000 concurrent viewers who are already doing brand deals. Under that? The free rate calculator is still yours.",
+    q: "How big do I need to be?",
+    a: (
+      <>
+        Sponsee is built for streamers roughly between 100 and 5,000 concurrent viewers who are
+        already doing brand deals. Under that? Start with the{" "}
+        <a
+          href="/blog/deliverable-pricing"
+          className="rounded-sm font-medium text-pine underline decoration-pine/30 underline-offset-2 outline-none transition-colors duration-150 hover:text-pine-hover hover:decoration-pine-hover/50 focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+        >
+          free deliverable pricing guide
+        </a>{" "}
+        — and the free rate calculator is coming soon.
+      </>
+    ),
   },
   {
     q: "Does Sponsee send emails as me?",
@@ -213,7 +267,42 @@ export default function App() {
   }, []);
 
   const scrollToWaitlist = () => {
-    document.getElementById("waitlist")?.scrollIntoView({ behavior: "smooth" });
+    const target = document.getElementById("waitlist");
+    if (!target) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const alreadyAligned = Math.abs(target.getBoundingClientRect().top) <= 1;
+    // "instant", not "auto": "auto" defers to the page's CSS scroll-behavior
+    // (smooth, index.css), which would animate anyway and strand focus mid-scroll.
+    target.scrollIntoView({ behavior: reduced ? "instant" : "smooth" });
+    const email = document.getElementById("email");
+    if (!email) return;
+    // Hand focus to the form once the scroll settles, so keyboard and AT users
+    // land on the email field instead of staying on the trigger button. The
+    // form swaps to a status card after submit, so #email can be absent.
+    let done = false;
+    let fallbackTimer: number | undefined;
+    const focusEmail = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("scrollend", focusEmail);
+      window.removeEventListener("scroll", restartFallback);
+      if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
+      email.focus({ preventScroll: true });
+    };
+    const restartFallback = () => {
+      if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
+      fallbackTimer = window.setTimeout(focusEmail, 150);
+    };
+    if (reduced || alreadyAligned) {
+      fallbackTimer = window.setTimeout(focusEmail, 0);
+    } else if (Reflect.has(window, "onscrollend")) {
+      window.addEventListener("scrollend", focusEmail, { once: true });
+    } else {
+      // Older browsers without scrollend use a debounced scroll listener, so
+      // focus cannot race ahead of a long native smooth scroll.
+      window.addEventListener("scroll", restartFallback, { passive: true });
+      restartFallback();
+    }
   };
 
   return (
@@ -274,7 +363,7 @@ export default function App() {
             <Eyebrow>The sponsorship CRM for streamers</Eyebrow>
             <h1 className="mb-6 font-serif text-[42px] leading-[1.05] tracking-[-0.015em] text-ink md:text-[68px]">
               Run your sponsorships{" "}
-              <em className="not-italic text-pine">like an agency.</em> Keep 100%.
+              <em className="not-italic text-pine">like an agency.</em> Keep&nbsp;100%.
             </h1>
             <p className="mx-auto mb-9 max-w-[640px] text-lg leading-relaxed text-ink-2">
               Every brand deal in one pipeline. Every deal priced against real CPVH benchmarks.
@@ -392,7 +481,7 @@ export default function App() {
                   pricing guide until the real calculator ships. */}
               <a
                 href="/blog/deliverable-pricing"
-                className="inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+                className={`${TAP_TARGET} inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper`}
               >
                 Read the deliverable pricing guide
                 <ArrowRight className="h-3.5 w-3.5" />
@@ -432,7 +521,7 @@ export default function App() {
             <div className="mt-4">
               <a
                 href="/blog/sponsor-paying-late"
-                className="inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+                className={`${TAP_TARGET} inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper`}
               >
                 Read the chase guide
                 <ArrowRight className="h-3.5 w-3.5" />
@@ -547,7 +636,7 @@ export default function App() {
         <div className="mt-8 text-center">
           <a
             href="/blog/"
-            className="inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2"
+            className={`${TAP_TARGET} inline-flex items-center gap-1 rounded-md text-sm font-medium text-pine outline-none transition-colors duration-150 hover:text-pine-hover focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2`}
           >
             See all guides
             <ArrowRight className="h-3.5 w-3.5" />
@@ -689,10 +778,20 @@ export default function App() {
               <p className="text-sm text-ink-3">The sponsorship CRM for streamers.</p>
             </div>
             <div className="flex flex-wrap gap-6 text-sm text-ink-2">
-              <a href="/blog/" className="rounded-md outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2">Blog</a>
-              <a href="/privacy.html" className="rounded-md outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2">Privacy</a>
-              <a href="/terms.html" className="rounded-md outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2">Terms</a>
-              <a href="mailto:hello@sponsee.app" className="rounded-md outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2">Contact</a>
+              {[
+                { href: "/blog/", label: "Blog" },
+                { href: "/privacy.html", label: "Privacy" },
+                { href: "/terms.html", label: "Terms" },
+                { href: "mailto:hello@sponsee.app", label: "Contact" },
+              ].map((l) => (
+                <a
+                  key={l.href}
+                  href={l.href}
+                  className={`${TAP_TARGET} inline-flex items-center rounded-md outline-none transition-colors duration-150 hover:text-ink focus-visible:ring-2 focus-visible:ring-pine/40 focus-visible:ring-offset-2`}
+                >
+                  {l.label}
+                </a>
+              ))}
             </div>
           </div>
           <div className="mt-8 border-t border-hairline pt-6 text-[13px] text-ink-3">
