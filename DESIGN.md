@@ -16,6 +16,8 @@ colors:
   amber-tint: "#FAF0DC"
   brick: "#B3402A"
   brick-tint: "#F9E7E1"
+  denim: "#3E5C76"
+  denim-tint: "#E7EDF2"
   twitch: "#8B5CF6"
   youtube: "#E5484D"
   kick: "#58A617"
@@ -125,7 +127,7 @@ The system is deliberately the opposite of streamer-tool convention. No dark mod
 
 ## Colors
 
-A warm-paper neutral ramp with one working accent and two reserved signal colors.
+A warm-paper neutral ramp with one working accent and three reserved signal colors.
 
 ### Primary
 - **Pine** (#0E7A5F): the only interactive color — primary buttons, links, focus rings, active nav, selected states, "paid" status. Hover deepens to **Pine Hover** (#0B664F); **Pine Tint** (#E4F1EB) backs positive chips and selected/hover fills.
@@ -133,6 +135,7 @@ A warm-paper neutral ramp with one working accent and two reserved signal colors
 ### Secondary
 - **Amber** (#945E06): attention without alarm — "negotiating," "in progress," due-soon. Always paired with **Amber Tint** (#FAF0DC) as chip background. Darkened from #B87208 (3.41:1, sub-AA) in SPO-404; the current value holds 4.81:1 on the tint and 4.99:1 on paper.
 - **Brick** (#B3402A): danger and overdue — missed deliverables, late invoices, destructive actions. Chip background **Brick Tint** (#F9E7E1).
+- **Denim** (#3E5C76): neutral information — "in progress," "viewed," "delivered," the Mid–agency benchmark band. A desaturated slate-blue chosen to read as a fourth hue without leaving the warm-paper set; it is the one cool token and it never means "interactive." Chip background **Denim Tint** (#E7EDF2). Added in SPO-414 to retire stock `blue-500`, which failed AA at 3.68:1 under the 10px white chip text; denim holds 7.01:1 on white and 5.94:1 on its tint.
 
 ### Neutral
 - **Paper** (#F7F5F1): the app background. Nothing else is this color.
@@ -146,7 +149,8 @@ A warm-paper neutral ramp with one working accent and two reserved signal colors
 
 ### Named Rules
 **The Warm Cast Rule.** No pure gray, no pure black, anywhere. Every neutral comes from the paper/ink ramp above; a `#EEE` border or `#333` text is a defect.
-**The One Accent Rule.** Pine is the only color that means "interactive." Amber and brick are statuses, never buttons or links. If a screen looks colorful, it is wrong.
+**The One Accent Rule.** Pine is the only color that means "interactive." Amber, brick and denim are statuses, never buttons or links. If a screen looks colorful, it is wrong.
+**The Named Status Rule.** A status is never conveyed by color alone (WCAG 1.4.1). Every surface that renders a status chip or dot also renders the status in words — visibly where there is room, in the accessible name where there is not. Two statuses may share a hue when the palette has no hue to spare, but they must then differ on a non-color channel as well: `scheduled` and `rescheduled` share amber and are separated by a dashed border and a hollow dot (SPO-414).
 **The Sticker Rule.** Platform brand colors appear only as small dots and chips (≤8px dots), never as surface, text, or button colors.
 
 ## Typography
@@ -246,4 +250,6 @@ One easing curve for the entire product — `cubic-bezier(0.22, 1, 0.36, 1)` fro
 - **Don't** add fonts beyond Inter, Instrument Serif, and JetBrains Mono, or load fonts from a CDN — faces are self-hosted (SPO-25).
 - **Don't** exceed 14px corner radius on in-app containers (the standalone auth card's 16px is the only exception) or use sharp corners; pills are for chips only.
 - **Don't** put shadows on static decoration or use cool-toned (`rgba(0,0,0,…)`) shadows heavier than the `xs` utility.
-- **Don't** use amber or brick as button or link colors; they are status signals only.
+- **Don't** use amber, brick or denim as button or link colors; they are status signals only.
+- **Don't** reach for a stock Tailwind hue scale (`bg-blue-500`, `text-purple-600`). `extend` deep-merges the brand tokens over the stock ramps, so those classes still compile and the build stays green — `scripts/stock-palette.guard.test.ts` is what catches them, on contrast as well as on name.
+- **Don't** ship a status whose only difference from its neighbour is hue. See The Named Status Rule.

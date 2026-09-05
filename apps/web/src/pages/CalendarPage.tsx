@@ -12,6 +12,12 @@ import {
 } from "lucide-react";
 import QueryError from "@/components/QueryError";
 import { Skeleton } from "@/components/Skeleton";
+// Status copy has one owner. StatusChip already keys `deliverableLabels` off
+// the shared union, so the calendar borrows the words rather than restating
+// them — this page having no label map at all is what let SPO-414 delete the
+// scheduled/rescheduled distinction without failing anything.
+import { deliverableLabels } from "@/components/shared/StatusChip";
+import { deliverableStatusColors, deliverableStatusDot } from "@/lib/deliverable-status";
 import type { DeliverableStatus } from "@sponsee/shared";
 
 /* ── helpers ─────────────────────────────────────────────────────── */
@@ -68,31 +74,14 @@ interface CalendarEvent {
   currency?: string;
 }
 
-const deliverableStatusColors: Record<DeliverableStatus, string> = {
-  done: "bg-pine-tint text-pine border-pine/20",
-  in_progress: "bg-denim-tint text-denim border-denim/20",
-  scheduled: "bg-amber-tint text-amber border-amber/20",
-  not_started: "bg-surface-subtle text-ink-3 border-hairline",
-  missed: "bg-brick-tint text-brick border-brick/20",
-  // Rescheduled shares the amber family with scheduled, matching DealDetail —
-  // both are "attention, date moved" states; the label carries the difference.
-  rescheduled: "bg-amber-tint text-amber border-amber/20",
-};
-
-const deliverableStatusDot: Record<DeliverableStatus, string> = {
-  done: "bg-pine",
-  in_progress: "bg-denim",
-  scheduled: "bg-amber",
-  not_started: "bg-ink-3",
-  missed: "bg-brick",
-  rescheduled: "bg-amber",
-};
-
-const legendItems = [
-  { label: "Done", dot: "bg-pine" },
-  { label: "In progress", dot: "bg-denim" },
-  { label: "Scheduled", dot: "bg-amber" },
-] as const;
+// All six statuses, not the three that happened to be common. An incomplete
+// legend is part of what let this page ship status as colour alone.
+const legendItems = (
+  ["done", "in_progress", "scheduled", "rescheduled", "missed", "not_started"] as const
+).map((status) => ({
+  label: deliverableLabels[status],
+  dot: deliverableStatusDot[status],
+}));
 
 /* ── sub-components ──────────────────────────────────────────────── */
 
@@ -312,10 +301,10 @@ export default function CalendarPage() {
             </div>
 
             {/* Legend */}
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
               {legendItems.map((item) => (
                 <div key={item.label} className="flex items-center gap-1.5">
-                  <span className={cn("h-2 w-2 rounded-full", item.dot)} />
+                  <span className={cn("h-2 w-2 shrink-0 rounded-full", item.dot)} />
                   <span className="text-[11px] text-ink-3">{item.label}</span>
                 </div>
               ))}
@@ -375,6 +364,12 @@ export default function CalendarPage() {
                     <div className="mt-1.5 space-y-1">
                       {deliverables.slice(0, 3).map((ev) => {
                         const status = ev.status as DeliverableStatus;
+                        const statusLabel =
+                          deliverableLabels[status] || deliverableLabels.not_started;
+                        // A month cell has no room for a visible status word, so
+                        // the chip's non-colour cue is its dashed border and the
+                        // status rides in the accessible name and the tooltip.
+                        const detail = `${ev.title}${ev.dealTitle ? ` — ${ev.dealTitle}` : ""} · ${statusLabel}`;
                         return (
                           <button
                             key={ev.id}
@@ -385,7 +380,8 @@ export default function CalendarPage() {
                               "flex w-full items-center gap-1 rounded border px-1.5 py-0.5 text-left text-[11px] font-medium transition-opacity hover:opacity-80",
                               deliverableStatusColors[status] || deliverableStatusColors.not_started
                             )}
-                            title={`${ev.title}${ev.dealTitle ? ` — ${ev.dealTitle}` : ""}`}
+                            title={detail}
+                            aria-label={detail}
                           >
                             <span
                               className={cn(
@@ -450,6 +446,13 @@ export default function CalendarPage() {
                           )}
                         >
                           Due {formatShortDate(ev.date)}
+                          {" · "}
+                          {/* The status in words. Until now the dot beside this
+                              row was the only place status appeared at all. */}
+                          <span className="text-ink-3">
+                            {deliverableLabels[status] ||
+                              deliverableLabels.not_started}
+                          </span>
                         </p>
                       </div>
                     </button>

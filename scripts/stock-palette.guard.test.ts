@@ -111,11 +111,12 @@ const WHITE = "#FFFFFF";
 // (10px here, 10.5px in Calculator.tsx — neither is WCAG "large text", so the
 // 4.5:1 floor applies, not 3:1) and the calendar status dots.
 //
-// `amber` is missing on purpose and only for now. It is #B87208 on main, which
-// is 3.85:1 and would red this suite against a defect SPO-404 already owns the
-// fix for: PR #138 takes it to #945E06 (5.44:1) and is QA-passed with a merge
-// card pending. SPO-429 adds "amber" here once that lands.
-const SOLID_FILLS_UNDER_WHITE_TEXT = ["pine", "brick", "denim"];
+// `amber` was carved out of this list on the first round of SPO-414 because it
+// was still #B87208 (3.85:1) and would have redded the suite against a defect
+// SPO-404 owned. #138 has since landed #945E06 (5.44:1 on white, 4.81:1 on its
+// tint), so the carve-out is retired here and the list is complete — which is
+// what SPO-429 was opened to do.
+const SOLID_FILLS_UNDER_WHITE_TEXT = ["pine", "brick", "denim", "amber"];
 
 describe("warm-paper palette contrast", () => {
   it("reproduces contrast values that do not depend on our config", () => {
@@ -123,6 +124,10 @@ describe("warm-paper palette contrast", () => {
     // The fill SPO-414 removed, and the one it removed in SPO-411's wake.
     expect(contrast("#3B82F6", WHITE)).toBeCloseTo(3.68, 2);
     expect(contrast("#A855F7", WHITE)).toBeCloseTo(3.96, 2);
+    // The amber SPO-404 replaced, kept as the negative control for the token
+    // that just joined SOLID_FILLS_UNDER_WHITE_TEXT: this value would fail the
+    // loop below, so passing it is a fact about #945E06 and not about the loop.
+    expect(contrast("#B87208", WHITE)).toBeCloseTo(3.85, 2);
   });
 
   it.each([
@@ -138,8 +143,8 @@ describe("warm-paper palette contrast", () => {
 
   it("keeps each tint readable under its own token as text", () => {
     // The status pills are `bg-<token>-tint text-<token>` — small text on a
-    // light fill, same 4.5:1 floor. Same amber carve-out as above (#B87208 on
-    // #FAF0DC is 3.41:1; #138 takes it to 4.81:1).
+    // light fill, same 4.5:1 floor. amber is in the loop now: #945E06 on
+    // #FAF0DC is 4.81:1, where the old #B87208 was 3.41:1.
     const defaults = brandTokens(WEB_CONFIG, "DEFAULT");
     const tints = brandTokens(WEB_CONFIG, "tint");
     // Asserted so a new token with a tint cannot quietly skip the loop below.
