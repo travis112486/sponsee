@@ -20,6 +20,12 @@ export const syncNowLimiter = new SlidingWindowLimiter(
   SYNC_NOW_WINDOW_MS
 );
 
+// How recent an `account` row must be to count as evidence that a recovered
+// (state-mismatch) connect attempt landed. A replayed callback arrives seconds
+// after the first hit wrote the row; anything older is a pre-existing link
+// from an earlier connect (SPO-142).
+export const RECOVERY_EVIDENCE_MS = 5 * 60 * 1000;
+
 /**
  * Creator-supplied URL that we store and may later render as an `href`/`src`.
  *
@@ -241,7 +247,14 @@ export const settingsRouter = createTRPCRouter({
    * true subscriber count appears without waiting for the daily job.
    */
   completePlatformConnect: creatorScopedProcedure
-    .input(z.object({ platform: z.enum(["twitch", "kick"]) }))
+    .input(
+      z.object({
+        platform: z.enum(["twitch", "kick"]),
+        // Set when the client hit a state-mismatch error and is asking whether
+        // the link landed anyway, rather than returning from a clean redirect.
+        recovery: z.boolean().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       // Scoped to the session user, so one tenant can never claim an OAuth
       // account another user linked.
@@ -260,6 +273,18 @@ export const settingsRouter = createTRPCRouter({
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `No linked ${input.platform} account — the Connect flow didn't finish`,
+        });
+      }
+
+      // In recovery, a row only proves *this* attempt landed if it was written
+      // moments ago — a replayed callback trails the real one by seconds. An
+      // older row is a pre-existing link (e.g. account A while the creator was
+      // switching to B), and re-stitching it would report a failed switch as
+      // connected (SPO-142). The happy path stays unbounded.
+      if (input.recovery && Date.now() - linked.updatedAt.getTime() > RECOVERY_EVIDENCE_MS) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `No new ${input.platform} link landed — the Connect flow didn't finish`,
         });
       }
 
