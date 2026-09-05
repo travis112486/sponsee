@@ -174,6 +174,7 @@ export const invoiceRouter = createTRPCRouter({
         deliveredAt: invoiceDeliveries.deliveredAt,
         openedAt: invoiceDeliveries.openedAt,
         bouncedAt: invoiceDeliveries.bouncedAt,
+        bounceDetail: invoiceDeliveries.bounceDetail,
       })
       .from(invoiceDeliveries)
       .innerJoin(invoices, eq(invoiceDeliveries.invoiceId, invoices.id))

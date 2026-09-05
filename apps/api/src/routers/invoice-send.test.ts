@@ -483,4 +483,35 @@ describe("invoice.latestDeliveries (SPO-365)", () => {
     const rows = await caller.latestDeliveries();
     expect(rows.find((r) => r.invoiceId === invoice.id)).toBeUndefined();
   });
+
+  // SPO-436 — the read half of the bounce reason. The write lives in
+  // webhooks.ts and is covered by webhooks.invoice-delivery.test.ts; here we
+  // seed the reason directly so the select's inclusion of `bounceDetail` is
+  // proven on its own.
+  it("returns the provider's bounce reason when one was persisted (SPO-436)", async () => {
+    const invoice = await insertInvoice({});
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    await caller.send({ id: invoice.id });
+
+    await db
+      .update(schema.invoiceDeliveries)
+      .set({ status: "bounced", bouncedAt: new Date(), bounceDetail: "mailbox full" })
+      .where(eq(schema.invoiceDeliveries.invoiceId, invoice.id));
+
+    const rows = await caller.latestDeliveries();
+    const forInvoice = rows.find((r) => r.invoiceId === invoice.id);
+    expect(forInvoice?.bounceDetail).toBe("mailbox full");
+  });
+
+  it("returns a null bounce reason for a delivery that never bounced (SPO-436)", async () => {
+    const invoice = await insertInvoice({});
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    await caller.send({ id: invoice.id });
+
+    const rows = await caller.latestDeliveries();
+    const forInvoice = rows.find((r) => r.invoiceId === invoice.id);
+    expect(forInvoice?.bounceDetail).toBeNull();
+  });
 });

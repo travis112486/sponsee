@@ -464,7 +464,9 @@ export default function Payments() {
                   <p className="flex items-start gap-1 px-4 pb-3 text-[11px] font-medium text-brick">
                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                     {deliveryState === "bounced" && delivery
-                      ? `Undelivered to ${delivery.toEmail} — confirm the address and resend.`
+                      ? `Undelivered to ${delivery.toEmail} — ${
+                          delivery.bounceDetail ?? "confirm the address and resend."
+                        }`
                       : "The send failed before it reached the brand — resend to try again."}
                   </p>
                 )}

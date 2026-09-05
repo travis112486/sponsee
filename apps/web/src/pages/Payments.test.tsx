@@ -326,6 +326,43 @@ describe("Payments delivery status chip", () => {
     // Visible as static text, not gated behind a title/hover-only attribute.
     expect(reason.closest("[title]")).toBeNull();
   });
+
+  // SPO-436 — the bounce line surfaces the provider's verbatim reason instead of
+  // the one-size copy, because "mailbox full" and "no such user" demand opposite
+  // next steps. The reason is untrusted display copy: rendered verbatim, never
+  // switched on.
+  it("shows the provider's bounce reason when one is present (SPO-436)", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [
+      delivery({
+        status: "bounced",
+        bouncedAt: "2026-01-02T00:00:00Z",
+        toEmail: "bad@example.com",
+        bounceDetail: "The server was unable to deliver your message (ex: mailbox full).",
+      }),
+    ];
+
+    render(<Payments />);
+
+    expect(
+      screen.getByText(/undelivered to bad@example\.com — the server was unable to deliver your message/i)
+    ).toBeVisible();
+    // The provider's reason replaces the generic advice, it isn't appended to it.
+    expect(screen.queryByText(/confirm the address and resend/i)).not.toBeInTheDocument();
+  });
+
+  it("falls back to the address-confirm copy when the bounce carries no reason (SPO-436)", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [
+      delivery({ status: "bounced", bouncedAt: "2026-01-02T00:00:00Z", toEmail: "bad@example.com" }),
+    ];
+
+    render(<Payments />);
+
+    expect(
+      screen.getByText(/undelivered to bad@example\.com — confirm the address and resend\./i)
+    ).toBeVisible();
+  });
 });
 
 describe("Payments chase gating on delivery", () => {
