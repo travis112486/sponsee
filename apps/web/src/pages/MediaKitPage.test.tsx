@@ -49,6 +49,8 @@ describe("MediaKitPage", () => {
     expect(screen.getByRole("heading", { name: "Proposal Creator" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("Pixel Panda")).toBeInTheDocument();
     expect(screen.getByText(/synced from connected channels/)).toBeInTheDocument();
+    expect(screen.getByText(/Last channel refresh:/)).toHaveTextContent("Last channel refresh:");
+    expect(screen.getByRole("time")).toHaveAttribute("datetime", "2026-09-01T00:00:00.000Z");
     expect(screen.getByDisplayValue("Stream integration")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Brand launch stream")).toBeInTheDocument();
     expect(screen.getByText(/CPVH guidance · shared benchmark/)).toBeInTheDocument();
