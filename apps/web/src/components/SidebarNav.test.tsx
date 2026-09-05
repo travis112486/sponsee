@@ -49,6 +49,17 @@ describe("Sidebar navigation", () => {
     expect(link).toHaveAttribute("href", "/calculator");
   });
 
+  it("exposes the Proposal Creator (Media Kit) entry", () => {
+    render(
+      <MemoryRouter>
+        <Sidebar />
+      </MemoryRouter>
+    );
+
+    const link = screen.getByRole("link", { name: "Proposal Creator (Media Kit)" });
+    expect(link).toHaveAttribute("href", "/media-kit");
+  });
+
   it("keeps the existing primary destinations alongside it", () => {
     render(
       <MemoryRouter>
@@ -62,6 +73,7 @@ describe("Sidebar navigation", () => {
       ["Payments", "/payments"],
       ["Calendar", "/calendar"],
       ["Calculator", "/calculator"],
+      ["Proposal Creator (Media Kit)", "/media-kit"],
       ["Settings", "/settings"],
     ]) {
       expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);
