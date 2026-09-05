@@ -55,7 +55,9 @@ export default {
           tint: "#E4F1EB",
         },
         amber: {
-          DEFAULT: "#B87208",
+          // 4.81:1 on amber-tint, 4.99:1 on paper — WCAG AA for chip text
+          // (SPO-404); same hue/sat as the old #B87208. Mirrors apps/web.
+          DEFAULT: "#945E06",
           tint: "#FAF0DC",
         },
         brick: {
