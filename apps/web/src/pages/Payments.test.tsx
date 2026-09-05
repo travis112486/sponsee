@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach, beforeAll } from "vitest";
+import { render, screen, cleanup, fireEvent, within, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
 import Payments from "./Payments";
 
@@ -135,6 +135,26 @@ vi.mock("@/trpc", () => ({
   },
 }));
 
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+beforeAll(() => {
+  // The AlertDialog gate mounts Radix's dialog layer, which calls these in a
+  // real browser; jsdom implements none of them.
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false;
+    Element.prototype.setPointerCapture = () => {};
+    Element.prototype.releasePointerCapture = () => {};
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+});
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -190,45 +210,108 @@ describe("Payments chase approve/editAndSend error handling", () => {
 });
 
 describe("Payments send/resend", () => {
-  it("shows 'Send invoice' and sends after confirmation when no delivery exists yet", () => {
+  it("shows 'Send invoice' and sends only after the dialog is confirmed", () => {
     invoicesData = [openInvoice];
     deliveriesData = [];
-    vi.stubGlobal("confirm", vi.fn(() => true));
-
-    render(<Payments />);
-
-    const sendButton = screen.getByRole("button", { name: /send invoice/i });
-    fireEvent.click(sendButton);
-
-    expect(confirm).toHaveBeenCalled();
-    expect(sendMutate).toHaveBeenCalledWith({ id: "inv-1" });
-  });
-
-  it("does not send when the confirmation is declined", () => {
-    invoicesData = [openInvoice];
-    deliveriesData = [];
-    vi.stubGlobal("confirm", vi.fn(() => false));
 
     render(<Payments />);
 
     fireEvent.click(screen.getByRole("button", { name: /send invoice/i }));
 
+    const dialog = screen.getByRole("alertdialog");
+    expect(within(dialog).getByText("Send this invoice?")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("This puts an email in the brand's inbox.")
+    ).toBeInTheDocument();
+    // The gate is what guards the send — nothing leaves while it is open.
     expect(sendMutate).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Send" }));
+
+    expect(sendMutate).toHaveBeenCalledWith({ id: "inv-1" });
   });
 
-  it("shows 'Resend' once a delivery exists, and confirms against the delivery's recipient", () => {
+  it("does not send when the dialog is declined", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [];
+
+    render(<Payments />);
+
+    fireEvent.click(screen.getByRole("button", { name: /send invoice/i }));
+
+    const dialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(sendMutate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("shows 'Resend' once a delivery exists, naming the recipient and the second email", () => {
     invoicesData = [openInvoice];
     deliveriesData = [delivery()];
-    const confirmSpy = vi.fn(() => true);
-    vi.stubGlobal("confirm", confirmSpy);
 
     render(<Payments />);
 
     expect(screen.queryByRole("button", { name: /^send invoice$/i })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /resend/i }));
 
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("brand-contact@example.com"));
+    const dialog = screen.getByRole("alertdialog");
+    expect(
+      within(dialog).getByText("Resend this invoice to brand-contact@example.com?")
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("This puts another email in their inbox.")
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Resend" }));
+
     expect(sendMutate).toHaveBeenCalledWith({ id: "inv-1" });
+  });
+
+  it("cancels on Escape without sending", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [];
+
+    render(<Payments />);
+
+    fireEvent.click(screen.getByRole("button", { name: /send invoice/i }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: "Escape", code: "Escape" });
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(sendMutate).not.toHaveBeenCalled();
+  });
+
+  it("moves focus into the dialog when it opens", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [];
+
+    render(<Payments />);
+
+    fireEvent.click(screen.getByRole("button", { name: /send invoice/i }));
+
+    // Radix focuses the Cancel affordance on open (the safe default for a
+    // confirm), proving the dialog owns focus rather than leaving it on the
+    // trigger behind the overlay.
+    const dialog = screen.getByRole("alertdialog");
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+  });
+
+  it("returns focus to the Send button when the dialog closes", async () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [];
+
+    render(<Payments />);
+
+    const sendButton = screen.getByRole("button", { name: /send invoice/i });
+    fireEvent.click(sendButton);
+
+    const dialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    // Radix returns focus on unmount via a queued task, so poll for it.
+    await waitFor(() => expect(sendButton).toHaveFocus());
   });
 
   it("surfaces the exact SPO-363 refusal message instead of a generic toast", () => {
