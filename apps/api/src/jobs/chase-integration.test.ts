@@ -304,6 +304,48 @@ describe("chase integration: past-due invoice -> review -> send -> timeline", ()
     expect(events).toHaveLength(0);
   });
 
+  it("runChaseTick skips a disabled step and schedules the next enabled step", async () => {
+    const { invoice, creator } = await seedFullFlow();
+
+    await db
+      .update(schema.chaseTemplates)
+      .set({ enabled: false })
+      .where(and(eq(schema.chaseTemplates.creatorId, creator.id), eq(schema.chaseTemplates.step, 1)));
+
+    await db
+      .update(schema.invoiceChaseState)
+      .set({ nextActionAt: new Date(Date.now() - 60_000) })
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+
+    expect(await runChaseTick()).toBe(0);
+
+    const [advanced] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(advanced.nextStep).toBe(2);
+    expect(advanced.nextActionAt).not.toBeNull();
+
+    await db
+      .update(schema.invoiceChaseState)
+      .set({ nextActionAt: new Date(Date.now() + 60_000) })
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(await runChaseTick()).toBe(0);
+
+    // A real due tick at step 2 creates the review event without any provider send.
+    await db
+      .update(schema.invoiceChaseState)
+      .set({ nextActionAt: new Date(Date.now() - 60_000) })
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(await runChaseTick()).toBe(1);
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+    expect(event.step).toBe(2);
+  });
+
   it("approve claims awaiting_review -> approved and enqueues pg-boss job", async () => {
     const { creator, invoice } = await seedFullFlow();
     await runChaseTick();

@@ -1,4 +1,4 @@
-import { eq, and, or, sql, isNotNull, isNull } from "drizzle-orm";
+import { eq, and, or, sql, isNotNull, isNull, gte, asc } from "drizzle-orm";
 import { db } from "@sponsee/db";
 import {
   invoices,
@@ -59,11 +59,13 @@ export async function runChaseTick(): Promise<number> {
 
     if (!template || !template.enabled) {
       // Template missing or disabled — skip this step and advance to next
+      const next = await findNextChaseAction(invoice, step + 1);
       await db
         .update(invoiceChaseState)
         .set({
-          nextStep: step + 1,
-          nextActionAt: await calculateNextActionAt(invoice, step + 1),
+          mode: next ? "armed" : "completed",
+          nextStep: next?.step ?? step + 1,
+          nextActionAt: next?.nextActionAt ?? null,
           updatedAt: now,
         })
         .where(eq(invoiceChaseState.invoiceId, invoice.id));
@@ -78,11 +80,13 @@ export async function runChaseTick(): Promise<number> {
 
     if (existing && existing.count > 0) {
       // Already queued/reviewed/sent for this step — advance
+      const next = await findNextChaseAction(invoice, step + 1);
       await db
         .update(invoiceChaseState)
         .set({
-          nextStep: step + 1,
-          nextActionAt: await calculateNextActionAt(invoice, step + 1),
+          mode: next ? "armed" : "completed",
+          nextStep: next?.step ?? step + 1,
+          nextActionAt: next?.nextActionAt ?? null,
           updatedAt: now,
         })
         .where(eq(invoiceChaseState.invoiceId, invoice.id));
@@ -145,11 +149,13 @@ export async function runChaseTick(): Promise<number> {
     });
 
     // Update chase state: advance step and set next action time
+    const next = await findNextChaseAction(invoice, step + 1);
     await db
       .update(invoiceChaseState)
       .set({
-        nextStep: step + 1,
-        nextActionAt: await calculateNextActionAt(invoice, step + 1),
+        mode: next ? "armed" : "completed",
+        nextStep: next?.step ?? step + 1,
+        nextActionAt: next?.nextActionAt ?? null,
         updatedAt: now,
       })
       .where(eq(invoiceChaseState.invoiceId, invoice.id));
@@ -443,20 +449,34 @@ export async function sendChaseEmail(args: {
   }
 }
 
-export async function calculateNextActionAt(invoice: typeof invoices.$inferSelect, nextStep: number): Promise<Date | null> {
-  if (nextStep > 3) return null;
+export async function findNextChaseAction(
+  invoice: typeof invoices.$inferSelect,
+  fromStep: number
+): Promise<{ step: number; nextActionAt: Date } | null> {
+  if (fromStep > 3) return null;
 
-  // Look up the template offset for this step
   const [template] = await db
     .select()
     .from(chaseTemplates)
-    .where(and(eq(chaseTemplates.creatorId, invoice.creatorId), eq(chaseTemplates.step, nextStep)));
+    .where(
+      and(
+        eq(chaseTemplates.creatorId, invoice.creatorId),
+        gte(chaseTemplates.step, fromStep),
+        eq(chaseTemplates.enabled, true)
+      )
+    )
+    .orderBy(asc(chaseTemplates.step))
+    .limit(1);
 
-  if (!template || !template.enabled) return null;
+  if (!template) return null;
 
   const baseDate = invoice.dueAt ? new Date(invoice.dueAt) : new Date(invoice.issuedAt);
   const next = new Date(baseDate.getTime() + template.offsetDays * 24 * 60 * 60 * 1000);
-  return next;
+  return { step: template.step, nextActionAt: next };
+}
+
+export async function calculateNextActionAt(invoice: typeof invoices.$inferSelect, nextStep: number): Promise<Date | null> {
+  return (await findNextChaseAction(invoice, nextStep))?.nextActionAt ?? null;
 }
 
 function formatCents(cents: number, currency: string): string {
