@@ -20,7 +20,15 @@ export default defineConfig({
     // Keep in step with scripts/vitest-api.config.ts's hookTimeout — see that
     // file's comment (SPO-242). Same PGlite boot cost applies here.
     hookTimeout: 60_000,
-    setupFiles: ["./src/test-utils/vitest-setup.ts"],
+    // The repo-root setup file, not a local copy. This used to be
+    // ./src/test-utils/vitest-setup.ts, a hand-maintained duplicate of
+    // scripts/vitest-setup.ts — so anything added to one config's setup (the
+    // SPO-382 DATABASE_URL strip, for instance) silently did not apply to
+    // `pnpm -C apps/api test`. Sharing the file removes the drift instead of
+    // asking a comment to prevent it. It cannot live under src/: apps/api's
+    // tsconfig sets rootDir to src, so importing across that boundary breaks
+    // `tsc` (TS6059).
+    setupFiles: ["../../scripts/vitest-setup.ts"],
     // Keep this exclude in step with scripts/vitest-api.config.ts — see that
     // file's comment on storage.e2e.test.ts (needs a real MinIO, SPO-171).
     exclude: ["node_modules/**", "dist/**", "**/*.e2e.test.ts"],

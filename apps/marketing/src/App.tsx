@@ -175,6 +175,42 @@ const GUIDE_CARDS = [
     blurb:
       "What a live-streamer media kit should actually contain, and why concurrent viewers beat follower counts as the headline number.",
   },
+  {
+    href: "/blog/how-much-to-charge-sponsored-stream",
+    title: "How Much to Charge for a Sponsored Stream",
+    blurb:
+      "The CPVH method: average concurrent viewers × hours × the published rate band, with worked examples and the scripts for answering a lowball DM.",
+  },
+  {
+    href: "/blog/twitch-sponsorship-rates",
+    title: "Twitch Sponsorship Rates",
+    blurb:
+      "What brands actually pay, with sources — benchmark ranges by channel size, by deliverable, and by deal structure.",
+  },
+  {
+    href: "/blog/what-is-cpvh",
+    title: "What Is CPVH?",
+    blurb:
+      "Cost per viewer-hour is the metric live sponsorships are priced on. What it means, and how to work out what your last deal really paid.",
+  },
+  {
+    href: "/blog/net-30-net-60-net-90",
+    title: "Net 30, Net 60, Net 90",
+    blurb:
+      "What each payment term commits a brand to, why they push for the long ones, and what to negotiate before you sign instead of after.",
+  },
+  {
+    href: "/blog/sponsorship-contract-checklist",
+    title: "Sponsorship Contract Checklist",
+    blurb:
+      "Deliverables, usage rights, exclusivity, payment terms, kill fees, proof of delivery — what belongs in writing before a deal starts.",
+  },
+  {
+    href: "/blog/what-is-a-sponsorship-crm",
+    title: "What Is a Sponsorship CRM?",
+    blurb:
+      "What the category does, who's far enough along to need one, and why tools built for feed content miss live streaming entirely.",
+  },
 ];
 
 const FAQS = [

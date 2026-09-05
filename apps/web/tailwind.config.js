@@ -56,7 +56,10 @@ export default {
           tint: "#E4F1EB",
         },
         amber: {
-          DEFAULT: "#B87208",
+          // 4.81:1 on amber-tint, 4.99:1 on paper — WCAG AA for the 11px
+          // semibold chip text (SPO-404). Same 37° hue / 92% sat as the old
+          // #B87208, which failed at 3.41:1.
+          DEFAULT: "#945E06",
           tint: "#FAF0DC",
         },
         brick: {

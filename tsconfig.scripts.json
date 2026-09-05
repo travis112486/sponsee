@@ -1,0 +1,25 @@
+{
+  // The repo-root `scripts/` directory belonged to no tsconfig, so nothing
+  // typechecked it: `pnpm typecheck` is `turbo run typecheck`, which only
+  // reaches the five workspace packages. A root script could import a function
+  // that no longer exists and stay green until someone ran it by hand.
+  //
+  // These options mirror apps/api/tsconfig.json — the scripts here import from
+  // apps/api/src directly, so they have to resolve modules the same way it
+  // does (NodeNext, hence the `.js` specifiers on `.ts` sources).
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": false,
+    "types": ["node"]
+  },
+  "include": ["scripts/**/*.ts", "scripts/**/*.mts", "scripts/**/*.mjs"]
+}

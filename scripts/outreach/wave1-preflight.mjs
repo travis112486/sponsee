@@ -11,10 +11,16 @@
 // SPO-264 and is not something a preflight tool should be able to exercise.
 //
 //   node scripts/outreach/wave1-preflight.mjs \
-//     --roster outreach/wave1-roster.json \
-//     --ledger outreach/wave1-ledger.jsonl \
+//     --roster ~/.config/sponsee/outreach/wave1-roster.json \
+//     --ledger ~/.config/sponsee/outreach/wave1-ledger.jsonl \
 //     --audience wave-1-outreach \
 //     --touch T2 --channel email
+//
+// Both paths point OUTSIDE the repo on purpose. The roster and ledger hold PII
+// of named real creators — including their opt-outs — and this repo is public,
+// so `outreach/*.json` and `outreach/*.jsonl` are gitignored (SPO-415/SPO-417).
+// The tracked `outreach/*.example.*` fixtures are fictional and are the schema
+// of record; see scripts/outreach/README.md.
 //
 // The ledger path must exist. `--ledger` is a hand-typed argument on send day
 // whose failure mode is mailing someone who opted out: a missing file reads as
