@@ -16,7 +16,7 @@ import {
 } from "@sponsee/db/schema";
 import { createEmailProvider } from "../email/index.js";
 import { resolveCreatorReplyToEmail } from "../email/reply-to.js";
-import { calculateNextActionAt } from "../jobs/chase-tick.js";
+import { findNextChaseAction } from "../jobs/chase-tick.js";
 import { clientIp } from "../client-ip.js";
 import { SlidingWindowLimiter } from "../rate-limit.js";
 
@@ -438,10 +438,15 @@ export const invoiceRouter = createTRPCRouter({
 
       // Chase arms on send, not on create (SPO-363). onConflictDoNothing so a
       // resend never clobbers a creator's pause or an already-armed state.
-      const nextActionAt = await calculateNextActionAt(invoice, 1);
+      const next = await findNextChaseAction(invoice, 1);
       await ctx.db
         .insert(invoiceChaseState)
-        .values({ invoiceId: invoice.id, mode: "armed", nextStep: 1, nextActionAt })
+        .values({
+          invoiceId: invoice.id,
+          mode: next ? "armed" : "completed",
+          nextStep: next?.step ?? 4,
+          nextActionAt: next?.nextActionAt ?? null,
+        })
         .onConflictDoNothing({ target: invoiceChaseState.invoiceId });
 
       await ctx.db.insert(activityEvents).values({

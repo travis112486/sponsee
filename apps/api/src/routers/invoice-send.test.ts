@@ -5,6 +5,7 @@ import { sql, eq } from "drizzle-orm";
 import { invoiceRouter, formatInvoiceDate } from "./invoice.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
+import { runChaseTick } from "../jobs/chase-tick.js";
 
 // Mock the email provider factory so these tests never touch a real SMTP
 // server; sendMock is asserted directly for call count/args (SPO-363 AC:
@@ -183,7 +184,7 @@ describe("invoice.send — happy path", () => {
     expect(payload.text).toContain(`https://sponsee.app/i/${result.publicToken}`);
   });
 
-  it("arms chase on send (was unarmed after create)", async () => {
+  it("records chase as completed on send when no template is schedulable", async () => {
     const invoice = await insertInvoice({});
     const caller = invoiceRouter.createCaller(mockCtx(creatorId));
 
@@ -194,7 +195,55 @@ describe("invoice.send — happy path", () => {
       .from(schema.invoiceChaseState)
       .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
     expect(state).toBeDefined();
+    expect(state.mode).toBe("completed");
+    expect(state.nextActionAt).toBeNull();
+  });
+
+  it("schedules the next enabled chase step when step 1 is disabled", async () => {
+    const invoice = await insertInvoice({});
+    await db.insert(schema.chaseTemplates).values([
+      {
+        creatorId,
+        step: 1,
+        name: "Friendly reminder",
+        offsetDays: 1,
+        subject: "Reminder",
+        body: "Please pay.",
+        enabled: false,
+      },
+      {
+        creatorId,
+        step: 2,
+        name: "Second notice",
+        offsetDays: 2,
+        subject: "Second notice",
+        body: "Please pay now.",
+        enabled: true,
+      },
+    ]);
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    await caller.send({ id: invoice.id });
+
+    const [state] = await db
+      .select()
+      .from(schema.invoiceChaseState)
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
     expect(state.mode).toBe("armed");
+    expect(state.nextStep).toBe(2);
+    expect(state.nextActionAt).not.toBeNull();
+
+    await db
+      .update(schema.invoiceChaseState)
+      .set({ nextActionAt: new Date(Date.now() - 60_000) })
+      .where(eq(schema.invoiceChaseState.invoiceId, invoice.id));
+    expect(await runChaseTick()).toBe(1);
+
+    const [event] = await db
+      .select()
+      .from(schema.chaseEvents)
+      .where(eq(schema.chaseEvents.invoiceId, invoice.id));
+    expect(event.step).toBe(2);
   });
 
   it("does not re-arm (or clobber) chase state on a resend", async () => {
