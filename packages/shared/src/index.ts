@@ -159,6 +159,33 @@ export type ActivityKind = (typeof activityKinds)[number];
 export const planTiers = ["starter", "creator", "pro"] as const;
 export type PlanTier = (typeof planTiers)[number];
 
+export interface MediaKitViewModel {
+  id: string;
+  creator: {
+    id: string;
+    displayName: string;
+    pronouns: string | null;
+    category: string | null;
+    avatarUrl: string | null;
+  };
+  platforms: Array<{
+    platform: Platform;
+    handle: string | null;
+    channelUrl: string | null;
+    followers: number | null;
+    ccv: number | null;
+    scheduleLabel: string | null;
+    lastSyncedAt: string | null;
+    provenance: "creator_platforms";
+  }>;
+  headline: string | null;
+  bio: string | null;
+  accentColor: string | null;
+  offerings: Array<{ id: string; title: string; description: string | null; priceCents: number; currency: string; position: number }>;
+  examples: Array<{ id: string; title: string; url: string; position: number }>;
+  cpvhGuidance: { floor: number; mid: number; agency: number; provenance: "shared-benchmark" } | null;
+}
+
 export const planPricesCents: Record<PlanTier, number> = {
   starter: 1900,
   creator: 2900,
