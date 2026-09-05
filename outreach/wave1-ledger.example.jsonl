@@ -1,0 +1,18 @@
+# Fictional suppression-ledger fixture — schema of record for --ledger.
+# Every person below is invented. The real ledger is NOT in this repo: it names
+# real creators and records their opt-outs, and this repo is public (SPO-415).
+#
+# One JSON object per line. Blank lines and `#` comments are ignored.
+#   at      required, non-empty ISO 8601 instant the signal was observed.
+#   reason  required, one of: replied, stop_requested, unsubscribed,
+#           bounced, complained, manual.
+#   email / xHandle
+#           at least ONE must survive normalization. Presence is not enough —
+#           "   " and "@" are truthy and both normalize to null, which is an
+#           opt-out that matches nobody.
+#   note    optional free text.
+#
+# An opt-out on either channel silences BOTH channels.
+{"at":"2026-09-22T14:03:00Z","reason":"replied","email":"bookings@pixelforge.example","xHandle":null,"note":"asked for the deck, moved to the pipeline"}
+{"at":"2026-09-22T18:41:00Z","reason":"unsubscribed","email":"partnerships@lumenlark.example","xHandle":null}
+{"at":"2026-09-23T09:15:00Z","reason":"stop_requested","email":null,"xHandle":"gravelgospel","note":"DM reply: not interested, do not follow up"}

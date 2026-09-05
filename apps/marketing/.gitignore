@@ -1,2 +1,6 @@
 .vercel
+# This nested file takes precedence over the root .gitignore, so it needs the
+# same *.example negation (SPO-406) — otherwise apps/marketing/.env.example is
+# ignored here and would be silently dropped if it were ever re-added.
 .env*
+!.env*.example

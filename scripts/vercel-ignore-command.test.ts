@@ -70,7 +70,9 @@ function commit(cwd: string, file: string, contents: string, message: string): s
 
 /** Runs the real ignoreCommand the way Vercel does and returns its exit status. */
 function runIgnoreCommand(cwd: string, previousSha: string | undefined): number {
-  const env = { ...process.env, ...ISOLATED_GIT_ENV };
+  // Annotated: spreading `process.env` into an object literal loses its index
+  // signature, so the `delete`/assign below would not typecheck otherwise.
+  const env: NodeJS.ProcessEnv = { ...process.env, ...ISOLATED_GIT_ENV };
   if (previousSha === undefined) delete env.VERCEL_GIT_PREVIOUS_SHA;
   else env.VERCEL_GIT_PREVIOUS_SHA = previousSha;
 
