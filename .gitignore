@@ -2,9 +2,11 @@
 node_modules
 dist
 build
-.env
-.env.local
-.env.*.local
+# Secrets: ignore every .env variant by default (SPO-406) so new suffixes
+# like .env.spo382.bak are covered without having to predict each one.
+# Only *.example templates are allowed in the repo.
+.env*
+!.env*.example
 *.log
 .DS_Store
 .idea
