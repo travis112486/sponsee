@@ -5,6 +5,8 @@ import { sql, eq } from "drizzle-orm";
 import { invoiceRouter, invoiceViewLimiter } from "./invoice.js";
 import { chaseRouter } from "./chase.js";
 import { handleEmailWebhook } from "./webhooks.js";
+import { MailpitProvider } from "../email/index.js";
+import app from "../app.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
 import {
@@ -57,6 +59,13 @@ vi.mock("../email/index.js", async (importOriginal) => {
     },
   };
 });
+
+// Provider call-count spy. SPO-367 gate step 7 mandates asserting on the
+// provider stub/spy call count (a silently-dropped or pre-capture-failing send
+// must not read as a refusal). The spy wraps the REAL MailpitProvider.send, so
+// the positive chain still captures real mail through nodemailer while the
+// no-owner negative can prove `send` was never reached.
+const sendSpy = vi.spyOn(MailpitProvider.prototype, "send");
 
 function mockCtx(creatorId: string) {
   return {
@@ -209,6 +218,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   invoiceViewLimiter.reset();
+  sendSpy.mockClear();
   await cleanTables();
 });
 
@@ -237,6 +247,9 @@ describe("invoice delivery acceptance — one-pass creator chain (SPO-367 gate)"
         // Steps 2 & 3 — send through the real Mailpit capture path.
         const sendResult = await caller.send({ id: invoice.id });
         expect(sendResult.success).toBe(true);
+        // The positive chain really did go through the (spied) real provider —
+        // the symmetric guard to step 7's zero-count assertion.
+        expect(sendSpy).toHaveBeenCalledTimes(1);
 
         const matches = await waitForMailpitMatches<MailpitSummary>(
           apiUrl,
@@ -259,11 +272,33 @@ describe("invoice delivery acceptance — one-pass creator chain (SPO-367 gate)"
         expect(text).toContain("Wise: Wise: creator@wise.example");
         expect(text).toContain(`/i/${sendResult.publicToken}`);
 
-        // Step 4 — fetch the hosted route unauthenticated; allowlisted JSON,
-        // no creator email or tenant data.
-        const publicCaller = invoiceRouter.createCaller(publicCtx());
-        const view = await publicCaller.publicView({ token: sendResult.publicToken });
-        expect(Object.keys(view).sort()).toEqual(
+        // Step 4 — extract the FULL hosted URL from the captured body, then
+        // drive an unauthenticated HTTP request through the real app wiring
+        // (Hono + tRPC fetchRequestHandler + createContext) using the token
+        // embedded in that URL. Asserts the live allowlisted JSON — not a
+        // createCaller shortcut — so removing/breaking the /i/:token URL or the
+        // publicView HTTP endpoint fails this step.
+        const urlMatch = text.match(/https?:\/\/[^\s]+\/i\/[0-9a-f]{32}/);
+        expect(urlMatch).not.toBeNull();
+        const hostedUrl = urlMatch![0];
+        const tokenFromBody = new URL(hostedUrl).pathname.split("/").pop();
+        expect(tokenFromBody).toBe(sendResult.publicToken);
+
+        // tRPC httpLink encodes a single query input as
+        // `?input=${encodeURIComponent(JSON.stringify(transformer.serialize(input)))}`;
+        // with superjson and a plain `{ token }` that is `{ json: { token } }`.
+        const input = encodeURIComponent(JSON.stringify({ json: { token: tokenFromBody } }));
+        const res = await app.request(`/api/trpc/invoice.publicView?input=${input}`, {
+          method: "GET",
+          headers: { "x-forwarded-for": "203.0.113.50", Origin: "http://localhost:3000" },
+        });
+        expect(res.status).toBe(200);
+        const httpBody = (await res.json()) as {
+          result?: { data?: { json?: Record<string, unknown> } };
+        };
+        const view = httpBody.result?.data?.json;
+        expect(view).toBeDefined();
+        expect(Object.keys(view!).sort()).toEqual(
           [
             "invoiceNumber",
             "title",
@@ -401,9 +436,13 @@ describe("invoice delivery acceptance — one-pass creator chain (SPO-367 gate)"
         code: "PRECONDITION_FAILED",
       });
 
-      // Zero provider calls means zero captured messages — the refusal happens
-      // before createEmailProvider().send() is ever reached, so nothing may
-      // land in the real inbox.
+      // SPO-367 step 7: assert on the provider's call count, not only the
+      // thrown error. The refusal happens before createEmailProvider().send(),
+      // so the spy on the real MailpitProvider.send must record zero calls.
+      expect(sendSpy).not.toHaveBeenCalled();
+
+      // Zero provider calls means zero captured messages — nothing may land in
+      // the real inbox either.
       const res = await fetch(`${apiUrl}/api/v1/messages?limit=100`);
       const data = (await res.json()) as { messages?: unknown[] };
       expect(data.messages ?? []).toHaveLength(0);
