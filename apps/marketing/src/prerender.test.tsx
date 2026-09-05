@@ -94,6 +94,7 @@ describe("pre-rendered marketing pages", () => {
     /Basalt\s+VPN/i,
     /Quillfrost/i,
     /Nimbric/i,
+    /Mirthbyte/i,
   ];
 
   it.each(Object.keys(PAGES))("%s names no real brand in the product mocks", (file) => {
