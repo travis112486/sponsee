@@ -90,6 +90,15 @@ function formatCents(cents: number, currency: string): string {
   }).format(cents / 100);
 }
 
+export function formatInvoiceDate(date: Date, style: "short" | "long" = "short"): string {
+  return date.toLocaleDateString("en-US", {
+    month: style === "long" ? "long" : "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 /**
  * Plain-text invoice body. This is the only body a brand's AP inbox is
  * guaranteed to render — many strip HTML and images — so it must carry the
@@ -100,11 +109,12 @@ function buildInvoiceText(args: {
   invoice: typeof invoices.$inferSelect;
   invoiceLabel: string;
   rails: RailsSnapshot;
+  hostedInvoiceUrl: string;
 }): string {
-  const { invoice, invoiceLabel, rails } = args;
+  const { invoice, invoiceLabel, rails, hostedInvoiceUrl } = args;
   const amount = formatCents(invoice.amountCents, invoice.currency);
   const dueDate = invoice.dueAt
-    ? new Date(invoice.dueAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    ? formatInvoiceDate(new Date(invoice.dueAt))
     : "on receipt";
 
   const railLines = [
@@ -124,6 +134,8 @@ function buildInvoiceText(args: {
     ...(railLines.length > 0 ? railLines : ["Contact the sender for payment instructions."]),
     "",
     `From: ${rails.displayName || "your creator partner"}`,
+    "",
+    `View invoice online: ${hostedInvoiceUrl}`,
   ]
     .filter((line): line is string => line !== null)
     .join("\n");
@@ -353,7 +365,11 @@ export const invoiceRouter = createTRPCRouter({
 
       const invoiceLabel = `INV-${String(invoice.number).padStart(4, "0")}`;
       const subject = `Invoice ${invoiceLabel} from ${rails.displayName || "your creator partner"}`;
-      const text = buildInvoiceText({ invoice, invoiceLabel, rails });
+      const hostedInvoiceUrl = new URL(
+        `/i/${publicToken}`,
+        process.env.WEB_URL || "https://sponsee.app",
+      ).toString();
+      const text = buildInvoiceText({ invoice, invoiceLabel, rails, hostedInvoiceUrl });
 
       // Claim the attempt before calling the provider. The unique index on
       // (invoice_id, attempt) — and on idempotency_key — means a concurrent

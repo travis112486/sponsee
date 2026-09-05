@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { db } from "@sponsee/db";
 import * as schema from "@sponsee/db/schema";
 import { sql, eq } from "drizzle-orm";
-import { invoiceRouter } from "./invoice.js";
+import { invoiceRouter, formatInvoiceDate } from "./invoice.js";
 import { initPgliteSchema } from "../test-utils/pglite-setup.js";
 import { SCHEMA_SQL } from "../test-utils/schema-sql.js";
 
@@ -136,6 +136,19 @@ describe("invoice.create leaves chase unarmed (SPO-363)", () => {
   });
 });
 
+describe("invoice calendar dates", () => {
+  it("keeps a UTC-midnight due date on the stored calendar day in a negative offset", () => {
+    const previousTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      expect(formatInvoiceDate(new Date("2026-10-17T00:00:00Z"), "short")).toBe("Oct 17, 2026");
+    } finally {
+      if (previousTz === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTz;
+    }
+  });
+});
+
 describe("invoice.send — happy path", () => {
   it("sends via the provider with replyTo == owner email and from == platform address", async () => {
     const invoice = await insertInvoice({});
@@ -158,6 +171,16 @@ describe("invoice.send — happy path", () => {
     expect(payload.text).toContain("$5,000");
     expect(payload.text).toContain("Due date:");
     expect(payload.text).toContain("2026");
+  });
+
+  it("includes the generated hosted invoice URL in the text body", async () => {
+    const invoice = await insertInvoice({});
+    const caller = invoiceRouter.createCaller(mockCtx(creatorId));
+
+    const result = await caller.send({ id: invoice.id });
+    const payload = sendMock.mock.calls[0][0];
+
+    expect(payload.text).toContain(`https://sponsee.app/i/${result.publicToken}`);
   });
 
   it("arms chase on send (was unarmed after create)", async () => {
