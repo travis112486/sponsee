@@ -1861,3 +1861,60 @@ describe("SPO-64 delivery-truth audit (against Mailpit + current implementation)
     expect(chaseSendJobs).toHaveLength(1);
   });
 });
+
+describe("SPO-476 invoice hosted URL delivery (real Mailpit)", () => {
+  it("extracts the hosted URL from text/plain and resolves its token unauthenticated", async () => {
+    const smtpPort = await getFreePort();
+    const httpPort = await getFreePort();
+    const mailpit = startMailpit(smtpPort, httpPort);
+    const previousProvider = process.env.EMAIL_PROVIDER;
+    const previousSmtpPort = process.env.MAILPIT_SMTP_PORT;
+    const previousWebUrl = process.env.WEB_URL;
+
+    try {
+      process.env.EMAIL_PROVIDER = "mailpit";
+      process.env.MAILPIT_SMTP_PORT = String(smtpPort);
+      process.env.WEB_URL = `http://localhost:${httpPort}`;
+      await waitForMailpit(`http://localhost:${httpPort}`);
+      await fetch(`http://localhost:${httpPort}/api/v1/messages`, { method: "DELETE" });
+
+      const { creator, invoice } = await seedFullFlow();
+      const result = await invoiceRouter.createCaller(mockCtx(creator.id)).send({ id: invoice.id });
+
+      const messages = await waitForMailpitMatches<{ ID: string; To?: Array<{ Address: string }> }>(
+        `http://localhost:${httpPort}`,
+        (message) => message.To?.some((to) => to.Address === "brand@example.com") ?? false,
+      );
+      expect(messages).toHaveLength(1);
+
+      const detailResponse = await fetch(
+        `http://localhost:${httpPort}/api/v1/message/${messages[0].ID}`,
+      );
+      expect(detailResponse.ok).toBe(true);
+      const detail = (await detailResponse.json()) as { Text?: string };
+      const hostedUrl = detail.Text?.match(/https?:\/\/[^\s]+\/i\/([a-f0-9]{32})/)?.[0];
+      expect(hostedUrl).toBe(`http://localhost:${httpPort}/i/${result.publicToken}`);
+
+      const token = hostedUrl!.match(/\/i\/([a-f0-9]{32})$/)?.[1];
+      expect(token).toBe(result.publicToken);
+      const publicView = invoiceRouter.createCaller({
+        session: null,
+        creatorId: null,
+        db,
+        headers: new Headers(),
+      });
+      await expect(publicView.publicView({ token: token! })).resolves.toMatchObject({
+        invoiceNumber: 1,
+        title: "Invoice #0001",
+      });
+    } finally {
+      await stopMailpit(mailpit);
+      if (previousProvider === undefined) delete process.env.EMAIL_PROVIDER;
+      else process.env.EMAIL_PROVIDER = previousProvider;
+      if (previousSmtpPort === undefined) delete process.env.MAILPIT_SMTP_PORT;
+      else process.env.MAILPIT_SMTP_PORT = previousSmtpPort;
+      if (previousWebUrl === undefined) delete process.env.WEB_URL;
+      else process.env.WEB_URL = previousWebUrl;
+    }
+  });
+});
