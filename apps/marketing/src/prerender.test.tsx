@@ -95,6 +95,11 @@ describe("pre-rendered marketing pages", () => {
     /Quillfrost/i,
     /Nimbric/i,
     /Mirthbyte/i,
+    // Round 4 — compound replacements that were themselves exact commercial
+    // names once the space was removed (QA F1/F2/F3, second pass on PR #139).
+    /Gridgear/i,
+    /Comet\s*Energy/i,
+    /Drift\s*Energy/i,
   ];
 
   it.each(Object.keys(PAGES))("%s names no real brand in the product mocks", (file) => {

@@ -164,7 +164,7 @@ export function HeroDashboard() {
                 total: "$1,450",
                 deals: [
                   { brand: "Mythrelark", amount: "$650", platform: "twitch", meta: "new" },
-                  { brand: "CometEnergy", amount: "$800", platform: "kick" },
+                  { brand: "Vexafizz", amount: "$800", platform: "kick" },
                 ],
               },
               {
@@ -179,7 +179,7 @@ export function HeroDashboard() {
                 stage: "Contract Sent",
                 total: "$1,900",
                 deals: [
-                  { brand: "Gridgear", amount: "$1,900", platform: "youtube", meta: "signed?", metaTone: "neutral" },
+                  { brand: "Droskavel", amount: "$1,900", platform: "youtube", meta: "signed?", metaTone: "neutral" },
                 ],
               },
               {
@@ -187,7 +187,7 @@ export function HeroDashboard() {
                 total: "$2,650",
                 deals: [
                   { brand: "Emberfizz", amount: "$1,450", platform: "twitch", meta: "live", metaTone: "accent" },
-                  { brand: "DriftEnergy", amount: "$1,200", platform: "tiktok" },
+                  { brand: "Sablequench", amount: "$1,200", platform: "tiktok" },
                 ],
               },
             ] as const
@@ -223,12 +223,12 @@ export function HeroDashboard() {
  */
 export function PipelineBoard() {
   const cols = [
-    { stage: "Inbound", count: "2", total: "$1,450", deals: [{ brand: "CometEnergy", amount: "$800", platform: "kick" as const }] },
+    { stage: "Inbound", count: "2", total: "$1,450", deals: [{ brand: "Vexafizz", amount: "$800", platform: "kick" as const }] },
     { stage: "Negotiating", count: "2", total: "$3,200", deals: [{ brand: "Qavernix VPN", amount: "$2,400", platform: "twitch" as const, meta: "6d", metaTone: "amber" as const }] },
-    { stage: "Contract", count: "1", total: "$1,900", deals: [{ brand: "Gridgear", amount: "$1,900", platform: "youtube" as const }] },
+    { stage: "Contract", count: "1", total: "$1,900", deals: [{ brand: "Droskavel", amount: "$1,900", platform: "youtube" as const }] },
     { stage: "Live", count: "2", total: "$2,650", deals: [{ brand: "Emberfizz", amount: "$1,450", platform: "twitch" as const, meta: "live", metaTone: "accent" as const }] },
     { stage: "Delivered", count: "1", total: "$850", deals: [{ brand: "MealCrate", amount: "$850", platform: "youtube" as const }] },
-    { stage: "Paid", count: "3", total: "$4,820", deals: [{ brand: "DriftEnergy", amount: "$1,200", platform: "tiktok" as const, meta: "paid", metaTone: "accent" as const }] },
+    { stage: "Paid", count: "3", total: "$4,820", deals: [{ brand: "Sablequench", amount: "$1,200", platform: "tiktok" as const, meta: "paid", metaTone: "accent" as const }] },
   ];
   return (
     <BrowserFrame label="app.sponsee.app/pipeline">
