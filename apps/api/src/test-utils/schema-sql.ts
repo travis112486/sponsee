@@ -15,6 +15,9 @@ export const SCHEMA_SQL = `
 DROP TABLE IF EXISTS waitlist_signups CASCADE;
 DROP TABLE IF EXISTS rate_limit CASCADE;
 DROP TABLE IF EXISTS brand_icon_cache CASCADE;
+DROP TABLE IF EXISTS media_kit_examples CASCADE;
+DROP TABLE IF EXISTS media_kit_offerings CASCADE;
+DROP TABLE IF EXISTS media_kits CASCADE;
 DROP TABLE IF EXISTS activity_events CASCADE;
 DROP TABLE IF EXISTS chase_events CASCADE;
 DROP TABLE IF EXISTS invoice_chase_state CASCADE;
@@ -159,6 +162,50 @@ CREATE TABLE creator_platforms (
 );
 
 CREATE INDEX creator_platforms_creator_idx ON creator_platforms(creator_id);
+
+CREATE TABLE media_kits (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  headline VARCHAR(255),
+  bio TEXT,
+  accent_color VARCHAR(32),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(creator_id)
+);
+CREATE UNIQUE INDEX media_kits_id_creator_idx ON media_kits(id, creator_id);
+
+CREATE TABLE media_kit_offerings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  media_kit_id UUID NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+  currency CHAR(3) NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(media_kit_id, position),
+  CONSTRAINT media_kit_offerings_kit_creator_fk FOREIGN KEY (media_kit_id, creator_id) REFERENCES media_kits(id, creator_id),
+  CHECK (position >= 0)
+);
+CREATE INDEX media_kit_offerings_creator_idx ON media_kit_offerings(creator_id);
+
+CREATE TABLE media_kit_examples (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  media_kit_id UUID NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  url TEXT NOT NULL CHECK (url LIKE 'https://%'),
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(media_kit_id, position),
+  CONSTRAINT media_kit_examples_kit_creator_fk FOREIGN KEY (media_kit_id, creator_id) REFERENCES media_kits(id, creator_id),
+  CHECK (position >= 0)
+);
+CREATE INDEX media_kit_examples_creator_idx ON media_kit_examples(creator_id);
 
 CREATE TABLE brands (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

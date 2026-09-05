@@ -14,6 +14,7 @@ import {
   uniqueIndex,
   serial,
   check,
+  foreignKey,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -675,6 +676,64 @@ export const brandIconCache = pgTable(
       "brand_icon_cache_hit_has_body",
       sql`(${t.outcome} <> 'hit') OR (${t.bodyBase64} IS NOT NULL AND ${t.contentType} IS NOT NULL AND ${t.sizeBytes} IS NOT NULL)`
     ),
+  ]
+);
+
+export const mediaKits = pgTable(
+  "media_kits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    creatorId: uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+    headline: varchar("headline", { length: 255 }),
+    bio: text("bio"),
+    accentColor: varchar("accent_color", { length: 32 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("media_kits_creator_idx").on(t.creatorId), uniqueIndex("media_kits_id_creator_idx").on(t.id, t.creatorId)]
+);
+
+export const mediaKitOfferings = pgTable(
+  "media_kit_offerings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    creatorId: uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+    mediaKitId: uuid("media_kit_id").notNull(),
+    title: varchar("title", { length: 255 }).notNull(),
+    description: text("description"),
+    priceCents: integer("price_cents").notNull(),
+    currency: char("currency", { length: 3 }).notNull(),
+    position: integer("position").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("media_kit_offerings_kit_position_idx").on(t.mediaKitId, t.position),
+    index("media_kit_offerings_creator_idx").on(t.creatorId),
+    foreignKey({ columns: [t.mediaKitId, t.creatorId], foreignColumns: [mediaKits.id, mediaKits.creatorId], name: "media_kit_offerings_kit_creator_fk" }),
+    check("media_kit_offerings_price_nonnegative", sql`${t.priceCents} >= 0`),
+    check("media_kit_offerings_position_nonnegative", sql`${t.position} >= 0`),
+  ]
+);
+
+export const mediaKitExamples = pgTable(
+  "media_kit_examples",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    creatorId: uuid("creator_id").notNull().references(() => creators.id, { onDelete: "cascade" }),
+    mediaKitId: uuid("media_kit_id").notNull(),
+    title: varchar("title", { length: 255 }).notNull(),
+    url: text("url").notNull(),
+    position: integer("position").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("media_kit_examples_kit_position_idx").on(t.mediaKitId, t.position),
+    index("media_kit_examples_creator_idx").on(t.creatorId),
+    foreignKey({ columns: [t.mediaKitId, t.creatorId], foreignColumns: [mediaKits.id, mediaKits.creatorId], name: "media_kit_examples_kit_creator_fk" }),
+    check("media_kit_examples_url_https", sql`${t.url} LIKE 'https://%'`),
+    check("media_kit_examples_position_nonnegative", sql`${t.position} >= 0`),
   ]
 );
 
