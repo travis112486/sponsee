@@ -14,6 +14,7 @@ import { billingRouter } from "../billing/router.js";
 import { activityRouter } from "./activity.js";
 import { calendarRouter } from "./calendar.js";
 import { storageRouter } from "./storage.js";
+import { aiDraftRouter } from "./aiDraft.js";
 
 export const appRouter = createTRPCRouter({
   health: healthRouter,
@@ -31,6 +32,7 @@ export const appRouter = createTRPCRouter({
   activity: activityRouter,
   calendar: calendarRouter,
   storage: storageRouter,
+  aiDraft: aiDraftRouter,
 });
 
 export type AppRouter = typeof appRouter;
