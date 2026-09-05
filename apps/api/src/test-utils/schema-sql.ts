@@ -334,6 +334,7 @@ CREATE TABLE invoice_deliveries (
   delivered_at TIMESTAMPTZ,
   opened_at TIMESTAMPTZ,
   bounced_at TIMESTAMPTZ,
+  bounce_detail TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(invoice_id, attempt),
