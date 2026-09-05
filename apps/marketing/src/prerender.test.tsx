@@ -89,6 +89,11 @@ describe("pre-rendered marketing pages", () => {
     /Astrofall/i,
     /Polar\s+VPN/i,
     /Volt\s+Fuel/i,
+    // Round 3 — QA caught another same-category VPN collision and an exact
+    // commercial-name collision before either reached the public site.
+    /Basalt\s+VPN/i,
+    /Quillfrost/i,
+    /Nimbric/i,
   ];
 
   it.each(Object.keys(PAGES))("%s names no real brand in the product mocks", (file) => {

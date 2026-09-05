@@ -163,7 +163,7 @@ export function HeroDashboard() {
                 stage: "Inbound",
                 total: "$1,450",
                 deals: [
-                  { brand: "Quillfrost", amount: "$650", platform: "twitch", meta: "new" },
+                  { brand: "Mythrelark", amount: "$650", platform: "twitch", meta: "new" },
                   { brand: "CometEnergy", amount: "$800", platform: "kick" },
                 ],
               },
@@ -171,7 +171,7 @@ export function HeroDashboard() {
                 stage: "Negotiating",
                 total: "$3,200",
                 deals: [
-                  { brand: "Basalt VPN", amount: "$2,400", platform: "twitch", meta: "6d in stage", metaTone: "amber" },
+                  { brand: "Mirthbyte VPN", amount: "$2,400", platform: "twitch", meta: "6d in stage", metaTone: "amber" },
                   { brand: "MealCrate", amount: "$800", platform: "youtube" },
                 ],
               },
@@ -224,7 +224,7 @@ export function HeroDashboard() {
 export function PipelineBoard() {
   const cols = [
     { stage: "Inbound", count: "2", total: "$1,450", deals: [{ brand: "CometEnergy", amount: "$800", platform: "kick" as const }] },
-    { stage: "Negotiating", count: "2", total: "$3,200", deals: [{ brand: "Basalt VPN", amount: "$2,400", platform: "twitch" as const, meta: "6d", metaTone: "amber" as const }] },
+    { stage: "Negotiating", count: "2", total: "$3,200", deals: [{ brand: "Mirthbyte VPN", amount: "$2,400", platform: "twitch" as const, meta: "6d", metaTone: "amber" as const }] },
     { stage: "Contract", count: "1", total: "$1,900", deals: [{ brand: "Gridgear", amount: "$1,900", platform: "youtube" as const }] },
     { stage: "Live", count: "2", total: "$2,650", deals: [{ brand: "Emberfizz", amount: "$1,450", platform: "twitch" as const, meta: "live", metaTone: "accent" as const }] },
     { stage: "Delivered", count: "1", total: "$850", deals: [{ brand: "MealCrate", amount: "$850", platform: "youtube" as const }] },
@@ -341,7 +341,7 @@ export function PaymentsMock() {
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-twitch" />
-              <span className="text-[11px] font-medium text-ink">Basalt VPN · INV-014</span>
+              <span className="text-[11px] font-medium text-ink">Mirthbyte VPN · INV-014</span>
             </span>
             <Chip tone="amber">12 days overdue</Chip>
           </div>
