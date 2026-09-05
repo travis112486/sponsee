@@ -450,7 +450,7 @@ export default function App() {
               every card a stage, from first DM to paid invoice.
             </p>
             <ul className="space-y-3">
-              <CheckItem>Six stages: Inbound → Negotiating → Contract Sent → Live → Delivered → Paid</CheckItem>
+              <CheckItem>Six stages: Inbound → Negotiating → Contract → Live → Delivered → Paid</CheckItem>
               <CheckItem>Every column shows count and total value, live</CheckItem>
               <CheckItem>Days-in-stage aging, so nothing quietly rots</CheckItem>
             </ul>
