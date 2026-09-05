@@ -386,6 +386,36 @@ describe("contract router", () => {
       await caller.upsert({ dealId: dealAId, storageKey, sizeBytes: 100 });
       expect(storageMocks.deleteObject).not.toHaveBeenCalled();
     });
+
+    it("still resolves the replace when deleteObject rejects, leaving the superseded row tombstoned (SPO-399)", async () => {
+      const caller = contractRouter.createCaller(mockCtx(creatorAId));
+      const firstKey = buildObjectKey({
+        creatorId: creatorAId,
+        dealId: dealAId,
+        scope: "contracts",
+        extension: "pdf",
+      });
+      await caller.upsert({ dealId: dealAId, storageKey: firstKey, sizeBytes: 100 });
+
+      storageMocks.deleteObject.mockRejectedValueOnce(new Error("R2 unavailable"));
+
+      const secondKey = buildObjectKey({
+        creatorId: creatorAId,
+        dealId: dealAId,
+        scope: "contracts",
+        extension: "pdf",
+      });
+      const contract = await caller.upsert({ dealId: dealAId, storageKey: secondKey, sizeBytes: 200 });
+
+      expect(contract.storageKey).toBe(secondKey);
+
+      const [registryRow] = await db
+        .select()
+        .from(schema.creatorFiles)
+        .where(eq(schema.creatorFiles.storageKey, firstKey));
+      expect(registryRow).toBeDefined();
+      expect(registryRow.deletedAt).not.toBeNull();
+    });
   });
 
   describe("updateStatus", () => {
@@ -515,6 +545,35 @@ describe("contract router", () => {
 
       expect(storageMocks.deleteObject).toHaveBeenCalledTimes(1);
       expect(storageMocks.deleteObject).toHaveBeenCalledWith(storageKey);
+    });
+
+    it("still resolves the delete when deleteObject rejects, leaving the row tombstoned (SPO-399)", async () => {
+      const caller = contractRouter.createCaller(mockCtx(creatorAId));
+      const storageKey = buildObjectKey({
+        creatorId: creatorAId,
+        dealId: dealAId,
+        scope: "contracts",
+        extension: "pdf",
+      });
+      await caller.upsert({ dealId: dealAId, storageKey, sizeBytes: 100 });
+
+      storageMocks.deleteObject.mockRejectedValueOnce(new Error("R2 unavailable"));
+
+      const result = await caller.remove({ dealId: dealAId });
+      expect(result.success).toBe(true);
+
+      const remaining = await db
+        .select()
+        .from(schema.contracts)
+        .where(eq(schema.contracts.dealId, dealAId));
+      expect(remaining).toHaveLength(0);
+
+      const [registryRow] = await db
+        .select()
+        .from(schema.creatorFiles)
+        .where(eq(schema.creatorFiles.storageKey, storageKey));
+      expect(registryRow).toBeDefined();
+      expect(registryRow.deletedAt).not.toBeNull();
     });
   });
 });

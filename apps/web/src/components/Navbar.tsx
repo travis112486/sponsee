@@ -15,6 +15,7 @@ import {
   Menu,
   Calendar,
   Calculator,
+  Presentation,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,7 @@ const navItems = [
   { to: "/payments", label: "Payments", icon: Wallet },
   { to: "/calendar", label: "Calendar", icon: Calendar },
   { to: "/calculator", label: "Calculator", icon: Calculator },
+  { to: "/media-kit", label: "Proposal Creator (Media Kit)", icon: Presentation },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

@@ -512,7 +512,7 @@ function DeliverablesCard({
 
                 {d.brandName && (
                   <span className="hidden shrink-0 items-center gap-1.5 text-[12.5px] text-ink-2 sm:flex">
-                    <BrandMark brand={d.brandName} size={20} />
+                    <BrandMark brand={d.brandName} domain={d.brandDomain} size={20} />
                     {d.brandName}
                   </span>
                 )}

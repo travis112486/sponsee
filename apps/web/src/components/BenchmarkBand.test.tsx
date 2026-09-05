@@ -151,4 +151,45 @@ describe("bandPlacement", () => {
       screen.getByText(bandPlacement(40000, REF_500_60_ADREAD).label)
     ).toBeInTheDocument();
   });
+
+  // Nothing pinned `color` before SPO-414, which is why two separate stock
+  // Tailwind fills (blue-500, amber-400) sat here for months and why changing
+  // one cost zero test edits — CI stayed green either way. Literals on purpose:
+  // reading the class back out of the component would assert only that it
+  // equals itself. The hexes these names resolve to are contrast-checked in
+  // stock-palette.guard.test.ts.
+  it.each([
+    [Math.round(floor / 3), "bg-brick"],
+    [floor, "bg-amber"],
+    [mid, "bg-denim"],
+    [agency, "bg-pine"],
+  ])("paints %i cents with a brand token", (valueCents, color) => {
+    const placement = bandPlacement(valueCents as number, REF_500_60_ADREAD);
+    expect(placement.color).toBe(color);
+    // A stock scale class — a brand token never carries a numeric step — is
+    // the regression. Named without writing one out: this file is inside
+    // Tailwind's content glob, and the scanner would compile the example.
+    expect(placement.color).not.toMatch(/-\d+$/);
+  });
+
+  it("gives every band a distinct fill", () => {
+    // Option (b) on this ticket was "remap onto existing tokens", which is only
+    // safe while the four bands stay tellable apart.
+    const colors = [Math.round(floor / 3), floor, mid, agency].map(
+      (v) => bandPlacement(v, REF_500_60_ADREAD).color
+    );
+    expect(new Set(colors).size).toBe(4);
+  });
+
+  it("puts the band's own fill on both the chip and the marker", () => {
+    const { container } = render(
+      <BenchmarkBand benchmark={REF_500_60_ADREAD} dealValueCents={mid} />
+    );
+    const chip = screen.getByText("Mid–agency");
+    expect(chip).toHaveClass("bg-denim");
+    // The 10px white-on-fill pairing the contrast guard measures has to be the
+    // one that actually ships, so this fails if the chip stops using bandColor.
+    expect(chip).toHaveClass("text-white");
+    expect(container.querySelectorAll(".bg-denim")).toHaveLength(2);
+  });
 });

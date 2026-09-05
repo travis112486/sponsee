@@ -11,6 +11,7 @@ const pageTitles: Record<string, string> = {
   "/calendar": "Calendar",
   "/calculator": "Rate Calculator",
   "/settings": "Settings",
+  "/media-kit": "Proposal Creator",
   "/login": "Login",
 };
 

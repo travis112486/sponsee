@@ -35,6 +35,7 @@ async function insertAccount(opts: {
   providerId: string;
   userId: string;
   accountId?: string;
+  updatedAt?: Date;
 }) {
   await db.insert(schema.account).values({
     id: opts.id,
@@ -45,6 +46,7 @@ async function insertAccount(opts: {
     accessToken: "token",
     refreshToken: "refresh",
     scope: "channel:read:subscriptions",
+    ...(opts.updatedAt ? { updatedAt: opts.updatedAt } : {}),
   });
 }
 
@@ -139,6 +141,72 @@ describe("completePlatformConnect", () => {
         and(eq(schema.account.userId, otherUserId), eq(schema.account.providerId, "kick"))
       );
     expect(remaining.map((r) => r.id)).toEqual(["acct-kick-new"]);
+  });
+
+  // SPO-142: in recovery mode (state-mismatch fallback), a pre-existing link
+  // must not count as evidence the *current* attempt landed — only a row
+  // written moments ago (a replayed callback) does.
+  describe("recovery mode (SPO-142)", () => {
+    const recoveryUserId = "user-recovery-test";
+    let recoveryCreatorId = "";
+
+    beforeAll(async () => {
+      const [creator] = await db
+        .insert(schema.creators)
+        .values({ displayName: "Recovery Creator" })
+        .returning();
+      recoveryCreatorId = creator.id;
+      await db.insert(schema.user).values({ id: recoveryUserId, name: "R", email: "r@example.com" });
+    });
+
+    function recoveryCaller() {
+      return caller({ userId: recoveryUserId, creatorId: recoveryCreatorId });
+    }
+
+    it("rejects a stale pre-existing link so a failed account switch doesn't report success", async () => {
+      // Account A linked long ago; the creator's switch to account B just
+      // failed on state. A's row is not evidence B landed.
+      await insertAccount({
+        id: "acct-recovery-stale",
+        providerId: "twitch",
+        userId: recoveryUserId,
+        updatedAt: new Date(Date.now() - 10 * 60_000),
+      });
+
+      await expect(
+        recoveryCaller().completePlatformConnect({ platform: "twitch", recovery: true })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      // The failed recovery must not have stitched the stale row in.
+      const rows = await db
+        .select()
+        .from(schema.creatorPlatforms)
+        .where(eq(schema.creatorPlatforms.creatorId, recoveryCreatorId));
+      expect(rows).toHaveLength(0);
+    });
+
+    it("accepts a fresh link — a replayed callback lands seconds after the row was written", async () => {
+      await db
+        .update(schema.account)
+        .set({ updatedAt: new Date() })
+        .where(eq(schema.account.id, "acct-recovery-stale"));
+
+      const result = await recoveryCaller().completePlatformConnect({
+        platform: "twitch",
+        recovery: true,
+      });
+      expect(result.row.connectedAccountId).toBe("acct-recovery-stale");
+    });
+
+    it("keeps the happy path unbounded — without the flag an old row still links", async () => {
+      await db
+        .update(schema.account)
+        .set({ updatedAt: new Date(Date.now() - 60 * 60_000) })
+        .where(eq(schema.account.id, "acct-recovery-stale"));
+
+      const result = await recoveryCaller().completePlatformConnect({ platform: "twitch" });
+      expect(result.row.connectedAccountId).toBe("acct-recovery-stale");
+    });
   });
 
   it("never links another user's account", async () => {

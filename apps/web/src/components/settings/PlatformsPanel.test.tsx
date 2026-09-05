@@ -61,6 +61,17 @@ type SyncMutationOptions = {
 };
 let syncMutationOptions: SyncMutationOptions | undefined;
 
+// SPO-142: failure handling lives at the mutation level (not mutate()-level)
+// so an unmount can't swallow it — captured here and invoked directly.
+type CompleteConnectMutationOptions = {
+  onSuccess: (
+    result: { row: { syncError?: string | null }; outcome: "synced" | "error" | "skipped" },
+    variables: { platform: string; recovery?: boolean }
+  ) => void;
+  onError: (err: { message?: string }, variables: { platform: string; recovery?: boolean }) => void;
+};
+let completeConnectMutationOptions: CompleteConnectMutationOptions | undefined;
+
 const toastMocks = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
@@ -98,7 +109,10 @@ vi.mock("@/trpc", () => ({
         },
       },
       completePlatformConnect: {
-        useMutation: () => mockCompleteConnectReturn,
+        useMutation: (opts: CompleteConnectMutationOptions) => {
+          completeConnectMutationOptions = opts;
+          return mockCompleteConnectReturn;
+        },
       },
       disconnectPlatform: {
         useMutation: () => mockDisconnectReturn,
@@ -414,13 +428,23 @@ describe("PlatformsPanel", () => {
       mockSearchParams = new URLSearchParams("connected=twitch");
       setQueryState({ isLoading: false, isError: false, data: [] });
       render(<PlatformsPanel />);
-      expect(mockCompleteConnectReturn.mutate).toHaveBeenCalledWith(
-        { platform: "twitch" },
-        expect.objectContaining({ onError: expect.any(Function) })
-      );
+      expect(mockCompleteConnectReturn.mutate).toHaveBeenCalledWith({ platform: "twitch" });
       expect(mockSetSearchParams).toHaveBeenCalled();
       const cleaned = mockSetSearchParams.mock.calls[0][0] as URLSearchParams;
       expect(cleaned.has("connected")).toBe(false);
+    });
+
+    it("toasts the completion failure from the mutation-level onError so an unmount can't swallow it", () => {
+      mockSearchParams = new URLSearchParams("connected=twitch");
+      setQueryState({ isLoading: false, isError: false, data: [] });
+      render(<PlatformsPanel />);
+      completeConnectMutationOptions!.onError(
+        { message: "No linked twitch account — the Connect flow didn't finish" },
+        { platform: "twitch" }
+      );
+      expect(toastMocks.error).toHaveBeenCalledWith(
+        "No linked twitch account — the Connect flow didn't finish"
+      );
     });
 
     it("surfaces provider errors when returning with ?connect_error=", () => {
@@ -437,13 +461,30 @@ describe("PlatformsPanel", () => {
       mockSearchParams = new URLSearchParams("connect_error=twitch&error=state_mismatch");
       setQueryState({ isLoading: false, isError: false, data: [] });
       render(<PlatformsPanel />);
-      expect(mockCompleteConnectReturn.mutate).toHaveBeenCalledWith(
-        { platform: "twitch" },
-        expect.objectContaining({ onError: expect.any(Function) })
-      );
+      // recovery: true tells the server only a freshly written link counts as
+      // evidence (SPO-142) — a pre-existing account row must not turn a failed
+      // account switch into a success toast.
+      expect(mockCompleteConnectReturn.mutate).toHaveBeenCalledWith({
+        platform: "twitch",
+        recovery: true,
+      });
       // The error toast is deferred to the mutation's onError — no toast until
       // the server confirms the link really didn't land.
       expect(toastMocks.error).not.toHaveBeenCalled();
+    });
+
+    it("shows the provider's original error when recovery comes back empty-handed", () => {
+      mockSearchParams = new URLSearchParams("connect_error=twitch&error=state_mismatch");
+      setQueryState({ isLoading: false, isError: false, data: [] });
+      render(<PlatformsPanel />);
+      completeConnectMutationOptions!.onError(
+        { message: "No new twitch link landed — the Connect flow didn't finish" },
+        { platform: "twitch", recovery: true }
+      );
+      // Pinned exactly: the recovery failure must surface the *original*
+      // provider error, not the generic completion-failure text.
+      expect(toastMocks.error).toHaveBeenCalledTimes(1);
+      expect(toastMocks.error).toHaveBeenCalledWith("Couldn't connect Twitch: state mismatch");
     });
   });
 });

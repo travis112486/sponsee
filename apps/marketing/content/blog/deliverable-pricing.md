@@ -18,7 +18,7 @@ Here's how to price each deliverable on its own, so you can look at a mixed offe
 
 ## Start from your base rate
 
-Every deliverable below prices as a fraction of your **hourly CPVH rate** — average CCV × hours × the published $0.60–$1.50-per-viewer-hour band (agency-repped deals cited up to ~$2.00).[^1][^2] If you haven't run that math yet, do it first; everything here is relative to that number, not a replacement for it.
+Every deliverable below prices as a fraction of your **hourly [CPVH](/blog/what-is-cpvh) rate** — average CCV × hours × the [published $0.60–$1.50-per-viewer-hour band](/blog/twitch-sponsorship-rates) (agency-repped deals cited up to ~$2.00).[^1][^2] If you haven't run that math yet, do it first; everything here is relative to that number, not a replacement for it.
 
 ## The deliverable table
 

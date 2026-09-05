@@ -134,6 +134,20 @@
       "when": 1788400070322,
       "tag": "0018_cold_sister_grimm",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788427952200,
+      "tag": "0019_small_warbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1788628673063,
+      "tag": "0020_good_blue_blade",
+      "breakpoints": true
     }
   ]
 }
