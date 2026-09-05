@@ -172,6 +172,10 @@ The full pixel ramp in use (frontmatter `typography.scale`): 10 (micro chips), 1
 **The Serif-Is-Display Rule.** Instrument Serif appears only in page titles and hero figures. Serif body text or serif UI controls are defects.
 **The Tabular Money Rule.** Every financial figure takes `.tnum` (tabular numerals). Proportional digits in a money column are a defect.
 
+## Marketing surfaces
+
+Marketing pages inherit the warm-paper system but have a deliberately wider editorial range than the product UI. On marketing surfaces, statement paragraphs and FAQ questions may use Instrument Serif; display type may step up to 40px and 48px; and the “48–87%” hero figure may use brick as an evidence-led attention cue. These are marketing-only exceptions to the Serif-Is-Display, type-ramp, and brick-status rules above—not patterns to carry into the app.
+
 ## Layout
 
 App shell: fixed 232px sidebar (off-canvas drawer below `lg`), 56px topbar, and an internally scrolling content region capped at `max-w-[1360px]` with 16px padding (24px from `sm` up). Pages open with a serif title row plus right-aligned actions, then content in cards. KPI rows are responsive grids of stat cards; the pipeline is a horizontally scrolling kanban with an always-visible thin scrollbar (`.board-scroll`) so clipped columns are discoverable. Spacing follows Tailwind's 4px grid — 20px card padding, 12px gaps in dense lists, 24px between page sections. Body copy and labels sit flush-left; numbers right-align in table columns.
