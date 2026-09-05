@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-01T22:17:17Z",
+  "title": "Design System: Sponsee",
+  "extensions": {
+    "colorMeta": {
+      "pine": { "role": "primary", "displayName": "Pine", "canonical": "#0E7A5F", "tonalRamp": ["oklch(20% 0.06 168)", "oklch(30% 0.08 168)", "oklch(40% 0.1 168)", "oklch(50% 0.11 168)", "oklch(60% 0.1 168)", "oklch(72% 0.08 168)", "oklch(85% 0.05 168)", "oklch(95% 0.02 168)"] },
+      "amber": { "role": "secondary", "displayName": "Amber", "canonical": "#945E06", "tonalRamp": ["oklch(25% 0.07 70)", "oklch(35% 0.09 70)", "oklch(45% 0.11 70)", "oklch(56% 0.12 70)", "oklch(66% 0.11 70)", "oklch(76% 0.09 70)", "oklch(87% 0.06 70)", "oklch(95% 0.03 70)"] },
+      "brick": { "role": "secondary", "displayName": "Brick", "canonical": "#B3402A", "tonalRamp": ["oklch(22% 0.08 30)", "oklch(32% 0.11 30)", "oklch(42% 0.13 30)", "oklch(52% 0.14 30)", "oklch(62% 0.12 30)", "oklch(74% 0.09 30)", "oklch(86% 0.05 30)", "oklch(95% 0.02 30)"] },
+      "paper": { "role": "neutral", "displayName": "Warm Paper", "canonical": "#F7F5F1", "tonalRamp": ["oklch(20% 0.008 75)", "oklch(32% 0.008 75)", "oklch(45% 0.009 75)", "oklch(58% 0.01 75)", "oklch(70% 0.01 75)", "oklch(82% 0.009 75)", "oklch(91% 0.008 75)", "oklch(97% 0.006 75)"] },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#1B1815", "tonalRamp": ["oklch(15% 0.008 60)", "oklch(25% 0.008 60)", "oklch(35% 0.009 60)", "oklch(45% 0.009 60)", "oklch(56% 0.009 60)", "oklch(68% 0.008 60)", "oklch(80% 0.007 60)", "oklch(93% 0.005 60)"] },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "#E8E3DB", "tonalRamp": ["oklch(30% 0.01 80)", "oklch(42% 0.012 80)", "oklch(54% 0.013 80)", "oklch(65% 0.013 80)", "oklch(75% 0.012 80)", "oklch(84% 0.011 80)", "oklch(91% 0.01 80)", "oklch(96% 0.007 80)"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Section-defining serif titles and hero serif figures (20–22px)." },
+      "headline": { "displayName": "Headline", "purpose": "Serif page titles (Dashboard, Pipeline, Payments, Calendar)." },
+      "figure": { "displayName": "Figure", "purpose": "KPI numbers on stat cards; always tabular numerals." },
+      "body": { "displayName": "Body", "purpose": "Operational text, table cells, buttons." },
+      "label": { "displayName": "Label", "purpose": "Uppercase eyebrows, column headers, nav group labels." }
+    },
+    "shadows": [
+      { "name": "warm", "value": "0 1px 2px rgba(27,24,21,.05)", "purpose": "Resting cards." },
+      { "name": "warm-md", "value": "0 4px 16px rgba(27,24,21,.08), 0 1px 3px rgba(27,24,21,.06)", "purpose": "Hover lift, toasts, dropdown menus." },
+      { "name": "warm-lg", "value": "0 12px 40px rgba(27,24,21,.14)", "purpose": "Modals and the command palette." }
+    ],
+    "motion": [
+      { "name": "ease-house", "value": "cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "The single easing curve for every animated surface (from @/lib/motion)." },
+      { "name": "duration-fast", "value": "0.18s", "purpose": "Hover/press affordances, popover open." },
+      { "name": "duration-base", "value": "0.22s", "purpose": "Route transitions, layout shifts." },
+      { "name": "duration-entrance", "value": "0.32s", "purpose": "Card / row entrance (12px rise + fade, staggered 0.04–0.08s)." },
+      { "name": "duration-grow", "value": "0.6s", "purpose": "Bar and band growth on charts." },
+      { "name": "duration-draw", "value": "0.8s", "purpose": "Sparkline draw-on and count-up tweens." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "lg", "value": "1024px" },
+      { "name": "content-max", "value": "1360px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single pine action per toolbar — add deal, send invoice, save.",
+      "html": "<button class=\"ds-btn-primary\">New deal</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; background: #0E7A5F; color: #fff; border: none; border-radius: 10px; font-family: Inter, system-ui, sans-serif; font-size: 13px; font-weight: 500; letter-spacing: -0.01em; cursor: pointer; transition: background-color 0.15s; } .ds-btn-primary:hover { background: #0B664F; } .ds-btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(14,122,95,.3); } .ds-btn-primary:disabled { opacity: 0.5; }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Secondary actions — filters, pagination, view-all.",
+      "html": "<button class=\"ds-btn-quiet\">View all</button>",
+      "css": ".ds-btn-quiet { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; background: #FFFFFF; color: #57504A; border: 1px solid #E8E3DB; border-radius: 10px; font-family: Inter, system-ui, sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; transition: color 0.15s, background-color 0.15s; } .ds-btn-quiet:hover { color: #1B1815; background: #FBFAF7; } .ds-btn-quiet:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(14,122,95,.3); }"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Tone-mapped status pill: tint background, deep foreground; live deals add a pulsing pine dot.",
+      "html": "<span class=\"ds-chip\"><span class=\"ds-chip-dot\"></span>Live</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 9999px; background: #E4F1EB; color: #0E7A5F; font-family: Inter, system-ui, sans-serif; font-size: 11px; font-weight: 600; line-height: 20px; } .ds-chip-dot { width: 6px; height: 6px; border-radius: 9999px; background: #0E7A5F; }"
+    },
+    {
+      "name": "Stat Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The KPI unit: uppercase eyebrow, tabular count-up figure, delta chip, caption.",
+      "html": "<div class=\"ds-statcard\"><span class=\"ds-statcard-eyebrow\">Revenue</span><div class=\"ds-statcard-row\"><span class=\"ds-statcard-figure\">$12,400</span><span class=\"ds-statcard-delta\">+12%</span></div><span class=\"ds-statcard-context\">3 invoices</span></div>",
+      "css": ".ds-statcard { display: flex; flex-direction: column; width: 220px; padding: 20px; background: #FFFFFF; border: 1px solid #E8E3DB; border-radius: 14px; box-shadow: 0 1px 2px rgba(27,24,21,.05); font-family: Inter, system-ui, sans-serif; transition: box-shadow 0.15s, transform 0.15s; } .ds-statcard:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(27,24,21,.08), 0 1px 3px rgba(27,24,21,.06); } .ds-statcard-eyebrow { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #757069; } .ds-statcard-row { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; } .ds-statcard-figure { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; color: #1B1815; font-variant-numeric: tabular-nums; } .ds-statcard-delta { padding: 2px 8px; border-radius: 9999px; background: #E4F1EB; color: #0E7A5F; font-size: 11px; font-weight: 600; } .ds-statcard-context { margin-top: 8px; font-size: 11px; color: #757069; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Form field: hairline border sharpening to pine on focus.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Brand name\" />",
+      "css": ".ds-input { width: 240px; padding: 8px 12px; background: #FFFFFF; color: #1B1815; border: 1px solid #E8E3DB; border-radius: 10px; font-family: Inter, system-ui, sans-serif; font-size: 13px; outline: none; transition: border-color 0.15s; } .ds-input::placeholder { color: #757069; } .ds-input:focus { border-color: #0E7A5F; }"
+    },
+    {
+      "name": "Sidebar Nav Item",
+      "kind": "nav",
+      "refersTo": "button-quiet",
+      "description": "Sidebar entry: pine-tint fill + pine text when active; text warms on hover.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-nav-item-active\" href=\"#\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"3\" width=\"7\" height=\"9\"/><rect x=\"14\" y=\"3\" width=\"7\" height=\"5\"/><rect x=\"14\" y=\"12\" width=\"7\" height=\"9\"/><rect x=\"3\" y=\"16\" width=\"7\" height=\"5\"/></svg>Dashboard</a><a class=\"ds-nav-item\" href=\"#\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"8\" y1=\"6\" x2=\"21\" y2=\"6\"/><line x1=\"8\" y1=\"12\" x2=\"21\" y2=\"12\"/><line x1=\"8\" y1=\"18\" x2=\"21\" y2=\"18\"/><line x1=\"3\" y1=\"6\" x2=\"3.01\" y2=\"6\"/><line x1=\"3\" y1=\"12\" x2=\"3.01\" y2=\"12\"/><line x1=\"3\" y1=\"18\" x2=\"3.01\" y2=\"18\"/></svg>Pipeline</a></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; gap: 2px; width: 200px; padding: 8px; background: #F7F5F1; border-radius: 14px; font-family: Inter, system-ui, sans-serif; } .ds-nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: #57504A; font-size: 13px; font-weight: 500; text-decoration: none; transition: color 0.15s, background-color 0.15s; } .ds-nav-item:hover { color: #1B1815; } .ds-nav-item:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(14,122,95,.3); } .ds-nav-item-active { background: #E4F1EB; color: #0E7A5F; } .ds-nav-item-active:hover { color: #0B664F; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Warm-Paper Ledger",
+    "overview": "Sponsee looks like a well-kept ledger on warm paper: a calm, professional back office for one person managing real money. Every neutral carries a warm cast — the background is paper, not gray; text is ink, not black; borders are hairlines the color of aged paper. Against that quiet ground, a single deep pine green does all the interactive work, and money is always set in tabular figures. The system is deliberately the opposite of streamer-tool convention: no dark mode by default, no neon, no gradients, no glassmorphism, no gamer RGB — those read as the platforms the creator streams on, not the business that pays their rent. Platform identity is confined to tiny dots and chips, the way a paper planner uses colored stickers.",
+    "keyCharacteristics": [
+      "Warm neutrals everywhere; zero pure grays or pure black.",
+      "One interactive accent (deep pine); amber and brick reserved for attention and danger.",
+      "Serif display type over sans body — an editorial, professional-assistant voice.",
+      "Financial figures are semibold, tabular, and tightly tracked.",
+      "Flat surfaces with hairline borders; warm shadows appear on hover and overlays only."
+    ],
+    "rules": [
+      { "name": "The Warm Cast Rule", "body": "No pure gray, no pure black, anywhere. Every neutral comes from the paper/ink ramp; a #EEE border or #333 text is a defect.", "section": "colors" },
+      { "name": "The One Accent Rule", "body": "Pine is the only color that means interactive. Amber and brick are statuses, never buttons or links. If a screen looks colorful, it is wrong.", "section": "colors" },
+      { "name": "The Sticker Rule", "body": "Platform brand colors appear only as small dots and chips (≤8px dots), never as surface, text, or button colors.", "section": "colors" },
+      { "name": "The Serif-Is-Display Rule", "body": "Instrument Serif appears only in page titles and hero figures. Serif body text or serif UI controls are defects.", "section": "typography" },
+      { "name": "The Tabular Money Rule", "body": "Every financial figure takes tabular numerals. Proportional digits in a money column are a defect.", "section": "typography" },
+      { "name": "The Flat-At-Rest Rule", "body": "Depth is a response to interaction or layering, never decoration. No shadow beyond the resting warm shadow on static elements.", "section": "elevation" },
+      { "name": "The One Curve Rule", "body": "Never introduce a second easing curve or ad-hoc duration; import from @/lib/motion.", "section": "motion" }
+    ],
+    "dos": [
+      "Do use pine (#0E7A5F) for every interactive affordance and only for interactive affordances or positive status.",
+      "Do set every financial figure in tabular numerals, right-aligned in columns.",
+      "Do pair every chip tone as tint background + deep foreground.",
+      "Do keep serif type to page titles and hero figures at 19–22px.",
+      "Do import easing, durations, and stagger from @/lib/motion for any animation.",
+      "Do give every focusable element a visible pine focus ring."
+    ],
+    "donts": [
+      "Don't introduce pure grays, pure black, gradients, glassmorphism, dark-neon, or any gamer-RGB styling.",
+      "Don't use platform brand colors beyond small dots and chips; never render TikTok in neon cyan/magenta.",
+      "Don't add fonts beyond Inter, Instrument Serif, and JetBrains Mono, or load fonts from a CDN.",
+      "Don't exceed 14px corner radius on in-app containers (the standalone auth card's 16px is the only exception) or use sharp corners; pills are for chips only.",
+      "Don't put shadows on static decoration or use cool-toned shadows.",
+      "Don't use amber or brick as button or link colors; they are status signals only."
+    ]
+  }
+}

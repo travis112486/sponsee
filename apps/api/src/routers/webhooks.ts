@@ -1,5 +1,5 @@
 import { db } from "@sponsee/db";
-import { chaseEvents, invoiceChaseState, activityEvents } from "@sponsee/db/schema";
+import { chaseEvents, invoiceChaseState, activityEvents, invoiceDeliveries } from "@sponsee/db/schema";
 import { eq } from "drizzle-orm";
 import { createEmailProvider } from "../email/index.js";
 import type { Context } from "hono";
@@ -55,6 +55,79 @@ export async function handleEmailWebhook(c: Context) {
     .limit(1);
 
   if (!chaseEvent) {
+    // Not a chase event — correlate against an invoice delivery (SPO-364). The
+    // invoice email is a separate send from a chase, so its provider message ID
+    // lives on invoice_deliveries, not chase_events.
+    const [delivery] = await db
+      .select()
+      .from(invoiceDeliveries)
+      .where(eq(invoiceDeliveries.providerMessageId, event.providerMessageId))
+      .limit(1);
+
+    if (delivery) {
+      const now = event.timestamp || new Date();
+
+      switch (event.type) {
+        case "delivered":
+          await db
+            .update(invoiceDeliveries)
+            .set({ status: "delivered", deliveredAt: now, updatedAt: now })
+            .where(eq(invoiceDeliveries.id, delivery.id));
+          break;
+        case "opened":
+          // Opening implies delivery. The status enum has no "opened", so
+          // back-fill delivered only if a delivered event never arrived.
+          await db
+            .update(invoiceDeliveries)
+            .set({
+              openedAt: now,
+              ...(delivery.deliveredAt ? {} : { deliveredAt: now, status: "delivered" }),
+              updatedAt: now,
+            })
+            .where(eq(invoiceDeliveries.id, delivery.id));
+          break;
+        case "bounced": {
+          // Persist the provider's reason on the row, not just in the activity
+          // payload (SPO-433) — the Payments bounce line needs it to tell a
+          // retryable "mailbox full" apart from a "no such user" that makes
+          // Resend a trap. `?? null` rather than leaving it undefined: Drizzle
+          // omits undefined keys from the UPDATE, which would strand a stale
+          // reason from an earlier bounce on the same row. Blank detail is
+          // normalized to null so the UI falls back instead of rendering "".
+          const bounceDetail = event.detail?.trim() || null;
+          await db
+            .update(invoiceDeliveries)
+            .set({ status: "bounced", bouncedAt: now, bounceDetail, updatedAt: now })
+            .where(eq(invoiceDeliveries.id, delivery.id));
+
+          // Loud: a bounced invoice is the same failure as no delivery. The
+          // activity event mirrors the chase-bounce shape so the timeline
+          // surfaces it the same way (SPO-365).
+          const invoice = await db.query.invoices.findFirst({
+            where: (i, { eq }) => eq(i.id, delivery.invoiceId),
+          });
+          if (invoice) {
+            await db.insert(activityEvents).values({
+              creatorId: invoice.creatorId,
+              actor: "system",
+              entityType: "invoice",
+              entityId: invoice.id,
+              kind: "invoice_sent",
+              payload: {
+                status: "bounced",
+                providerMessageId: event.providerMessageId,
+                detail: event.detail,
+                alert: "Invoice email bounced — delivery failed",
+              },
+            });
+          }
+          break;
+        }
+      }
+
+      return c.json({ ok: true, handled: true, type: event.type }, 200);
+    }
+
     return c.json({ ok: true, matched: false }, 200);
   }
 

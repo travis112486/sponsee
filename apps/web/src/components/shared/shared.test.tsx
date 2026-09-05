@@ -33,7 +33,9 @@ describe("PlatformDot", () => {
       const { container, unmount } = render(<PlatformDot platform={p} />);
       const cls = container.querySelector("span")!.className;
       expect(cls).toContain(`bg-${p}`);
-      // No raw palette escape (bg-purple-500, bg-black, …)
+      // No raw palette escape: a stock hue scale, or bg-black. Spelled out
+      // rather than exemplified because Tailwind's scanner reads comments in
+      // this glob too, and a quoted example compiles into the stylesheet.
       expect(cls).not.toMatch(/bg-(?:slate|gray|zinc|neutral|stone|red|blue|purple|green)-\d/);
       unmount();
     }
@@ -106,7 +108,7 @@ describe("BrandMark", () => {
     rerender(<BrandMark brand="Voltaic Energy" domain="https://www.redbull.com/energy" />);
     const img = container.querySelector("img");
     expect(img).not.toBeNull();
-    expect(img!.getAttribute("src")).toBe("https://unavatar.io/redbull.com?fallback=false");
+    expect(img!.getAttribute("src")).toBe("/api/brand-icon?domain=redbull.com");
 
     // Editing back to the known-bad domain still shows the monogram (no flicker loop).
     rerender(<BrandMark brand="Voltaic Energy" domain="voltaic.energy" />);

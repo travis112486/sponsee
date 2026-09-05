@@ -10,7 +10,9 @@ const Payments = lazy(() => import("./pages/Payments"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const Calculator = lazy(() => import("./pages/Calculator"));
+const MediaKitPage = lazy(() => import("./pages/MediaKitPage"));
 const LoginPage = lazy(() => import("./pages/auth/LoginPage"));
+const InvoicePublicPage = lazy(() => import("./pages/InvoicePublicPage"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 function PageSpinner() {
@@ -26,6 +28,14 @@ export default function App() {
     <Routes>
       {/* Public routes — no auth required */}
       <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/i/:token"
+        element={
+          <Suspense fallback={<PageSpinner />}>
+            <InvoicePublicPage />
+          </Suspense>
+        }
+      />
 
       {/* Protected routes — wrapped in Layout + RequireAuth */}
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
@@ -83,6 +93,14 @@ export default function App() {
           element={
             <Suspense fallback={<PageSpinner />}>
               <Calculator />
+            </Suspense>
+          }
+        />
+        <Route
+          path="media-kit"
+          element={
+            <Suspense fallback={<PageSpinner />}>
+              <MediaKitPage />
             </Suspense>
           }
         />

@@ -211,10 +211,14 @@ describe("createUploadUrl", () => {
 
   // SPO-351: the SDK defaults to signing a CRC32 checksum into the query
   // string, computed from the (nonexistent, at presign time) request body.
-  // Every real upload's actual checksum then disagrees with what was signed,
-  // and a provider that validates it — R2, real S3 — 400s the PUT. MinIO
-  // doesn't check, so this is provider-independent by design rather than
-  // relying on the e2e suite's MinIO server to reproduce it.
+  // Every real upload's actual checksum then disagrees with what was signed.
+  //
+  // SPO-422: this test is the guard, not a backstop for one. No server we run
+  // on rejects the mismatch — measured against live R2 on 2026-09-03, the PUT
+  // came back 200 and the bytes round-tripped; MinIO never checked either.
+  // See `client.ts` for the full measurement. Deleting this leaves only check 1
+  // of `scripts/verify-live-storage.ts`, which is manual and needs credentials,
+  // so nothing in CI would catch a reintroduction.
   it("presigns a PUT with no checksum query parameters", async () => {
     const upload = await createUploadUrl({
       creatorId: CREATOR_ID,

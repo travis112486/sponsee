@@ -2,9 +2,11 @@
 node_modules
 dist
 build
-.env
-.env.local
-.env.*.local
+# Secrets: ignore every .env variant by default (SPO-406) so new suffixes
+# like .env.spo382.bak are covered without having to predict each one.
+# Only *.example templates are allowed in the repo.
+.env*
+!.env*.example
 *.log
 .DS_Store
 .idea
@@ -25,3 +27,39 @@ PAPERCLIP_SCRATCH_DIR/
 
 # Claude Code local settings (Paperclip runtime writes this per worktree)
 .claude/settings.local.json
+
+# SPO-415 / SPO-417: Wave 1 outreach data is PII and this repo is PUBLIC.
+# The roster holds named real creators with their business emails and X handles;
+# the ledger records `unsubscribed` / `complained` / `stop_requested` against
+# those same named people from the first send onward. Tracking either publishes
+# it to every clone and to GitHub code search, and `refs/pull/*` is permanent.
+# Real data lives OUTSIDE the repo and is passed via --roster / --ledger.
+# Only the fictional *.example.* fixtures are tracked, as the schema of record.
+#
+# SPO-431: this is an ALLOWLIST on purpose — deny everything under outreach/,
+# then re-include the fixtures. The earlier `outreach/*.json` + `outreach/*.jsonl`
+# form was filename-shaped: `*` does not cross `/`, and it named two extensions,
+# so `outreach/wave2/roster.json`, `outreach/wave1-roster.csv` and
+# `outreach/census.md` were all still trackable. A census is a markdown file and
+# was the real #141 vector, so an extension list is the wrong shape here.
+#
+# Two edits that look like tidying and are not, both proven in the SPO-431 PR:
+#   - `outreach/` instead of `outreach/**` — a trailing-slash directory
+#     exclusion stops git descending, so the negation below never fires and the
+#     tracked fixtures would be dropped.
+#   - the negation only re-includes fixtures at the TOP level. A future
+#     `outreach/wave2/roster.example.json` stays ignored by design: git does not
+#     descend into an excluded directory, so no `!` rule can reach inside one.
+#     Keep fixtures directly in `outreach/`.
+outreach/**
+!outreach/*.example.*
+
+# The rule above is anchored to the repo root (a pattern with an interior `/`
+# always is), so it does NOT cover `scripts/outreach/` — which is right, that
+# directory holds tracked code. But it leaves the same two files trackable one
+# directory over, next to the script that reads them, which is exactly where a
+# hurried `--roster ./wave1-roster.json` puts them. These two lines carry no `/`
+# so they match at ANY depth; the `.example.` fixtures have different filenames
+# and are untouched.
+wave1-roster.json
+wave1-ledger.jsonl
