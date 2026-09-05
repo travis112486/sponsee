@@ -5,8 +5,18 @@ and the terms/privacy pages.
 
 ## Deploying
 
-**Merging to `main` does not deploy this app.** The Vercel `marketing` project has no GitHub
-connection, so production only moves when someone pushes it by hand:
+**Merging to `main` publishes this app.** The Vercel `marketing` project has been Git-linked to
+`travis112486/sponsee` (production branch `main`) since **SPO-215**, which connected it sometime
+after the last confirmed manual deploy at 2026-09-02T18:15Z and by SPO-215's recorded end-to-end
+Git deployment verification at 2026-09-03T02:05Z (see SPO-438 for the full evidence).
+
+Vercel currently has no technical production-deployment gate or separate deploy step: a merged PR
+that touches `apps/marketing` is live on sponsee.app within seconds. A merge is therefore an
+external production publish and requires explicit board approval **before merge** under Sponsee's
+standing approval policy, unless the board changes that policy. After an approved merge, there is
+no additional manual deployment step.
+
+To redeploy the current checkout without a new commit, use the dashboard or:
 
 ```sh
 cd apps/marketing
@@ -14,11 +24,13 @@ vercel link --project marketing --yes --scope travis112486s-projects   # first t
 vercel --prod --scope travis112486s-projects
 ```
 
-Connecting the project to GitHub so this stops being manual is tracked in **SPO-215**.
+That command deploys the current checkout; it is not a rollback by itself. To roll back, use
+Vercel's rollback action or first check out a known-good revision and then deploy it.
 
-Because nothing deploys automatically, a broken `vercel.json` does not show up as a red build —
-it shows up the next time a person tries to ship, possibly weeks later. `vercel-config.test.ts`
-guards the file in CI for that reason.
+A broken `vercel.json` now shows up as a **red/canceled production deployment on the very next
+merge**, not a silent outage discovered weeks later — but `vercel-config.test.ts` is still the
+better guard, since it fails the PR's CI run and catches the schema error before it ever merges,
+rather than after.
 
 ## Redirects
 
