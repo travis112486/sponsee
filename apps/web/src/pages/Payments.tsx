@@ -35,7 +35,14 @@ import {
 
 type LatestDelivery = inferRouterOutputs<AppRouter>["invoice"]["latestDeliveries"][number];
 
-type DeliveryDisplayState = "queued" | "sent" | "delivered" | "opened" | "bounced" | "failed";
+type DeliveryDisplayState =
+  | "queued"
+  | "sent"
+  | "delivered"
+  | "opened"
+  | "bounced"
+  | "failed"
+  | "unknown";
 
 // Every branch here is live: `invoice.send` writes queued -> sent (or -> failed
 // on a provider throw), and SPO-364's webhook correlation writes delivered /
@@ -46,7 +53,8 @@ function deliveryDisplayState(delivery: LatestDelivery): DeliveryDisplayState {
   if (delivery.openedAt) return "opened";
   if (delivery.deliveredAt || delivery.status === "delivered") return "delivered";
   if (delivery.status === "queued") return "queued";
-  return "sent";
+  if (delivery.status === "sent") return "sent";
+  return "unknown";
 }
 
 const deliveryChipConfig: Record<
@@ -59,22 +67,9 @@ const deliveryChipConfig: Record<
   opened: { label: "Opened", tone: "pine" },
   bounced: { label: "Bounced", tone: "danger" },
   failed: { label: "Send failed", tone: "danger" },
+  unknown: { label: "Unknown", tone: "amber" },
 };
 
-/**
- * Why Resume is gated on "a send actually left", not on `delivered`.
- *
- * The epic's bug is chasing an invoice the brand never received, so the gate
- * has to cover the never-sent case — that is the one this UI can definitely
- * see. `delivered` is a strictly stronger signal but it only ever arrives via
- * a provider webhook (webhooks.ts): if that endpoint is unregistered, or the
- * provider drops the event, no `delivered` row is ever written and gating on
- * it would strand Resume permanently with no self-service way out. So a
- * successful `sent` clears the gate and the panel says delivery is still
- * unconfirmed, rather than locking the creator out of their own chase.
- *
- * Pause is never gated — see InvoiceChasePanel.
- */
 function chaseLockReason(
   deliveryState: DeliveryDisplayState | null
 ): string | null {
@@ -82,10 +77,14 @@ function chaseLockReason(
     return 'Chase is locked — this invoice has not been sent to the brand yet. Use "Send invoice" above first, so reminders have something to follow up on.';
   if (deliveryState === "queued")
     return "Chase is locked — this invoice's send has not left the queue yet. Refresh in a moment.";
+  if (deliveryState === "sent")
+    return "Chase is locked — this invoice has been sent, but delivery is not confirmed yet. Wait for Delivered or Opened before starting reminders.";
   if (deliveryState === "bounced")
     return "Chase is locked — this invoice's email bounced, so reminders would go nowhere until it's resent to a working address.";
   if (deliveryState === "failed")
     return "Chase is locked — the last send failed before it reached the brand, so reminders would go nowhere until it's resent.";
+  if (deliveryState === "unknown")
+    return "Chase is locked — this invoice's delivery status is unknown. Refresh before starting reminders.";
   return null;
 }
 
@@ -115,7 +114,11 @@ const statusConfig: Record<
 export default function Payments() {
   const utils = trpc.useUtils();
   const { data: invoices, isLoading, isError, refetch } = trpc.invoice.list.useQuery();
-  const { data: deliveries, isError: deliveriesError } = trpc.invoice.latestDeliveries.useQuery();
+  const {
+    data: deliveries,
+    isLoading: deliveriesLoading,
+    isError: deliveriesError,
+  } = trpc.invoice.latestDeliveries.useQuery();
   const { data: awaitingReview } = trpc.chase.awaitingReview.useQuery();
   const deliveryByInvoice = useMemo(() => {
     const map = new Map<string, LatestDelivery>();
@@ -337,7 +340,7 @@ export default function Payments() {
         {deliveriesError && (
           <div className="flex items-center gap-1.5 border-b border-hairline bg-brick-tint/40 px-4 py-2 text-[11px] font-medium text-brick">
             <AlertTriangle className="h-3 w-3 shrink-0" />
-            Couldn't load delivery status. Send/resend still works — refresh to see chips.
+            Couldn't load delivery status. Refresh before sending or managing chase.
           </div>
         )}
         <div className="grid grid-cols-12 gap-3 border-b border-hairline px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-ink-3">
@@ -359,11 +362,13 @@ export default function Payments() {
             const delivery = deliveryByInvoice.get(inv.id);
             const deliveryState = delivery ? deliveryDisplayState(delivery) : null;
             const deliveryChip = deliveryState ? deliveryChipConfig[deliveryState] : null;
-            // Fails open: an errored deliveries query makes "no delivery row"
-            // indistinguishable from "never sent", so we don't know the state
-            // and must not lock a control on a guess.
-            const chaseLock = deliveriesError ? null : chaseLockReason(deliveryState);
+            const chaseLock = deliveriesError
+              ? "Chase is locked — we couldn't verify invoice delivery. Refresh before starting reminders."
+              : deliveriesLoading
+                ? "Chase is locked while we're checking invoice delivery."
+                : chaseLockReason(deliveryState);
             const canSend = inv.status === "draft" || inv.status === "open";
+            const deliveryQueryUnknown = deliveriesLoading || deliveriesError;
 
             return (
               <div
@@ -431,7 +436,16 @@ export default function Payments() {
                         Mark paid
                       </button>
                     )}
-                    {canSend && (
+                    {canSend && deliveryQueryUnknown && (
+                      <button
+                        disabled
+                        className="flex h-7 items-center gap-1 rounded-md bg-pine px-2 text-[11px] font-medium text-white opacity-50"
+                      >
+                        <Send className="h-3 w-3" />
+                        {deliveriesLoading ? "Checking delivery" : "Delivery unavailable"}
+                      </button>
+                    )}
+                    {canSend && !deliveryQueryUnknown && (
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <button

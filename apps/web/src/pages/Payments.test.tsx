@@ -56,6 +56,7 @@ let sendVariables: { id: string } | undefined;
 
 let invoicesData: unknown[] = [];
 let deliveriesData: unknown[] = [];
+let deliveriesIsLoading = false;
 let deliveriesIsError = false;
 let awaitingReviewData: unknown[] = [];
 let chaseStateByInvoice: Record<string, unknown> = {};
@@ -82,7 +83,11 @@ vi.mock("@/trpc", () => ({
         }),
       },
       latestDeliveries: {
-        useQuery: () => ({ data: deliveriesData, isError: deliveriesIsError }),
+        useQuery: () => ({
+          data: deliveriesData,
+          isLoading: deliveriesIsLoading,
+          isError: deliveriesIsError,
+        }),
       },
       markPaid: {
         useMutation: () => ({ mutate: vi.fn(), isPending: false }),
@@ -161,6 +166,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   invoicesData = [];
   deliveriesData = [];
+  deliveriesIsLoading = false;
   deliveriesIsError = false;
   sendPending = false;
   sendVariables = undefined;
@@ -540,7 +546,7 @@ describe("Payments chase gating on delivery", () => {
     ).toBeVisible();
   });
 
-  it("enables Resume once delivery is merely sent (not bounced or failed), with no lock message", () => {
+  it("keeps Resume locked while delivery is only sent", () => {
     invoicesData = [openInvoice];
     deliveriesData = [delivery({ status: "sent" })];
     chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
@@ -549,11 +555,36 @@ describe("Payments chase gating on delivery", () => {
     fireEvent.click(screen.getByRole("button", { name: /more/i }));
 
     const resumeButton = screen.getByRole("button", { name: /resume/i });
-    expect(resumeButton).not.toBeDisabled();
-    expect(screen.queryByText(/reminders would go nowhere/i)).not.toBeInTheDocument();
+    expect(resumeButton).toBeDisabled();
+    expect(screen.getByText(/has been sent, but delivery is not confirmed yet/i)).toBeVisible();
 
     fireEvent.click(resumeButton);
-    expect(resumeMutate).toHaveBeenCalledWith({ invoiceId: "inv-1" });
+    expect(resumeMutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps Resume locked for an unrecognized delivery status", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [delivery({ status: "provider_unknown" })];
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
+
+    render(<Payments />);
+    fireEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    expect(screen.getByRole("button", { name: /resume/i })).toBeDisabled();
+    expect(screen.getByText(/delivery status is unknown/i)).toBeVisible();
+  });
+
+  it("unlocks Resume once delivery is confirmed", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [
+      delivery({ status: "delivered", deliveredAt: "2026-01-02T00:00:00Z" }),
+    ];
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
+
+    render(<Payments />);
+    fireEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    expect(screen.getByRole("button", { name: /resume/i })).not.toBeDisabled();
   });
 
   it("also unlocks Resume once the invoice has been opened", () => {
@@ -573,24 +604,37 @@ describe("Payments chase gating on delivery", () => {
     expect(screen.getByRole("button", { name: /resume/i })).not.toBeDisabled();
   });
 
-  it("suppresses the lock message when the deliveries query errored, even with a stale bounced row cached", () => {
+  it("fails closed when the deliveries query errors, even with a stale delivered row cached", () => {
     invoicesData = [openInvoice];
-    // Stale cached data from before a refetch failure — deliveriesIsError
-    // means we don't know the current state, so we must not act on it.
-    deliveriesData = [delivery({ status: "bounced", bouncedAt: "2026-01-02T00:00:00Z" })];
+    deliveriesData = [
+      delivery({ status: "delivered", deliveredAt: "2026-01-02T00:00:00Z" }),
+    ];
     deliveriesIsError = true;
-    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "hard_bounce" } };
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
 
     render(<Payments />);
     fireEvent.click(screen.getByRole("button", { name: /more/i }));
 
-    expect(screen.getByRole("button", { name: /resume/i })).not.toBeDisabled();
-    expect(screen.queryByText(/reminders would go nowhere/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /resume/i })).toBeDisabled();
+    expect(screen.getByText(/couldn't verify invoice delivery/i)).toBeVisible();
+  });
+
+  it("fails closed while delivery status is loading", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [];
+    deliveriesIsLoading = true;
+    chaseStateByInvoice = { "inv-1": { mode: "paused", pausedReason: "manual" } };
+
+    render(<Payments />);
+    fireEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    expect(screen.getByRole("button", { name: /resume/i })).toBeDisabled();
+    expect(screen.getByText(/checking invoice delivery/i)).toBeVisible();
   });
 });
 
 describe("Payments delivery-status query failure", () => {
-  it("shows an inline notice without breaking the rest of the page", () => {
+  it("shows an inline notice and no first-send action while status is unknown", () => {
     invoicesData = [openInvoice];
     deliveriesData = [];
     deliveriesIsError = true;
@@ -598,7 +642,18 @@ describe("Payments delivery-status query failure", () => {
     render(<Payments />);
 
     expect(screen.getByText(/couldn't load delivery status/i)).toBeInTheDocument();
-    // Send still works even though delivery status failed to load.
-    expect(screen.getByRole("button", { name: /send invoice/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /send invoice/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /delivery unavailable/i })).toBeDisabled();
+  });
+
+  it("does not expose a first-send action while delivery status is loading", () => {
+    invoicesData = [openInvoice];
+    deliveriesData = [];
+    deliveriesIsLoading = true;
+
+    render(<Payments />);
+
+    expect(screen.queryByRole("button", { name: /send invoice/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /checking delivery/i })).toBeDisabled();
   });
 });
