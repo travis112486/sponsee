@@ -5,6 +5,7 @@ export const pageTitles: Record<string, { title: string; crumb?: string }> = {
   "/calendar": { title: "Calendar" },
   "/calculator": { title: "Rate Calculator" },
   "/settings": { title: "Settings" },
+  "/media-kit": { title: "Proposal Creator" },
 };
 
 /**
