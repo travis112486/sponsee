@@ -124,9 +124,9 @@ describe("wave1-preflight --require-first-names", () => {
     // Roster null / contact null. The two agree, so there is no drift, and the
     // predicate this replaced cleared the send: exit 0, "Clear to send", and the
     // recipient reads "Hey there —".
-    contacts = [{ id: "c1", email: "craft@example.com", unsubscribed: false, first_name: null }];
+    contacts = [{ id: "c1", email: "tundrabyte@example.com", unsubscribed: false, first_name: null }];
     const roster = [
-      { id: "craft", name: "Craft Computing", firstName: null, email: "craft@example.com" },
+      { id: "tundrabyte", name: "TundraByte", firstName: null, email: "tundrabyte@example.com" },
     ];
 
     const withoutFlag = await runPreflight(roster);
@@ -212,11 +212,10 @@ describe("wave1-preflight --require-first-names", () => {
 });
 
 describe("wave1-preflight fallback census, flag off (SPO-292)", () => {
-  // SPO-292 accepted the "Hey there —" fallback for the four Wave 1 contacts
-  // with no first_name: they are VTuber personas SPO-269 recorded as
-  // deliberately identity-withholding, so no name is coming. The SPO-280
-  // acceptance check therefore runs WITHOUT --require-first-names, and the
-  // operator confirms the split from this run's own output.
+  // SPO-292 accepted the "Hey there —" fallback for four Wave 1 contacts with
+  // no first_name: SPO-269 has no confirmed name for them, so none is coming.
+  // The SPO-280 acceptance check therefore runs WITHOUT --require-first-names,
+  // and the operator confirms the split from this run's own output.
   //
   // That makes the default-path report load-bearing, and exit 0 does not pin
   // it. Move the `missingFirstName` block under `if (args.requireFirstNames)`
@@ -225,7 +224,7 @@ describe("wave1-preflight fallback census, flag off (SPO-292)", () => {
   // about the recipients the acceptance check exists to count. Then a green
   // preflight is equally consistent with 4 of 15 on the fallback and 15 of 15.
   it("names and counts every fallback recipient without the flag", async () => {
-    const nameless = ["sinder", "snuffy", "dokibird", "shxtou"];
+    const nameless = ["pixelforge", "novaquokka", "gravelgospel", "kettlecrash"];
     const named = [
       { id: "ada", first: "Ada" },
       { id: "jeff", first: "Jeff" },

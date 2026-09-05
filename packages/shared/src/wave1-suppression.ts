@@ -48,7 +48,7 @@ export type OutreachTouch = "T1" | "T2" | "T3";
 export interface RosterRow {
   /** Stable per-creator key. Survives a name or handle change. */
   id: string;
-  /** Display/channel name, e.g. "Craft Computing". Never used as a greeting. */
+  /** Display/channel name, e.g. "TundraByte". Never used as a greeting. */
   name: string;
   /**
    * Real first name where one is confirmed (SPO-269). `null` when unknown —
